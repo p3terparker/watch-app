@@ -6,11 +6,11 @@ Watch is an independent project. Its source, tests, dependency pins and packagin
 
 ## Install
 
-Open `dist/Watch.dmg`, drag Watch to Applications, eject the image, and open Watch. The first-run guide explains watching, included tools and optional YouTube connection. Click the play icon in the menu bar or press **Option–Command–Y**.
+[Download Watch.dmg](https://github.com/p3terparker/watch-app/releases/latest/download/Watch.dmg) from the [latest release](https://github.com/p3terparker/watch-app/releases/latest). Open the disk image, drag Watch to Applications, eject the image, and open Watch. The first-run guide explains watching, included tools and optional YouTube connection. Click the play icon in the menu bar or press **Option–Command–Y**.
 
 The fully bundled app includes yt-dlp (with Python and EJS), FFmpeg, ffprobe and Deno. Recipients do not need Homebrew, Python or Terminal. Existing system installations are left alone. Media tools update with the app.
 
-Local builds are ad-hoc signed and **not notarized**. macOS may require Privacy & Security → Open Anyway. Making the source public does not change Gatekeeper requirements. See [first-run instructions](FIRST_RUN.txt).
+The downloadable preview and local builds are ad-hoc signed and **not notarized**. macOS may require Privacy & Security → Open Anyway. Making the source public does not change Gatekeeper requirements. See [first-run instructions](FIRST_RUN.txt).
 
 Requires macOS 13+. Universal builds contain Apple Silicon and Intel slices; actual Intel/macOS 13 acceptance remains pending.
 
