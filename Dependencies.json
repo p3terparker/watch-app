@@ -1,0 +1,50 @@
+{
+  "versions": {
+    "yt-dlp": "2026.10.26",
+    "ffmpeg": "9.0.2",
+    "lame": "3.100",
+    "deno": "2.9.8"
+  },
+  "downloads": {
+    "deno-arm64.zip": {
+      "url": "https://github.com/denoland/deno/releases/download/v2.9.8/deno-aarch64-apple-darwin.zip",
+      "sha256": "9f0bf660393da2eaff044cdc7444cb08c73f235849b61d224d825a194ce7c98e"
+    },
+    "deno-x86_64.zip": {
+      "url": "https://github.com/denoland/deno/releases/download/v2.9.8/deno-x86_64-apple-darwin.zip",
+      "sha256": "4b2f5edd2639b7470f034238b321d7002d8dfb4726d8558f52c17afac370eb2c"
+    },
+    "yt-dlp-source.tar.gz": {
+      "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.26/yt-dlp.tar.gz",
+      "sha256": "21f942d258d25cc4e60b4982a25c423460f0bebb835f38e6dfd1fcb140087f95"
+    },
+    "yt-dlp-LICENSE.txt": {
+      "url": "https://raw.githubusercontent.com/yt-dlp/yt-dlp/2026.10.26/LICENSE",
+      "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c"
+    },
+    "deno-LICENSE.txt": {
+      "url": "https://raw.githubusercontent.com/denoland/deno/v2.9.8/LICENSE.md",
+      "sha256": "f62497fffecc0852960c8d3e6934b9db86d16396e9b604072e923892cae3a588"
+    },
+    "deno-source.tar.gz": {
+      "url": "https://github.com/denoland/deno/archive/refs/tags/v2.9.8.tar.gz",
+      "sha256": "1e7c94089b077ca9b8ee1528a37793b47a476336bc2e3e902381cb528055f0be"
+    },
+    "yt-dlp_macos": {
+      "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.26/yt-dlp_macos",
+      "sha256": "0f922c15ccc0b83eefa1c8bc9104e434318c4bf16e408e1ee93b7745a6efe0aa"
+    },
+    "ffmpeg-9.0.2.tar.xz": {
+      "url": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+      "sha256": "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e"
+    },
+    "yt-dlp-LICENSES.txt": {
+      "url": "https://raw.githubusercontent.com/yt-dlp/yt-dlp/2026.10.26/THIRD_PARTY_LICENSES.txt",
+      "sha256": "472aefe951c7db35e1657c1d13fd337140511ed6f2b329205105ad441c5a02b7"
+    },
+    "lame-3.100.tar.gz": {
+      "url": "https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz",
+      "sha256": "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e"
+    }
+  }
+}

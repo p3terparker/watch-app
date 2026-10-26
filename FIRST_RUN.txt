@@ -1,0 +1,46 @@
+Watch 3.18 — start here
+
+INSTALL
+1. Drag Watch.app onto Applications.
+2. Eject this disk image, then open Watch from Applications.
+3. Click Start Watching in the welcome guide. Watch lives in your menu bar.
+
+This personal preview is not notarized by Apple. If macOS blocks the first launch,
+open System Settings > Privacy & Security and look for Open Anyway after trying
+to open Watch. Approve only the copy you received from your trusted sender.
+If that option is unavailable, ask your sender for a signed/notarized installer.
+No Terminal commands or disabling system security are required by Watch.
+
+WATCH
+Click the play icon in the menu bar, or press Option-Command-Y.
+Type to search YouTube. Paste a video link and press Return to play it.
+Click a result to play; click its down-arrow button to download.
+Recent Links is fully listed: scroll to see older videos.
+Public search and most public videos do not require signing in.
+
+EVERYTHING IS INCLUDED
+Watch includes yt-dlp, ffmpeg, ffprobe and Deno. No Homebrew, Python, Terminal,
+or separate helper downloads are needed. Apple Silicon and Intel are included.
+Requires macOS 13 or newer. Intel and macOS 13 hardware acceptance is still pending.
+Use Preferences > Setup Guide > Check Tools Again if something isn't working.
+If a tool is missing or won't start, replace Watch with a fresh installer copy.
+
+CONNECT YOUTUBE (OPTIONAL)
+Open Preferences > YouTube Account > Sign In.
+Pick Chrome or Safari, sign in to YouTube in that browser, and return to Watch.
+Click Connect and follow the permission instructions:
+- Chrome can ask for access to its Chrome Safe Storage Keychain item.
+- Safari can require Full Disk Access for Watch and a quit/reopen.
+Grant these only if you want Watch to read your browser's YouTube session.
+Your Google password is entered in the browser, not in Watch.
+History, Playlists and restricted videos depend on YouTube and may be unavailable
+if YouTube changes its service or denies access. Sign Out disconnects Watch;
+your browser stays signed in. No one else's account or cookies are in this installer.
+
+UPDATES
+Ask your sender for a newer Watch installer. Quit Watch, drag the new app into
+Applications, and choose Replace. Your library and preferences stay in place.
+Media tools update with the app; Watch does not alter the signed helper files.
+
+The included third-party notices and source archives are accessible through
+Setup Guide > Open Third-Party Notices (inside Watch.app/Contents/Resources).

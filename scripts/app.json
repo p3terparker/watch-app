@@ -1,0 +1,13 @@
+{
+  "name": "Watch",
+  "frameworks": [
+    "Cocoa",
+    "WebKit",
+    "Carbon",
+    "ServiceManagement",
+    "AVKit",
+    "AVFoundation"
+  ],
+  "minimum_macos": "13.0",
+  "swift_version": "5"
+}
