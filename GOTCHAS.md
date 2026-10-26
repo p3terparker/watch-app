@@ -78,8 +78,7 @@
 > **Everything YouTube 403s after ~20 MB (playback and yt-dlp's own downloads)** *(Watch · 2026-09-12)*
 > **Problem:** stream URLs worked for the first chunks, then `HTTP 403`; `yt-dlp` downloads failed too.
 > **Cause:** a **stale yt-dlp** (2026.06.09, >90 days) — YouTube changed client requirements.
-> **Historical fix:** `brew upgrade yt-dlp` (2026.08.19). Current Watch bundles its tools; replace the app to update them. The former menu / Preferences
-> / optional before each download). When YouTube playback or downloads suddenly fail, update yt-dlp first.
+> **Historical fix:** `brew upgrade yt-dlp` (2026.08.19). Current Watch bundles its tools; replace the app with a newer build to update them. The former helper self-update controls are removed to preserve the app signature.
 
 > **Player window won't shrink below ~130 pt tall; black bars appear instead** *(Watch · 2026-09-17)*
 > **Problem:** with `minSize` lowered to 68×38, dragging the player smaller shrank the width but the height
