@@ -23,8 +23,25 @@ Adds the panel's Now Playing row and a floating artwork window that follows the 
 - The isolated AppKit harness passes 83 checks with 0 failures. That includes the Now Playing row (placement, filtering, Preference, menu) and the artwork window: size, aspect following, placeholder, Esc, the full-screen menu entry and the background choice.
 - The workflow published the [v3.19-preview pre-release](https://github.com/p3terparker/watch-app/releases/tag/v3.19-preview). The DMG is 230,131,032 bytes, SHA-256 `94db4ba0bdc373ad072db70ac1595d908dec1c5eb3f5c6ccf82794288e27ae06`. "Latest" still resolves to v3.18.
 
+### Build 50: playback controls and player volume (GitHub Actions, macos-15)
+
+[Run 40665693935](https://github.com/p3terparker/watch-app/actions/runs/40665693935), commit `17b4862`, all steps green on the first attempt:
+
+- The whole app type-checks. The universal build passed its bundle verification. 18 tooling tests and 523 Swift checks pass; the 27 new ones cover timing from the stream, clock text, command/seek arguments (never `test`), app-volume scripts, value coalescing and the command timeout. The Foundation-only parts also passed on Linux first (Swift 6.1, warnings as errors, 107 checks).
+- 12 real-helper checks pass, the Now Playing adapter under system perl included. The installer verification passed for 3.19 (50): 230,277,089 bytes, SHA-256 `3e13a5df8d2e436d550b4d5a887af203e617ac996640028a37eb28369fa30d33`.
+- The isolated AppKit harness passes 101 checks with 0 failures. The 18 new ones cover:
+  - Artwork controls: the controls stay hidden over the artwork and appear over the caption. Play/pause sends pause and shows paused at once. Next, previous, and a seek at half all send correctly.
+  - App volume shows Music's level and sets it, and is absent for Chrome. There's no timeline without a length, nothing is sent without a click, and the controls tuck away on leaving.
+  - Player bar: the volume is tucked away at rest, slides out on hover and sets the volume, shows 0 when muted, tucks away afterwards, and never slides out in a narrow bar.
+- The workflow replaced the [v3.19-preview pre-release](https://github.com/p3terparker/watch-app/releases/tag/v3.19-preview) with "Watch 3.19 preview (50)". "Latest" still resolves to v3.18.
+
 ### Pending (hands-on acceptance)
 
+- Build 50, by hand:
+  - The controls act on the real Music/Spotify.
+  - The one-time Automation prompt appears on the first volume release, then Music's own volume moves while the Mac's stays put.
+  - The player's volume slide-out feels right with a real pointer and trackpad.
+  - The controls in full screen.
 - Music, Spotify and a browser video on a real Mac. Playback must never pause, skip or stutter, and no permission prompt may appear. The artwork must follow track changes.
 - No adapter process may run while the panel and artwork window are closed, or after quitting.
 - Full screen entered and left by hand (double-click, ⌃⌘F/F, menu, Esc): following track changes, idle hiding, both backgrounds, closing from full screen, multiple displays. Native full screen for this menu-bar (accessory) app has not been observed yet; CI only exercises the menu and background choice.
