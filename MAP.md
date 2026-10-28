@@ -1,9 +1,10 @@
 # Watch — where everything lives
 
-A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift` and `Welcome.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.18** — native AVKit playback for YouTube (HD + live), in-app
+A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift` and `ArtworkWindow.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.19** — native AVKit playback for YouTube (HD + live), in-app
 downloads, YouTube search / History / Playlists in the panel (absorbed from the retired Tube app), an
 **Up Next** list per player window (Next/Previous · Autoplay · Repeat All/One · Shuffle), and a small library:
-watched marks, Favourites and playlist progress. See `docs/FEATURES.md` for the feature changelog and
+watched marks, Favourites and playlist progress — plus a **Now Playing** row showing what other apps play, whose artwork
+opens in a window that follows the music. See `docs/FEATURES.md` for the feature changelog and
 `./CLAUDE.md` for gotchas/build notes; this file is the function-level code map.
 
 ## Files
@@ -22,7 +23,12 @@ watched marks, Favourites and playlist progress. See `docs/FEATURES.md` for the 
   Foundation + CoreGraphics only; `test.sh` covers it.
 - `Sources/PlayerZones.swift` — `PlayerZone.at(_:in:)`: which third of the player a click hit (top row + bottom middle
   = resize, centre = play/pause, left/right below the top = skip back/forward). Foundation + CoreGraphics; `test.sh` covers it.
-- `UX_SPEC.md` — 3.16 interaction contract and 3.17 self-contained distribution acceptance.
+- `Sources/NowPlaying.swift` — what another app is playing (see "Now Playing" below): `NowPlayingInfo` (+ `parse(line:ignoring:)`,
+  file naming), `LineBuffer`, `NowPlayingAdapter` (bundled paths, arguments, clean environment) and `NowPlayingMonitor` (the
+  demand-driven adapter process). Foundation only; `test.sh` covers it with fixture lines and a `/bin/sh` stand-in.
+- `Sources/ArtworkWindow.swift` — `ArtworkActions` (Copy / Save / Open in Preview / Show ‹App› / the shared menu items) and
+  `ArtworkWindowController` (the floating artwork window) with its views.
+- `UX_SPEC.md` — 3.16 interaction contract, 3.17 self-contained distribution acceptance, 3.19 Now Playing.
 - `Tests/panel.py` / `Tests/PanelMain.swift` — isolated real-AppKit harness; scratch source copies redirect all app defaults to a throwaway suite, replace the entry point, and override search/playback. Run separately in a macOS GUI session; snapshots in `build/watch-panel-checks/`.
 - `Info.plist` — bundle metadata. `LSUIElement` = menu-bar-only. Bundle id `com.jacob.watch`.
 - `build.sh` — delegates to the shared build-only tool; output `build/native/Watch.app`. Add `--install` only for an explicit install.
@@ -45,7 +51,7 @@ AVFoundation.
 UserDefaults-backed: `hotkeyKeyCode`/`hotkeyCarbon`/`hotkeyDisplay` (default **⌥⌘Y**), `detached`,
 `pinned`, `downloadDir` (default `~/Downloads`), `autoUpdate` (legacy stored key, retained but no longer acted upon),
 `hotkeyPlaysClipboard` (default on), `launchAtLogin` (persistent user intent, default on), and
-`showBrowserTabs` (browser-tab detection, default on), `showFavourites` (the panel's list tab, default Recent Links), `hasSeenWelcome`, `youtubeConnected` (default off), and the YouTube sign-in trio `cookieSource`
+`showBrowserTabs` (browser-tab detection, default on), `showNowPlaying` (the panel's Now Playing row, default on), `showFavourites` (the panel's list tab, default Recent Links), `hasSeenWelcome`, `youtubeConnected` (default off), and the YouTube sign-in trio `cookieSource`
 (`auto`|`safari`|`chrome`), `youtubeAccount` (`authuser`), `browserProfile`. (3.7.1 dropped the old `com.jacob.tube`
 fallback; Tube's values were migrated into `com.jacob.watch`.) Playback modes — `autoplay` (default **on**),
 `repeatMode` (`off`|`all`|`one`) and `shuffle` — are per player window; these keys hold the last choice made
@@ -136,7 +142,8 @@ Captures a new global-shortcut keystroke inside Preferences; calls `onCapture(ke
 
 ### Preferences — `SettingsController`
 **General:** hotkey recorder, "hotkey plays a copied link", "show videos open in browser tabs" + **Allow Browser
-Access…** (`MediaMonitor.requestAccessForRunningBrowsers`), download folder chooser, **Ask where to save each download** (`Prefs.askDownloadDir`),
+Access…** (`MediaMonitor.requestAccessForRunningBrowsers`), "show what's playing in other apps" (`Prefs.showNowPlaying` →
+`nowPlayingSettingsChanged`), download folder chooser, **Ask where to save each download** (`Prefs.askDownloadDir`),
 launch at login, "Media Tool Updates…", **Setup Guide…**. **YouTube Account** (the sign-in): "Signed in via" cookie browser, account
 email, browser profile (`controlTextDidChange` saves live), **Sign In…** (`openSignIn` opens Google's YouTube
 sign-in in that browser, only if installed) and **Check** (`YouTube.checkSignIn`).
@@ -206,7 +213,43 @@ system prompt by itself**:
 - `requestAccessForRunningBrowsers(completion:)` — Preferences ▸ "Allow Browser Access…"; asks only running
   browsers still undecided (-1744), once each.
 Requires **"Allow JavaScript from Apple Events"** in the browser. (Local-app probes for Music/Spotify/TV/
-QuickTime/VLC were removed in 3.3 — they triggered Automation prompts and their rows weren't playable.)
+QuickTime/VLC were removed in 3.3 — they triggered Automation prompts and their rows weren't playable. 3.19's Now
+Playing row shows what those apps play through MediaRemote instead, with no Apple Events.)
+
+### Now Playing — `NowPlayingInfo` / `NowPlayingMonitor` / `ArtworkWindowController` (3.19)
+What another app is playing, from macOS's Now Playing information. Since macOS 15.4 MediaRemote answers only Apple-signed
+processes, so the bundled **mediaremote-adapter** runs inside `/usr/bin/perl` (see GOTCHAS). **Read-only:** only its
+`stream` command is ever run — never `send`/`seek`/`shuffle`/`repeat`/`speed` (playback control) or `test` (registers a fake player).
+- `NowPlayingAdapter` — `Contents/Frameworks/MediaRemoteAdapter.framework` + `Contents/Resources/NowPlaying/mediaremote-adapter.pl`;
+  `isAvailable` (also needs system perl; missing → feature off, never an error); `arguments` = `stream --no-diff --debounce=150`
+  (every line a full state); `environment` drops `PERL*`, `DYLD_*`, `MEDIAREMOTEADAPTER_*`, `ADAPTER_TEST_MODE`, PATH `/usr/bin:/bin`.
+- `NowPlayingInfo.parse(line:ignoring:)` — `{"type":"data","diff":false,"payload":{…}}` → `.info` (title, artist, album, bundle id,
+  parent bundle id, playing, base64 artwork + MIME), `.nothing` (empty payload, no title, or Watch's own bundle as either id), or
+  `.invalid` (bad JSON, diff lines; ignored). `appBundleID` = parent ?? bundle (a browser's web-content process → the browser).
+  `itemKey` (app|title|artist|album), `artworkExtension` (MIME, else signature sniffing, else nil → saved as PNG),
+  `suggestedFileName` ("Artist – Album.ext", `safeFileName`), `youtubeQuery`.
+- `LineBuffer` — stdout chunks → lines (a line with artwork is several hundred KB; 32 MB cap).
+- `NowPlayingMonitor` — `want(.panel / .viewer, on)`: starts the adapter when any client wants it, SIGTERMs it when none do.
+  Parses off-main, delivers `onUpdate` on main only on change (artwork bytes shared when identical; elapsed time ignored, so
+  seeks don't redraw). "Nothing playing" must hold `clearDelay` (0.6 s — start-up's first `{}` and track changes). Keeps the
+  last info across a stop so reopening the panel doesn't flicker. Unexpected exit → restart after 2 / 10 / 60 s (an exit within
+  15 s counts as a quick failure), then `gaveUp` for the session. `generation` drops output/exits from stopped processes.
+- **Panel row** (`AppDelegate.nowPlayingRow`, first in the main list above the tabs; outside `clipSection`, so not in ↑/↓):
+  `rebuildNowPlayingRow` (from `nowPlayingChanged` and `rebuildClipSection`) — `BrowseRowView(compact, image:, square:)` with the
+  decoded `nowPlayingImage` (else the app icon), meta "Artist · App · Paused", album in the tooltip, ⤢ "Open Artwork"
+  (only with artwork). Click → `openArtwork` (no artwork → `ArtworkActions.showApp`); right-click → `ArtworkActions.menuItems`.
+  `startPanelMonitors` / `stopPanelMonitors` replace the bare `mediaMonitor.start/stop` at every panel show/hide.
+- `openArtwork` — `nowPlaying.want(.viewer, true)` first, then `ArtworkWindowController.present` on the panel's spot
+  (`WindowManager.frame(replacing:size:)`; else `frame(under:size:)`, else centred) and the panel hides. The controller is reused;
+  `onClose` releases `.viewer`, `onSearch` → `searchYouTube(for:)` (opens the panel and searches).
+- `ArtworkWindowController` — borderless/black/floating like the players. `present` sizes to the artwork's pixels at the screen's
+  scale (240 pt … min(600 pt, 70% of the screen height)). `show(_:)` (every update while visible): new artwork cross-fades
+  (0.25 s); a new track without artwork keeps the old picture `placeholderDelay` (1.5 s) then shows the app icon; nothing
+  playing keeps the picture and says "Not playing"; `fitAspect` keeps the top-left corner when the ratio changes. Hover fades
+  in the caption (`GradientView`) and "…"; `ArtworkContentView` handles right-click, Esc and ⌘W; `ArtworkImageView` never takes clicks.
+- `ArtworkActions` — `copy` (original bytes under their UTI + TIFF), `save` (`NSSavePanel.runModal`, original bytes),
+  `openInPreview` (one reused file in `~/Library/Caches/com.jacob.watch/artwork/`), `showApp` (`NSRunningApplication.activate`),
+  `appName` / `appIcon` (cached), `menuItems`.
 
 ### Player windows — `PlayerWindowController`
 One borderless 440×247 (16:9) window per video. The only top button is "…" (`dotButton`, a `FadingButton`
@@ -298,7 +341,8 @@ Z-order: video/web view → loading → `surface` → `controls` → "…".
 
 ### Window layout/lifecycle — `WindowManager`
 `open(_:anchor:queue:replacing:)` creates a player, `place`s it (or, with `replacing`, `take`s the panel's spot — the usual
-player size centred on the panel's top edge), and calls `load`. `onInfo` (resolved `LinkInfo` → the link's Recent Links row) and
+player size centred on the panel's top edge), and calls `load`. The placement math is shared with the artwork window as statics:
+`frame(replacing:size:)`, `frame(under:size:)`, `screen(for:)`, `clamp(_:to:)`. `onInfo` (resolved `LinkInfo` → the link's Recent Links row) and
 `onDownload` (→ `AppDelegate.startDownload`) callbacks. `place(_:anchor:)` — first window opens at the remembered
 frame (`rememberedFrame`, UserDefaults `lastPlayerFrame`; under the status item the very first time); further
 windows take the remembered size and sit right/left/below/above an existing player without overlap (cascade
@@ -317,10 +361,11 @@ last player's), assigned by `Tiling.readingOrder` and animated together (0.25 s)
 - `FlippedView` — the scroll document of the main list **and** of browse pages (flipped, pinned at zero, padding
   inside) so short content starts at the top (see GOTCHAS) and "Show More Results" keeps the scroll position.
 - `ThumbView` — async thumbnail with a main-thread cache; ignores late loads for a reused view.
-- `BrowseRowView(thumb:title:meta:accessory:compact:favourite:watched:progress:)` — the one row style: 80×45 thumb · 2-line
+- `BrowseRowView(thumb:title:meta:accessory:compact:favourite:watched:progress:image:square:)` — the one row style: 80×45 thumb · 2-line
   title · meta · accessory; `compact` (Recent Links / Favourites) = 32×18 thumb, 1-line title, 2 pt resume bar; `favourite`
   puts a yellow `star.fill` and `watched` a `checkmark.circle.fill` before the meta line (tooltips "Favourite" /
-  "Watched"), and `watched` dims the thumbnail to 50%. `progress` draws a red resume bar along the thumbnail's bottom. Hover highlight; `isHighlighted` = keyboard selection (accent); click → `onClick`;
+  "Watched"), and `watched` dims the thumbnail to 50%. `progress` draws a red resume bar along the thumbnail's bottom. `image` shows an in-memory picture (`ThumbView.show`) and
+  `square` a 24×24 thumbnail (the Now Playing row). Hover highlight; `isHighlighted` = keyboard selection (accent); click → `onClick`;
   right-click → `onMenu` (`menu(for:)`).
 - `BrowsePage` — `.loading(title, note:)` · `.videos` · `.results(query, SearchPage)` · `.playlists` ·
   `.message(title, text, action: MessageAction)` (`.none` / `.signIn` / `.retry` / `.updateAndRetry` → the button
@@ -426,6 +471,16 @@ link) · ↑/↓ pick a row · Esc clear → back → hide. In a player: space p
 
 ### Distribution (3.17)
 `Dependencies.json` pins versions, URLs and hashes. `scripts/build.sh` invokes `watch_helpers.py` to build/stage universal helpers, preserve notices/sources, sign helpers before the app and verify dependency paths and receipts. `Tests/bundled.py <Contents/Helpers> --live` checks relocated real helpers under a clean HOME/PATH; `Tests/panel.py` covers the guide and search with isolated preferences. No production app installation or personal cookies are needed.
+
+### Now Playing adapter build (3.19)
+`Dependencies.json` "sources" pins the mediaremote-adapter commit. `watch_helpers.fetch_source` gets it with
+`git fetch --depth 1 <url> <commit>` (git verifies objects against the commit) into `build/watch-vendor/mediaremote-adapter-<commit>.tar`
+(reuse checks its embedded commit id). `prepare_now_playing` builds a universal, macOS 13 `MediaRemoteAdapter.framework` with one clang
+call (upstream's CMake source list and flags; no cmake) into its own cache (`build/watch-vendor/nowplaying`, own receipt), so it never
+invalidates the FFmpeg payload (`helper_inputs` leaves "sources" out of that fingerprint). `stage_now_playing` copies the framework to
+`Contents/Frameworks` (symlinks kept, signed before the app), the script to `Contents/Resources/NowPlaying`, the license and source
+archive to `ThirdParty`, and records hashes under `nowPlaying` in `MediaTools.json`; `validate_helpers` checks them, the binary
+(`inspect_binary(own_id:)`) and the signature. `Tests/bundled.py` runs the relocated adapter's read-only `get` under system perl.
 
 ### Standalone project (3.18)
 Sources and tests are at the repository root. `scripts/watch_build.py` handles this app only; framework/target settings are in `scripts/app.json`. `watch_helpers.py` and installer verification resolve files relative to this repo. No sibling checkout or shared suite scripts are used. MIT applies to Watch code; third-party licenses remain separate. Legacy URL schemes and preference keys are retained for compatibility.

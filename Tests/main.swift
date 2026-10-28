@@ -314,4 +314,5 @@ live.cancel()
 scheduled.forEach { $0.perform() }
 expect(!queries.contains("cancel"), "navigation or submit cancels scheduled work")
 checkMediaTools()
-print("Watch downloads + positions + links + search + tiling + zones + library: \(checks) checks passed")
+checkNowPlaying()
+print("Watch downloads + positions + links + search + tiling + zones + library + now playing: \(checks) checks passed")

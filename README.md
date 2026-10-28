@@ -1,6 +1,6 @@
 # Watch App
 
-A standalone, native macOS menu-bar video player. Search YouTube as you type, play videos in small floating windows, browse your recent links and favourites, and download video or audio.
+A standalone, native macOS menu-bar video player. Search YouTube as you type, play videos in small floating windows, browse your recent links and favourites, download video or audio, and open the artwork of whatever is playing in another app.
 
 Watch is an independent project. Its source, tests, dependency pins and packaging tools live entirely in this repository. No checkout or installation of another project is required.
 

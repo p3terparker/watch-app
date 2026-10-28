@@ -179,6 +179,70 @@ check(panel.dropdown.frame.size == size, "all interactions preserve panel dimens
 // Native cancel button dispatches its action through the actual search field cell.
 panel.searchField.stringValue = ""
 panel.searchFieldAction(panel.searchField)
+// Now Playing: fixture updates go straight to the panel; this harness has no adapter, so no perl process runs.
+func artwork(_ width: Int, _ height: Int) -> Data {
+    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4,
+                               hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    NSColor.systemPink.setFill(); NSRect(x: 0, y: 0, width: width, height: height).fill()
+    NSColor.systemIndigo.setFill(); NSRect(x: width / 4, y: height / 4, width: width / 2, height: height / 2).fill()
+    NSGraphicsContext.restoreGraphicsState()
+    return rep.representation(using: .png, properties: [:])!
+}
+func nowPlayingFixture(_ title: String, _ art: Data?, playing: Bool = true) -> NowPlayingInfo {
+    NowPlayingInfo(title: title, artist: "Fixture Artist", album: "Fixture Album", bundleID: "com.apple.Music", isPlaying: playing,
+                   artwork: art, artworkMIME: art == nil ? nil : "image/png")
+}
+func texts(_ view: NSView) -> [String] { ((view as? NSTextField).map { [$0.stringValue] } ?? []) + view.subviews.flatMap(texts) }
+let square = artwork(600, 600), wide = artwork(640, 360)
+check(panel.nowPlayingRow.isHidden, "no Now Playing row while nothing plays")
+panel.nowPlayingChanged(nowPlayingFixture("Fixture Song", square)); layout()
+check(!panel.nowPlayingRow.isHidden && rows(panel.nowPlayingRow).count == 1, "Now Playing row appears")
+check((panel.nowPlayingRow.superview as? NSStackView)?.arrangedSubviews.first === panel.nowPlayingRow, "row sits above the list tabs")
+check(rows(panel.clipSection).count == 100, "the row stays out of the list (and ↑/↓)")
+check(texts(panel.nowPlayingRow).contains("Fixture Song"), "row shows the title")
+snapshot("now-playing")
+panel.nowPlayingChanged(nowPlayingFixture("Fixture Song", square, playing: false)); layout()
+check(texts(panel.nowPlayingRow).contains { $0.hasPrefix("Fixture Artist") && $0.hasSuffix("Paused") }, "paused state shown")
+let rowMenu = rows(panel.nowPlayingRow).first?.onMenu?()?.items.map(\.title) ?? []
+check(rowMenu.first == "Open Artwork" && rowMenu.contains("Save Artwork…") && rowMenu.contains("Search YouTube for “Fixture Song”"), "row menu")
+type("Fixture")
+check(panel.nowPlayingRow.isHidden, "hidden while the field filters")
+panel.searchField.stringValue = ""; panel.searchFieldAction(panel.searchField)
+check(!panel.nowPlayingRow.isHidden, "back when the field clears")
+Prefs.showNowPlaying = false; panel.nowPlayingSettingsChanged()
+check(panel.nowPlayingRow.isHidden, "Preference off hides the row")
+Prefs.showNowPlaying = true; panel.nowPlayingSettingsChanged()
+check(!panel.nowPlayingRow.isHidden, "Preference on shows it again")
+panel.openArtwork(); pump(0.3)
+let viewer = panel.artworkWindow!
+let opened = viewer.window.frame
+check(viewer.window.isVisible && opened.width == opened.height, "artwork window opens square for square art")
+check(opened.width >= ArtworkWindowController.minSide && opened.width <= ArtworkWindowController.maxSide, "opens at the artwork's own size, within limits")
+func viewerSnapshot(_ name: String) {
+    let view = viewer.window.contentView!
+    view.layoutSubtreeIfNeeded(); pump()
+    guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+    view.cacheDisplay(in: view.bounds, to: rep)
+    try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent(name + ".png"))
+}
+viewerSnapshot("artwork-window")
+panel.nowPlayingChanged(nowPlayingFixture("Second Song", wide)); pump(0.5)
+let followed = viewer.window.frame
+check(viewer.pictureData == wide && viewer.info?.title == "Second Song", "window follows the next track")
+check(abs(followed.width / followed.height - 16.0 / 9.0) < 0.02 && abs(followed.maxY - opened.maxY) < 1 && followed.minX == opened.minX,
+      "aspect follows the artwork, top-left corner kept")
+panel.nowPlayingChanged(nowPlayingFixture("Third Song", nil))
+check(viewer.pictureData == wide, "a track without artwork keeps the old picture for a moment")
+pump(ArtworkWindowController.placeholderDelay + 0.3)
+check(viewer.pictureData == nil, "then the app's icon stands in")
+let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: viewer.window.windowNumber,
+                              context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!
+viewer.window.contentView!.keyDown(with: escape)
+check(!viewer.window.isVisible, "Esc closes the artwork window")
+panel.nowPlayingChanged(nil)
+check(panel.nowPlayingRow.isHidden, "nothing playing hides the row")
 panel.dropdown.appearance = NSAppearance(named: .aqua)
 snapshot("recent-light")
 panel.dropdown.setContentSize(NSSize(width: 260, height: 200)); layout()

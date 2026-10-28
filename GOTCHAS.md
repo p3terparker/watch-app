@@ -2,6 +2,19 @@
 
 ## Watch
 
+> **Now Playing: MediaRemote answers only Apple-signed processes since macOS 15.4** *(Watch · 2026-10-28)*
+> **Problem:** reading what Music/Spotify/a browser is playing (with artwork) has no public API; calling the private
+> `MRMediaRemoteGetNowPlayingInfo` from Watch returns nothing on macOS 15.4+. AppleScript to Music/Spotify works but
+> needs an Automation prompt per app and misses browsers/Podcasts (3.3 removed those probes for exactly that).
+> **Fix:** bundle **mediaremote-adapter** (pinned commit): `/usr/bin/perl` — Apple-signed, so entitled — loads
+> `MediaRemoteAdapter.framework` and streams JSON lines. Run only `stream --no-diff`, only while the panel or the artwork
+> window shows, with a scrubbed environment (no `PERL5OPT`/`PERL5LIB`/`DYLD_*`). **Never run the adapter's `test`** (it
+> registers a fake Now Playing client that can disturb other apps) **or `send`/`seek`/`shuffle`/`repeat`/`speed`** (they
+> control the other app's playback). Its first line is often `{}` before the real state, so "nothing playing" is
+> debounced. Watch's own web view can be the Now Playing client — ignore its bundle id as either the client or the parent.
+> If the app is force-quit, an orphaned perl exits on its next write (SIGPIPE). If Apple closes the loophole, the
+> adapter exits/streams nothing, the monitor gives up after its back-off, and the row just doesn't appear.
+
 > **Live search must invalidate at the keystroke, not when the debounce fires** *(Watch · 2026-10-26)*
 > A prior search can complete during the 350 ms pause and render results for text no longer in the field.
 > `fieldTextChanged` immediately increments `browseToken`, cancels the task, and clears its page; both

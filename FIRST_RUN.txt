@@ -1,4 +1,4 @@
-Watch 3.18 — start here
+Watch 3.19 — start here
 
 INSTALL
 1. Drag Watch.app onto Applications.
@@ -16,6 +16,7 @@ Click the play icon in the menu bar, or press Option-Command-Y.
 Type to search YouTube. Paste a video link and press Return to play it.
 Click a result to play; click its down-arrow button to download.
 Recent Links is fully listed: scroll to see older videos.
+Music or a video playing in another app shows at the top: click it to see the artwork.
 Public search and most public videos do not require signing in.
 
 EVERYTHING IS INCLUDED

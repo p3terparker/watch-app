@@ -37,6 +37,8 @@ enum Prefs {
     static var hasSeenWelcome: Bool { get { d.bool(forKey: "hasSeenWelcome") } set { d.set(newValue, forKey: "hasSeenWelcome") } }
     static var showBrowserTabs: Bool { get { d.object(forKey: "showBrowserTabs") as? Bool ?? true } set { d.set(newValue, forKey: "showBrowserTabs") } }
     static var showFavourites: Bool { get { d.bool(forKey: "showFavourites") } set { d.set(newValue, forKey: "showFavourites") } }  // the panel's list tab
+    // The panel's Now Playing row (what other apps are playing, with its artwork — NowPlaying.swift).
+    static var showNowPlaying: Bool { get { d.object(forKey: "showNowPlaying") as? Bool ?? true } set { d.set(newValue, forKey: "showNowPlaying") } }
     // Playback modes. Each player window keeps its own (its "…" menu toggles them); these are what a NEW
     // window starts with, i.e. the last choice made anywhere.
     static var autoplay: Bool { get { d.object(forKey: "autoplay") as? Bool ?? true } set { d.set(newValue, forKey: "autoplay") } }
@@ -736,6 +738,7 @@ final class SettingsController: NSObject, NSTextFieldDelegate {
     private var askDirCheck: NSButton!
     private var clipboardHotkeyCheck: NSButton!
     private var browserTabsCheck: NSButton!
+    private var nowPlayingCheck: NSButton!
     private var dirField: NSTextField!
     private var updateButton: NSButton!
     private var updateLabel: NSTextField!
@@ -809,6 +812,10 @@ final class SettingsController: NSObject, NSTextFieldDelegate {
         accessLabel = note("macOS asks once per running browser to let Watch see its video tabs.")
         let accessRow = NSStackView(views: [access, accessLabel]); accessRow.spacing = 8; accessRow.alignment = .centerY
         stack.addArrangedSubview(accessRow)
+
+        nowPlayingCheck = NSButton(checkboxWithTitle: "Show what's playing in other apps (Music, Spotify, browsers…) with its artwork", target: self, action: #selector(nowPlayingChanged))
+        nowPlayingCheck.state = Prefs.showNowPlaying ? .on : .off
+        stack.addArrangedSubview(nowPlayingCheck)
 
         dirField = NSTextField(string: Prefs.downloadDir); dirField.isEditable = false
         dirField.widthAnchor.constraint(equalToConstant: 300).isActive = true
@@ -900,6 +907,7 @@ final class SettingsController: NSObject, NSTextFieldDelegate {
     @objc private func askDirChanged() { Prefs.askDownloadDir = (askDirCheck.state == .on) }
     @objc private func clipboardHotkeyChanged() { Prefs.hotkeyPlaysClipboard = (clipboardHotkeyCheck.state == .on) }
     @objc private func browserTabsChanged() { Prefs.showBrowserTabs = (browserTabsCheck.state == .on); app?.mediaSettingsChanged() }
+    @objc private func nowPlayingChanged() { Prefs.showNowPlaying = (nowPlayingCheck.state == .on); app?.nowPlayingSettingsChanged() }
     @objc private func loginChanged() { app?.toggleLoginItem(); loginCheck.state = currentLogin() ? .on : .off }
     @objc private func updateNow() { showMediaToolUpdateHelp() }
 }
@@ -2132,16 +2140,28 @@ final class WindowManager {
     // Sit where the panel was: the usual player size (remembered, else standard), centred on the panel's top edge.
     private func take(_ panel: NSRect, for window: NSWindow) {
         let size = rememberedFrame()?.size ?? window.frameRect(forContentRect: NSRect(origin: .zero, size: PlayerWindowController.standardSize)).size
-        var f = NSRect(x: panel.midX - size.width / 2, y: panel.maxY - size.height, width: size.width, height: size.height)
-        if let vis = Self.screen(for: panel)?.visibleFrame { f = Self.clamp(f, to: vis) }
-        window.setFrame(f, display: true)
+        window.setFrame(Self.frame(replacing: panel, size: size), display: true)
     }
-    private static func screen(for f: NSRect) -> NSScreen? {
+    // Shared with the artwork window: centred on the panel's top edge, kept on screen.
+    static func frame(replacing panel: NSRect, size: NSSize) -> NSRect {
+        let f = NSRect(x: panel.midX - size.width / 2, y: panel.maxY - size.height, width: size.width, height: size.height)
+        guard let vis = screen(for: panel)?.visibleFrame else { return f }
+        return clamp(f, to: vis)
+    }
+    // Just under the menu-bar icon, kept inside its screen horizontally.
+    static func frame(under anchor: NSStatusItem, size: NSSize) -> NSRect? {
+        guard let b = anchor.button, let bw = b.window else { return nil }
+        let on = bw.convertToScreen(b.convert(b.bounds, to: nil))
+        var f = NSRect(x: on.midX - size.width / 2, y: on.minY - size.height - 4, width: size.width, height: size.height)
+        if let vis = bw.screen?.visibleFrame { f.origin.x = min(max(f.origin.x, vis.minX + 8), vis.maxX - f.width - 8) }
+        return f
+    }
+    static func screen(for f: NSRect) -> NSScreen? {
         func overlap(_ s: NSScreen) -> CGFloat { let i = s.visibleFrame.intersection(f); return i.isNull ? 0 : i.width * i.height }
         guard let best = NSScreen.screens.max(by: { overlap($0) < overlap($1) }), overlap(best) > 0 else { return NSScreen.main }
         return best
     }
-    private static func clamp(_ f: NSRect, to vis: NSRect) -> NSRect {
+    static func clamp(_ f: NSRect, to vis: NSRect) -> NSRect {
         var r = f
         r.size.width = min(r.width, vis.width); r.size.height = min(r.height, vis.height)
         r.origin.x = min(max(r.minX, vis.minX), vis.maxX - r.width)
@@ -2149,11 +2169,7 @@ final class WindowManager {
         return r
     }
     private func positionUnderStatusItem(_ window: NSWindow, anchor: NSStatusItem) {
-        guard let b = anchor.button, let bw = b.window else { return }
-        let on = bw.convertToScreen(b.convert(b.bounds, to: nil))
-        var f = window.frame
-        f.origin.x = on.midX - f.width / 2; f.origin.y = on.minY - f.height - 4
-        if let vis = bw.screen?.visibleFrame { f.origin.x = min(max(f.origin.x, vis.minX + 8), vis.maxX - f.width - 8) }
+        guard let f = Self.frame(under: anchor, size: window.frame.size) else { return }
         window.setFrame(f, display: true)
     }
     // Disables App Nap while any player is open, so a visible-but-unfocused video isn't throttled.
@@ -2392,12 +2408,14 @@ final class ThumbView: NSImageView {
             DispatchQueue.main.async { Self.cache[s] = img; if self.wanted == s { self.image = img } }
         }.resume()
     }
+    func show(_ img: NSImage) { wanted = nil; image = img }   // an in-memory picture (Now Playing artwork)
 }
 
 // One row style for every list in the panel: thumbnail · title · details line · optional accessory button.
 // `compact` (Recent Links) is one title line with a small thumbnail — links don't need a big picture.
 // `favourite` puts a ★ before the details line and `watched` a ✓ (plus a dimmed thumbnail). `progress` draws a resume
-// bar along the thumbnail's bottom edge. `isHighlighted` is the keyboard selection
+// bar along the thumbnail's bottom edge. `image` shows an in-memory picture instead of loading `thumb`; `square` makes the
+// thumbnail 24×24 (album artwork, in the Now Playing row). `isHighlighted` is the keyboard selection
 // (↑/↓ from the search field); `onMenu` supplies the right-click menu.
 final class BrowseRowView: NSView {
     var onClick: (() -> Void)?
@@ -2406,12 +2424,13 @@ final class BrowseRowView: NSView {
     private var hovering = false
 
     init(thumb: String?, title: String, meta: String, accessory: NSView?, compact: Bool = false,
-         favourite: Bool = false, watched: Bool = false, progress: Double? = nil) {
+         favourite: Bool = false, watched: Bool = false, progress: Double? = nil, image: NSImage? = nil, square: Bool = false) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
         layer?.cornerRadius = 6
-        let t = ThumbView(); t.load(thumb)
+        let t = ThumbView()
+        if let img = image { t.show(img) } else { t.load(thumb) }
         t.imageScaling = .scaleProportionallyUpOrDown
         t.wantsLayer = true; t.layer?.cornerRadius = 4; t.layer?.masksToBounds = true
         t.contentTintColor = .tertiaryLabelColor
@@ -2451,7 +2470,7 @@ final class BrowseRowView: NSView {
         let h = NSStackView(views: views); h.spacing = 8; h.alignment = .centerY; h.distribution = .fill
         h.translatesAutoresizingMaskIntoConstraints = false
         addSubview(h)
-        let (w, ht, inset): (CGFloat, CGFloat, CGFloat) = compact ? (32, 18, 3) : (80, 45, 4)
+        let (w, ht, inset): (CGFloat, CGFloat, CGFloat) = square ? (24, 24, 3) : compact ? (32, 18, 3) : (80, 45, 4)
         NSLayoutConstraint.activate([
             t.widthAnchor.constraint(equalToConstant: w), t.heightAnchor.constraint(equalToConstant: ht),
             h.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4), h.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
@@ -2558,6 +2577,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     let downloads = DownloadManager()
     var mediaItems: [MediaItem] = []
     var browsersAwaitingAccess: [Browser] = []
+    // Now Playing: what another app is playing (NowPlaying.swift) — the list's first row; its artwork opens in
+    // `artworkWindow`, which then follows the music. The adapter runs only while the panel or that window shows.
+    let nowPlaying = NowPlayingMonitor()
+    var nowPlayingInfo: NowPlayingInfo?
+    var nowPlayingImage: NSImage?               // decoded once per artwork change
+    var nowPlayingRow: NSStackView!
+    var artworkWindow: ArtworkWindowController?
     var lastClipboardChangeCount = NSPasteboard.general.changeCount
     var clipboardTimer: Timer?
 
@@ -2617,6 +2643,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         mediaMonitor.onUpdate = { [weak self] items, waiting in
             self?.mediaItems = items; self?.browsersAwaitingAccess = waiting; self?.rebuildMediaSection()
         }
+        nowPlaying.onUpdate = { [weak self] info in self?.nowPlayingChanged(info) }
         windowManager.onInfo = { [weak self] url, info in
             self?.links.update(url, with: info); self?.favourites.update(url, with: info); self?.rebuildClipSection()
         }
@@ -2642,6 +2669,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         liveSearch.cancel(); browseTask?.cancel()
         windowManager.players.forEach { $0.savePosition() }
         downloads.stopAll()
+        nowPlaying.stopAll()
     }
     @objc func handleURLEvent(_ e: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
         guard let raw = e.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
@@ -2654,7 +2682,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         else { play(videoURL) }
     }
     @objc func appResignedActive() {
-        if dropdown.isVisible && !Prefs.pinned && !Prefs.detached { stopPanelSearch(); dropdown.orderOut(nil); mediaMonitor.stop() }
+        if dropdown.isVisible && !Prefs.pinned && !Prefs.detached { stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors() }
     }
 
     // MARK: status item + drag-and-drop (B4)
@@ -2755,6 +2783,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             outer.topAnchor.constraint(equalTo: doc.topAnchor, constant: 6),
             outer.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -10),
         ])
+
+        // Now Playing — another app's media with its artwork; hidden unless something is playing (rebuildNowPlayingRow).
+        nowPlayingRow = NSStackView(); nowPlayingRow.orientation = .vertical; nowPlayingRow.alignment = .leading
+        nowPlayingRow.isHidden = true
+        outer.addArrangedSubview(nowPlayingRow)
+        nowPlayingRow.widthAnchor.constraint(equalTo: outer.widthAnchor).isActive = true
+        outer.setCustomSpacing(8, after: nowPlayingRow)
 
         // Both library tabs list every stored item inside the existing compact scroll area.
         clipTitle = sectionLabel("Matching Links")
@@ -2900,6 +2935,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     // (favourites first) under a line saying what Return will do. Rows: thumbnail (with a resume bar), title,
     // ★/✓ marks, "site · resume/duration · when".
     func rebuildClipSection() {
+        rebuildNowPlayingRow()                      // hidden while the field filters
         let keep = highlighted
         clipSection.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2927,6 +2963,68 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         }
         highlighted = nil
         if browseView.isHidden, let k = keep, k < rows.count { setHighlight(k) }
+    }
+    // The list's first row while another app plays something: artwork, title, "Artist · App · Paused" (album in the
+    // tooltip). Click opens the artwork — or, without one, brings that app forward; right-click adds Copy / Save /
+    // Search YouTube. Never part of ↑/↓ (navRows reads clipSection only).
+    func rebuildNowPlayingRow() {
+        nowPlayingRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let filtering = !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard Prefs.showNowPlaying, !filtering, let info = nowPlayingInfo else { nowPlayingRow.isHidden = true; return }
+        nowPlayingRow.isHidden = false
+        let parts: [String?] = [info.artist, ArtworkActions.appName(info.appBundleID), info.isPlaying ? nil : "Paused"]
+        let meta = parts.compactMap { $0 }.joined(separator: " · ")
+        let picture = nowPlayingImage ?? ArtworkActions.appIcon(info.appBundleID) ?? sym("music.note")
+        var open: NSView?
+        if info.artwork != nil {
+            open = ClosureButton(symbol: "arrow.up.left.and.arrow.down.right", tip: "Open Artwork") { [weak self] _ in self?.openArtwork() }
+        }
+        let row = BrowseRowView(thumb: nil, title: info.title, meta: meta, accessory: open, compact: true, image: picture, square: true)
+        let tip: [String?] = [info.title, info.artist, info.album]
+        row.toolTip = tip.compactMap { $0 }.joined(separator: " — ")
+        row.onClick = { [weak self] in
+            if info.artwork == nil { ArtworkActions.showApp(info) } else { self?.openArtwork() }
+        }
+        row.onMenu = { [weak self] in
+            let m = NSMenu()
+            ArtworkActions.menuItems(info, open: { self?.openArtwork() }, search: { self?.searchYouTube(for: $0) }).forEach(m.addItem)
+            return m
+        }
+        nowPlayingRow.addArrangedSubview(row)
+        row.widthAnchor.constraint(equalTo: nowPlayingRow.widthAnchor).isActive = true
+    }
+    func nowPlayingChanged(_ info: NowPlayingInfo?) {
+        if info?.artwork != nowPlayingInfo?.artwork { nowPlayingImage = info?.artwork.flatMap { NSImage(data: $0) } }
+        nowPlayingInfo = info
+        rebuildNowPlayingRow()
+        if artworkWindow?.window.isVisible == true { artworkWindow?.show(info) }
+    }
+    // The artwork window takes the panel's spot and the panel hides, as with the first video; it then follows the music.
+    func openArtwork() {
+        guard let info = nowPlayingInfo, info.artwork != nil else { return }
+        let viewer = artworkWindow ?? makeArtworkWindow()
+        nowPlaying.want(.viewer, true)              // before the panel lets go, so the adapter keeps running
+        let panelShown = dropdown.isVisible && dropdown.isOnActiveSpace
+        viewer.present(info, replacing: panelShown && !viewer.window.isVisible ? dropdown.frame : nil, anchor: statusItem)
+        if panelShown { stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors() }
+    }
+    private func makeArtworkWindow() -> ArtworkWindowController {
+        let viewer = ArtworkWindowController()
+        viewer.onClose = { [weak self] in self?.nowPlaying.want(.viewer, false) }
+        viewer.onSearch = { [weak self] q in self?.searchYouTube(for: q) }
+        artworkWindow = viewer
+        return viewer
+    }
+    // "Search YouTube for …" from the Now Playing row or the artwork window: results open in the panel.
+    func searchYouTube(for query: String) {
+        presentPanel()
+        searchField.stringValue = query
+        search(query)
+    }
+    func nowPlayingSettingsChanged() {
+        if !Prefs.showNowPlaying { artworkWindow?.window.close() }   // its onClose releases the adapter
+        nowPlaying.want(.panel, Prefs.showNowPlaying && dropdown.isVisible)
+        rebuildNowPlayingRow()
     }
     // Which videos get a ★ / ✓ — read once per redraw.
     struct LibraryMarks {
@@ -3533,7 +3631,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         else { dropdown.level = .floating }
     }
     @objc func togglePanel() {
-        if dropdown.isVisible && dropdown.isOnActiveSpace { stopPanelSearch(); dropdown.orderOut(nil); mediaMonitor.stop(); return }
+        if dropdown.isVisible && dropdown.isOnActiveSpace { stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors(); return }
         // Every open anchors under the menu-bar icon. A drag-off detaches only until the panel is hidden.
         Prefs.detached = false
         suppressMoveSave = true
@@ -3546,8 +3644,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         mainScroll.contentView.scroll(to: .zero); mainScroll.reflectScrolledClipView(mainScroll.contentView)
         dropdown.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         dropdown.makeFirstResponder(searchField)      // type to search or filter right away
-        mediaMonitor.start()
+        startPanelMonitors()
     }
+    // Only while the panel shows: browser-tab polling and the Now Playing adapter.
+    func startPanelMonitors() {
+        mediaMonitor.start()
+        if Prefs.showNowPlaying { nowPlaying.want(.panel, true) }
+    }
+    func stopPanelMonitors() { mediaMonitor.stop(); nowPlaying.want(.panel, false) }
     // Pressing the hotkey plays a copied video link directly; otherwise it toggles the panel.
     @objc func hotkeyPressed() {
         if Prefs.hotkeyPlaysClipboard, let s = NSPasteboard.general.string(forType: .string), looksLikeURL(s) { play(s); return }
@@ -3574,7 +3678,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         if case .loading? = browseStack.last?.page { browseStack.removeAll(); activeSearchQuery = nil }
         renderBrowse(keepScroll: true)
     }
-    @objc func minimizeToMenuBar() { Prefs.detached = false; stopPanelSearch(); dropdown.orderOut(nil); mediaMonitor.stop() }
+    @objc func minimizeToMenuBar() { Prefs.detached = false; stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors() }
     @objc func togglePin() { Prefs.pinned.toggle(); applyLevel() }
 
     // MARK: playback entry point — a window opens immediately and resolves its own stream (see PlayerWindowController.load)
@@ -3591,7 +3695,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         let panelShown = dropdown.isVisible && dropdown.isOnActiveSpace
         let takeOver = panelShown && windowManager.players.isEmpty
         let pc = windowManager.open(input, anchor: statusItem, queue: queue, replacing: takeOver ? dropdown.frame : nil)
-        if takeOver { stopPanelSearch(); dropdown.orderOut(nil); mediaMonitor.stop() }
+        if takeOver { stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors() }
         if !local { recordLink(pc.sourceURL, probe: false) }   // the player reports title/thumbnail via onInfo
     }
     // Puts a video link on top of Recent Links. `probe` asks yt-dlp for its title, thumbnail and duration when

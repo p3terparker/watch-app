@@ -1,6 +1,6 @@
 # Watch App
 
-A "plays almost any video" menu-bar player. **Current: v3.18.**
+A "plays almost any video" menu-bar player. **Current: v3.19.**
 Binary `Watch` · bundle `com.jacob.watch` · hotkey **⌥⌘Y** ·
 frameworks: Cocoa, WebKit, Carbon, ServiceManagement, **AVKit, AVFoundation**.
 
@@ -49,12 +49,26 @@ playlist link reopens at the video it was on, or the next if that was finished).
 
 **3.17:** self-contained universal helpers in `Contents/Helpers`: yt-dlp/Python/EJS, FFmpeg, ffprobe and Deno. `MediaTools.swift` owns paths, environment and readiness checks; `Welcome.swift` provides the no-Terminal guide. Helpers update only with app replacement. `scripts/watch_helpers.py` verifies pinned inputs and builds FFmpeg/LAME without Homebrew dynamic dependencies. `Tests/bundled.py` exercises real helpers in a clean temporary home.
 
+**3.19 — Now Playing artwork:** while another app plays something (Music, Spotify, Podcasts, a browser video…) the panel's
+list starts with a **Now Playing** row (24×24 artwork · title · "Artist · App · Paused"; hidden while filtering, when
+nothing plays, or with Preferences ▸ "Show what's playing in other apps" off). Click (or ⤢) opens the artwork in a
+floating `ArtworkWindowController` window that takes the panel's spot and **follows the music** (cross-fade, never takes
+focus); right-click / "…": Copy · Save… (original bytes, "Artist – Album.jpg") · Open in Preview · Search YouTube · Show
+‹App›. Source: macOS Now Playing via the bundled **mediaremote-adapter** (BSD-3, pinned commit in `Dependencies.json`
+"sources") — since macOS 15.4 only Apple-signed processes may read MediaRemote, so `/usr/bin/perl` loads
+`Contents/Frameworks/MediaRemoteAdapter.framework`. **Read-only:** Watch only ever runs its `stream` command, only while the
+panel or the artwork window is showing (`NowPlayingMonitor` demand set, clean perl environment, 2/10/60 s restart
+back-off then give up). Pure logic + monitor in `Sources/NowPlaying.swift` (tested by `test.sh`); window and actions in
+`Sources/ArtworkWindow.swift`.
+
 **Gotchas (see GOTCHAS.md):** never AppleScript an app by name unless it's running (uninstalled names pop a
 "Where is …?" chooser) and never send Apple Events without checking `AEDeterminePermissionToAutomateTarget`
 with ask=false first — no unrequested popups. Remote fMP4 in AVFoundation is unusably slow → the HLS bridge.
 A stale yt-dlp can cause YouTube failures — replace Watch with a newer build. Media tools are included. Browser-tab detection needs "Allow JavaScript from Apple Events" in the browser. App Nap is disabled while playing.
+Now Playing: never run the adapter's `test` (it registers a fake player) or any playback command (`send`/`seek`/…); no
+AppleScript to Music/Spotify (3.3 removed it for its Automation prompts).
 
 **Build:** `./build.sh` (build only → `build/native/Watch.app`; add `--install` for an explicit install after quitting the app).
 
 **Records:** feature truth = `docs/FEATURES.md`; per-function code map = `MAP.md`
-(standalone 3.18; native AVKit pipeline, DashHLSBridge, downloads and permission-safe browser detection).
+(3.19; native AVKit pipeline, DashHLSBridge, downloads, permission-safe browser detection and Now Playing).

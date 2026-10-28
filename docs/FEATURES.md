@@ -1,4 +1,4 @@
-# Watch — v3.18 · Beta *(reworked)*
+# Watch — v3.19 · Beta *(reworked)*
 **Plays almost any video, from anywhere — and downloads it.** Hotkey **⌥⌘Y**.
 
 **Features**
@@ -9,6 +9,16 @@
   ("Matching Links", favourites first, until the automatic search starts). Editing cancels the old request; late results cannot replace the current query. Links and paths still require Return; typing never auto-plays. **↑/↓ + Return** pick a row (Recent Links or results); **Esc** clears
   the field, then goes back, then hides the panel. The field is focused whenever the panel opens. The magnifier's
   menu lists **explicitly submitted recent searches** (never links or each typing pause) with **Clear Recent Searches**.
+- **Now Playing — see the artwork of what's playing anywhere:** while Music, Spotify, Podcasts, a browser video or any
+  other app is playing (or paused), the list starts with a **Now Playing** row — its artwork, the title and *artist ·
+  app* (· **Paused**). Click it (or **⤢**) to **open the artwork** in a floating window like the players: it takes the
+  panel's spot, starts at the artwork's own sharp size, drags and resizes freely, and **follows the music** — the next
+  track's artwork cross‑fades in without ever taking focus. Hover for the caption and "…"; right‑click or "…" →
+  **Copy · Save…** (the original image, named *Artist – Album*) **· Open in Preview · Search YouTube for this song ·
+  Show ‹App›**; Esc closes. A row without artwork brings that app forward instead. **It never touches playback** — Watch
+  only reads macOS's Now Playing information (no play/pause/skip, no permission prompts) and only while the panel or the
+  artwork window is open. Hidden while you type, when nothing is playing, or with Preferences ▸ *Show what's playing in
+  other apps* off.
 - **Recent Links** — video links you copy or play, newest first: a **small thumbnail**, the title, and *site ·
   duration · how long ago*; a video you stopped part‑way shows where you left off (**12:34 / 45:10**) and a red
   **resume bar** on its thumbnail, a live stream shows LIVE. Each video appears **once**, whatever link shape it was copied as
@@ -114,8 +124,11 @@
 - This personal preview is ad-hoc signed, not Apple-notarized. The installer guide describes the macOS Privacy & Security approval; a seamless public installer still needs Developer ID signing/notarization.
 
 **Known limitations**
-- Detection is scoped to browser tabs (no MediaRemote on this macOS). Local‑app rows (Music, Spotify, TV,
-  QuickTime, VLC) were removed in 3.3 — they caused Automation prompts and couldn't be played anyway.
+- Playable detection is scoped to browser tabs. Local‑app rows (Music, Spotify, TV, QuickTime, VLC) were removed in
+  3.3 — they caused Automation prompts and couldn't be played anyway; 3.19's Now Playing row shows what those apps play
+  (with artwork) without Automation, but doesn't play it in Watch.
+- Now Playing relies on a workaround (system perl loading the bundled MediaRemote adapter) for macOS 15.4+'s
+  restriction on reading Now Playing information. If a future macOS closes it, the row simply stops appearing.
 - Some sites block yt‑dlp from certain networks (e.g. Vimeo 403) — those fall back to loading the page.
 - In‑window YouTube quality caps at 1080p (H.264); 1440p/4K are VP9/AV1 only.
 - Up Next's **recommendations aren't personalized** — they're read from the public watch page, not your signed‑in
@@ -123,6 +136,10 @@
   to go to until it's taught the new shape; lists you played from keep working.
 
 **Changelog**
+- **3.19** — **Now Playing artwork:** a Now Playing row for whatever another app is playing, opening its artwork in a
+  floating window that follows the music (Copy · Save · Open in Preview · Search YouTube · Show ‹App›). Read-only
+  macOS Now Playing access through the bundled, pinned mediaremote-adapter; no playback control, no prompts; runs only
+  while the panel or artwork window shows. Preferences toggle.
 - **3.18** — Standalone Watch App repository under MIT, with its own build/test/package commands and no sibling-project dependencies. Fully bundled installer retained; existing preferences and URL handlers remain compatible.
 - **3.17** — **Self-contained installer:** pinned universal media tools, no system-tool fallback, no-Terminal first-run guide with local checks and recovery, optional YouTube connection, included notices/sources. Whole-app updates replace helper self-updates.
 - **3.16** — **Full lists at the same size:** Recent Links and Favourites start fully listed and scroll inside the existing 320×250 panel; All/Less and automatic expansion resizing are removed. **Live search:** typing searches after 350 ms, Return searches immediately without duplicate requests, edits cancel obsolete work, and clear/Escape returns home. Links, local paths and unfinished input-method composition do not auto-search or play.

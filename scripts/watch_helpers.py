@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import shutil
 import subprocess
 import tempfile
@@ -18,6 +19,19 @@ CACHE = ROOT / 'build/watch-vendor'
 PAYLOAD = CACHE / 'payload'
 TOOLS = ('yt-dlp', 'ffmpeg', 'ffprobe', 'deno')
 BUILD_REVISION = 'ffmpeg-lgpl-static-macos13-v1'
+# Now Playing (Sources/NowPlaying.swift): mediaremote-adapter, built from a pinned commit into its own cache, so a
+# change to it never rebuilds FFmpeg. Watch only ever runs its read-only `stream` command.
+ADAPTER = 'mediaremote-adapter'
+ADAPTER_REVISION = 'mediaremote-adapter-universal-macos13-v1'
+ADAPTER_FRAMEWORK = 'MediaRemoteAdapter.framework'
+ADAPTER_BINARY = 'Versions/A/MediaRemoteAdapter'
+ADAPTER_ID = '@rpath/MediaRemoteAdapter.framework/Versions/A/MediaRemoteAdapter'
+ADAPTER_SCRIPT = 'mediaremote-adapter.pl'
+# Upstream CMakeLists.txt ADAPTER_SOURCES (the test client is not built).
+ADAPTER_SOURCES = ('src/adapter/env.m', 'src/adapter/get.m', 'src/adapter/globals.m', 'src/adapter/keys.m',
+                   'src/adapter/now_playing.m', 'src/adapter/repeat.m', 'src/adapter/seek.m', 'src/adapter/send.m',
+                   'src/adapter/shuffle.m', 'src/adapter/speed.m', 'src/adapter/stream.m', 'src/adapter/test.m',
+                   'src/private/MediaRemote.m', 'src/utility/Debounce.m', 'src/utility/helpers.m')
 
 
 def digest(path):
@@ -45,11 +59,37 @@ def fetch(name, item):
     return path
 
 
+def fetch_source(name, item):
+    """A pinned commit of a source-only dependency, as a tar archive. Git checks every object against the commit hash."""
+    archive = CACHE / f'{name}-{item["commit"]}.tar'
+    if archive.exists():
+        with archive.open('rb') as stream:
+            embedded = subprocess.run(['git', 'get-tar-commit-id'], stdin=stream, capture_output=True, text=True).stdout.strip()
+        if embedded != item['commit']:
+            raise ValueError('Cached source archive is not the pinned commit: ' + archive.name)
+        return archive
+    with tempfile.TemporaryDirectory(prefix='.git-', dir=CACHE) as work:
+        run(['git', 'init', '-q', work], capture_output=True)
+        run(['git', '-C', work, 'fetch', '-q', '--depth', '1', item['url'], item['commit']])
+        fetched = run(['git', '-C', work, 'rev-parse', 'FETCH_HEAD^{commit}'], capture_output=True, text=True).stdout.strip()
+        if fetched != item['commit']:
+            raise ValueError(f'{name}: fetched {fetched}, expected {item["commit"]}')
+        temporary = Path(work) / 'source.tar'
+        run(['git', '-C', work, 'archive', '--format=tar', f'--prefix={name}/', '-o', temporary, item['commit']])
+        temporary.replace(archive)
+    return archive
+
+
+def helper_inputs(manifest):
+    # FFmpeg/yt-dlp/Deno inputs only: the cached payload's fingerprint ignores pinned sources (Now Playing).
+    return {key: value for key, value in manifest.items() if key != 'sources'}
+
+
 def run(args, **kwargs):
     return subprocess.run([str(a) for a in args], check=True, **kwargs)
 
 
-def inspect_binary(path, expected=('arm64', 'x86_64')):
+def inspect_binary(path, expected=('arm64', 'x86_64'), own_id=None):
     archs = run(['lipo', '-archs', path], capture_output=True, text=True).stdout.split()
     if set(archs) != set(expected):
         raise ValueError(f'{path}: wrong architectures: {archs}')
@@ -57,6 +97,8 @@ def inspect_binary(path, expected=('arm64', 'x86_64')):
     for line in dependencies.splitlines():
         if line.startswith('\t'):
             dependency = line.strip().split(' (')[0]
+            if dependency == own_id:
+                continue    # a dylib lists its own install name first
             if not dependency.startswith(('/usr/lib/', '/System/Library/')):
                 raise ValueError(f'{path}: non-system library dependency {dependency}')
     loads = run(['otool', '-l', path], capture_output=True, text=True).stdout.splitlines()
@@ -118,7 +160,7 @@ def prepare():
     manifest = json.loads(LOCK.read_text())
     for name, item in manifest['downloads'].items():
         fetch(name, item)
-    fingerprint = hashlib.sha256((BUILD_REVISION + json.dumps(manifest, sort_keys=True)).encode()).hexdigest()
+    fingerprint = hashlib.sha256((BUILD_REVISION + json.dumps(helper_inputs(manifest), sort_keys=True)).encode()).hexdigest()
     receipt = PAYLOAD / 'receipt.json'
     if receipt.exists():
         saved = json.loads(receipt.read_text())
@@ -173,7 +215,9 @@ def prepare():
             'Deno: official macOS releases combined into a universal executable; MIT and third-party notices included.\n'
             'Source archives, FFmpeg build configuration and build recipe are in Sources. '
             'Dependencies.json records pinned source URLs and SHA-256 hashes.\n'
-            'Helpers are updated by replacing Watch with a newer app. They never self-modify this bundle.\n')
+            'Helpers are updated by replacing Watch with a newer app. They never self-modify this bundle.\n'
+            'mediaremote-adapter (Now Playing): built from the included pinned source archive (BSD-3-Clause, notice included) '
+            'into Contents/Frameworks/MediaRemoteAdapter.framework; its perl entry script is in Contents/Resources/NowPlaying.\n')
         hashes = {str(p.relative_to(stage)): digest(p) for p in stage.rglob('*') if p.is_file()
                   and (p.is_relative_to(tools) or p.is_relative_to(thirdparty))}
         (stage / 'receipt.json').write_text(json.dumps(dict(fingerprint=fingerprint, versions=manifest['versions'], hashes=hashes), indent=2))
@@ -184,6 +228,79 @@ def prepare():
         for name in ('Helpers', 'ThirdParty', 'receipt.json'):
             shutil.move(str(stage / name), PAYLOAD / name)
     return PAYLOAD
+
+
+def build_now_playing(archive, stage):
+    """Universal MediaRemoteAdapter.framework + its perl entry script, as upstream's CMake would build them."""
+    with tempfile.TemporaryDirectory(prefix='watch-nowplaying-', dir='/private/tmp') as work:
+        work = Path(work)
+        run(['tar', '-xf', archive], cwd=work)
+        source = work / ADAPTER
+        framework = stage / ADAPTER_FRAMEWORK
+        version = framework / 'Versions/A'
+        (version / 'Resources').mkdir(parents=True)
+        env = dict(os.environ, PATH='/usr/bin:/bin:/usr/sbin:/sbin', MACOSX_DEPLOYMENT_TARGET='13.0')
+        run(['/usr/bin/clang', '-arch', 'arm64', '-arch', 'x86_64', '-mmacosx-version-min=13.0', '-O2',
+             '-fobjc-arc', '-fvisibility=default', '-dynamiclib', '-install_name', ADAPTER_ID,
+             '-compatibility_version', '0.1.0', '-current_version', '0.1.0',
+             '-I', source / 'include', '-I', source / 'src', *[source / name for name in ADAPTER_SOURCES],
+             '-framework', 'Foundation', '-framework', 'AppKit', '-framework', 'UniformTypeIdentifiers',
+             '-o', framework / ADAPTER_BINARY], env=env)
+        with (version / 'Resources/Info.plist').open('wb') as stream:
+            plistlib.dump({'CFBundleDevelopmentRegion': 'en', 'CFBundleExecutable': 'MediaRemoteAdapter',
+                           'CFBundleIdentifier': 'com.vandenbe.MediaRemoteAdapter', 'CFBundleInfoDictionaryVersion': '6.0',
+                           'CFBundleName': 'MediaRemoteAdapter', 'CFBundlePackageType': 'FMWK',
+                           'CFBundleShortVersionString': '0.1', 'CFBundleVersion': '0.1.0',
+                           'LSMinimumSystemVersion': '13.0'}, stream)
+        (framework / 'Versions/Current').symlink_to('A')
+        (framework / 'MediaRemoteAdapter').symlink_to('Versions/Current/MediaRemoteAdapter')
+        (framework / 'Resources').symlink_to('Versions/Current/Resources')
+        shutil.copy2(source / 'bin' / ADAPTER_SCRIPT, stage / ADAPTER_SCRIPT)
+        shutil.copy2(source / 'LICENSE', stage / f'{ADAPTER}-LICENSE.txt')
+
+
+def prepare_now_playing():
+    CACHE.mkdir(parents=True, exist_ok=True)
+    item = json.loads(LOCK.read_text())['sources'][ADAPTER]
+    archive = fetch_source(ADAPTER, item)
+    target = CACHE / 'nowplaying'
+    fingerprint = hashlib.sha256((ADAPTER_REVISION + json.dumps(item, sort_keys=True)).encode()).hexdigest()
+    receipt = target / 'receipt.json'
+    if receipt.exists():
+        saved = json.loads(receipt.read_text())
+        if saved['fingerprint'] == fingerprint:
+            for name, expected in saved['hashes'].items():
+                if digest(target / name) != expected:
+                    raise ValueError('Prepared Now Playing adapter changed: ' + name)
+            return target, archive
+    with tempfile.TemporaryDirectory(prefix='.nowplaying-', dir=CACHE) as temp:
+        stage = Path(temp)
+        build_now_playing(archive, stage)
+        inspect_binary(stage / ADAPTER_FRAMEWORK / ADAPTER_BINARY, own_id=ADAPTER_ID)
+        run(['codesign', '--force', '--sign', '-', stage / ADAPTER_FRAMEWORK], capture_output=True)
+        hashes = {str(p.relative_to(stage)): digest(p) for p in stage.rglob('*') if p.is_file() and not p.is_symlink()}
+        (stage / 'receipt.json').write_text(json.dumps(dict(fingerprint=fingerprint, commit=item['commit'], hashes=hashes), indent=2))
+        if target.exists():
+            shutil.rmtree(target)     # only generated cache, after a complete replacement has been prepared
+        shutil.copytree(stage, target, symlinks=True)
+    return target, archive
+
+
+def stage_now_playing(bundle, identity):
+    """Framework in Contents/Frameworks (signed before the app), script in Contents/Resources/NowPlaying."""
+    prepared, archive = prepare_now_playing()
+    framework = bundle / 'Contents/Frameworks' / ADAPTER_FRAMEWORK
+    framework.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(prepared / ADAPTER_FRAMEWORK, framework, symlinks=True)
+    script = bundle / 'Contents/Resources/NowPlaying' / ADAPTER_SCRIPT
+    script.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(prepared / ADAPTER_SCRIPT, script)
+    thirdparty = bundle / 'Contents/Resources/ThirdParty'
+    shutil.copy2(prepared / f'{ADAPTER}-LICENSE.txt', thirdparty / f'{ADAPTER}-LICENSE.txt')
+    shutil.copy2(archive, thirdparty / 'Sources' / archive.name)
+    run(['codesign', '--force', '--sign', identity, framework], capture_output=True)
+    commit = json.loads(LOCK.read_text())['sources'][ADAPTER]['commit']
+    return dict(commit=commit, sha256=dict(framework=digest(framework / ADAPTER_BINARY), script=digest(script)))
 
 
 def stage_helpers(bundle, identity):
@@ -208,9 +325,12 @@ def stage_helpers(bundle, identity):
         'The script records the exact FFmpeg/LAME configure and compiler arguments; original generated configurations are also included.\n'
         'The FFmpeg and LAME sources are unmodified. You may rebuild, modify and replace the independent helper executables;\n'
         'a modified app needs its signature recreated for macOS. Watch does not prohibit modified helper builds.\n'
-        'yt-dlp source includes its PyInstaller build recipe; upstream bundled component notices and source contact are in yt-dlp-LICENSES.txt.\n')
+        'yt-dlp source includes its PyInstaller build recipe; upstream bundled component notices and source contact are in yt-dlp-LICENSES.txt.\n'
+        'MediaRemoteAdapter.framework is rebuilt from mediaremote-adapter-<commit>.tar (the commit pinned in Dependencies.json \"sources\");\n'
+        'place that archive in build/watch-vendor/ too.\n')
+    now_playing = stage_now_playing(bundle, identity)
     versions = json.loads(LOCK.read_text())['versions']
-    receipt = dict(versions=versions, sha256={name: digest(helpers / name) for name in TOOLS})
+    receipt = dict(versions=versions, sha256={name: digest(helpers / name) for name in TOOLS}, nowPlaying=now_playing)
     (resources / 'MediaTools.json').write_text(json.dumps(receipt, indent=2) + '\n')
 
 
@@ -224,7 +344,17 @@ def validate_helpers(bundle):
         run(['codesign', '--verify', '--strict', path], capture_output=True)
     if not (bundle / 'Contents/Resources/ThirdParty/Sources/ffmpeg-9.0.2.tar.xz').is_file():
         raise ValueError('Missing helper source bundle')
+    framework = bundle / 'Contents/Frameworks' / ADAPTER_FRAMEWORK
+    script = bundle / 'Contents/Resources/NowPlaying' / ADAPTER_SCRIPT
+    now = receipt['nowPlaying']
+    if digest(framework / ADAPTER_BINARY) != now['sha256']['framework'] or digest(script) != now['sha256']['script']:
+        raise ValueError('Bundled Now Playing adapter checksum mismatch')
+    inspect_binary(framework / ADAPTER_BINARY, own_id=ADAPTER_ID)
+    run(['codesign', '--verify', '--strict', framework], capture_output=True)
+    if not (bundle / 'Contents/Resources/ThirdParty/Sources' / f'{ADAPTER}-{now["commit"]}.tar').is_file():
+        raise ValueError('Missing Now Playing adapter source')
 
 
 if __name__ == '__main__':
     print(prepare())
+    print(prepare_now_playing()[0])
