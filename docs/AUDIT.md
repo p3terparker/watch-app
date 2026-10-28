@@ -1,6 +1,6 @@
 # Watch verification
 
-## 3.19 (49) — Now Playing artwork, 2026-10-28 (macOS verification pending)
+## 3.19 (49) — Now Playing artwork, 2026-10-28 (preview; hands-on acceptance pending)
 
 Adds the panel's Now Playing row and a floating artwork window that follows the music, with a full-screen mode over a gradient of the artwork's colours or black (`Sources/NowPlaying.swift`, `Sources/ArtworkWindow.swift`, `Sources/ArtworkStyle.swift`). macOS Now Playing is read through the bundled mediaremote-adapter (BSD-3, commit `0e82bf1c44ec39554fbfc402ec88a48c6ae2a0fd`, fetched by git and verified by commit hash), built universal for macOS 13 into `Contents/Frameworks/MediaRemoteAdapter.framework`. Only the adapter's read-only `stream` command is used, and only while the panel or the artwork window is showing. The bundle ID, preference keys (new: `showNowPlaying`, `artworkColourBackground`), hotkey and URL handler are unchanged. The prepared FFmpeg payload's fingerprint is unchanged, so existing helper caches stay valid.
 
@@ -12,17 +12,24 @@ Adds the panel's Now Playing row and a floating artwork window that follows the 
 - Every Swift file in Sources/ and Tests/ parses. The AppKit files (`main.swift`, `ArtworkWindow.swift`, `PanelMain.swift`) could not be type-checked on Linux.
 - Python sources compile and the shell scripts pass `bash -n`.
 
-### Pending (required before release)
+### Completed verification (GitHub Actions, macos-15 Apple Silicon)
 
-- Swift compilation, `./check.sh` (including the new Now Playing parser/monitor checks), `python3 Tests/panel.py` (Now Playing row and artwork window) and `./build.sh` (first build of the adapter framework). None of this has run yet.
-- `Tests/bundled.py`: the relocated adapter's read-only `get` under system perl.
-- Full screen on a real Mac: entering and leaving (double-click, ⌃⌘F/F, menu, Esc), following track changes, idle hiding, both backgrounds, closing from full screen, multiple displays. Native full screen for this accessory (menu-bar) app is not yet observed.
-- Manual checks on a real Mac:
-  - Music, Spotify and a browser video. Playback must never pause, skip or stutter, and no permission prompt may appear.
-  - The artwork follows track changes.
-  - No adapter process runs while the panel and artwork window are closed, or after quitting.
-- Behavior on macOS 13–15.3, where MediaRemote is open to all processes but the adapter path is still used, has not been checked. The workaround depends on Apple keeping `/usr/bin/perl` entitled. If that ends, the row stops appearing.
-- Packaging (`./package.sh`, `verify_watch_package.py`) and release notes, once the above passes.
+[Run 40648197775](https://github.com/p3terparker/watch-app/actions/runs/40648197775), commit `939dda5`, all steps green on the first attempt:
+
+- The whole app type-checks. The universal build (arm64 + x86_64) passed its bundle verification.
+- 18 tooling tests and 496 Swift regression checks pass, including all Now Playing, background-colour and full-screen-layout checks.
+- 12 real-helper integration checks pass. These include all four Intel helper slices under Rosetta, and the relocated Now Playing adapter loading under `/usr/bin/perl` and reading MediaRemote (it returned `null`; nothing was playing on CI).
+- `verify_watch_package.py --canonical` passed: read-only DMG mount, metadata, both architectures, helper and adapter hashes, signatures. Gatekeeper rejects the ad-hoc, unnotarized build, as expected.
+- The isolated AppKit harness passes 83 checks with 0 failures. That includes the Now Playing row (placement, filtering, Preference, menu) and the artwork window: size, aspect following, placeholder, Esc, the full-screen menu entry and the background choice.
+- The workflow published the [v3.19-preview pre-release](https://github.com/p3terparker/watch-app/releases/tag/v3.19-preview). The DMG is 230,131,032 bytes, SHA-256 `94db4ba0bdc373ad072db70ac1595d908dec1c5eb3f5c6ccf82794288e27ae06`. "Latest" still resolves to v3.18.
+
+### Pending (hands-on acceptance)
+
+- Music, Spotify and a browser video on a real Mac. Playback must never pause, skip or stutter, and no permission prompt may appear. The artwork must follow track changes.
+- No adapter process may run while the panel and artwork window are closed, or after quitting.
+- Full screen entered and left by hand (double-click, ⌃⌘F/F, menu, Esc): following track changes, idle hiding, both backgrounds, closing from full screen, multiple displays. Native full screen for this menu-bar (accessory) app has not been observed yet; CI only exercises the menu and background choice.
+- macOS 13–15.3 and real Intel hardware. The workaround depends on Apple keeping `/usr/bin/perl` entitled. If that ends, the row stops appearing.
+- Developer ID signing and notarization, as for 3.18.
 
 ## 3.18 (48) — standalone extraction, 2026-10-26
 
