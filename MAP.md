@@ -496,5 +496,13 @@ invalidates the FFmpeg payload (`helper_inputs` leaves "sources" out of that fin
 archive to `ThirdParty`, and records hashes under `nowPlaying` in `MediaTools.json`; `validate_helpers` checks them, the binary
 (`inspect_binary(own_id:)`) and the signature. `Tests/bundled.py` runs the relocated adapter's read-only `get` under system perl.
 
+### Automatic builds (3.19)
+`.github/workflows/build.yml` runs on GitHub's `macos-15` (Apple Silicon) for pushes to `main` and `claude/**`: type-check the app
+and `./check.sh` first (fast feedback), then `scripts/watch_helpers.py` with `build/watch-vendor` cached (saved straight after
+preparing, so a later failure keeps the FFmpeg build), `./package.sh` (universal DMG), `Tests/bundled.py` and
+`verify_watch_package.py --canonical`. When those pass on a `claude/*` branch (or a manual run) it replaces the `v<version>-preview`
+pre-release with the DMG (notes: `docs/releases/v<version>-preview.md` + commit + SHA-256); pre-releases never become "latest".
+`Tests/panel.py` runs afterwards as an informational GUI check; snapshots are uploaded as an artifact.
+
 ### Standalone project (3.18)
 Sources and tests are at the repository root. `scripts/watch_build.py` handles this app only; framework/target settings are in `scripts/app.json`. `watch_helpers.py` and installer verification resolve files relative to this repo. No sibling checkout or shared suite scripts are used. MIT applies to Watch code; third-party licenses remain separate. Legacy URL schemes and preference keys are retained for compatibility.
