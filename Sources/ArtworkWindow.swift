@@ -62,11 +62,12 @@ enum ArtworkActions {
             } else { NSWorkspace.shared.open(url) }
         } catch { NSAlert(error: error).runModal() }
     }
-    // Open Artwork (the row only) · Copy · Save… · Open in Preview — then Search YouTube · Show ‹App›.
-    static func menuItems(_ info: NowPlayingInfo, open: (() -> Void)?, search: @escaping (String) -> Void) -> [NSMenuItem] {
+    // Open Artwork · Open Full Screen (the row only) · Copy · Save… · Open in Preview — then Search YouTube · Show ‹App›.
+    static func menuItems(_ info: NowPlayingInfo, open: (() -> Void)?, fullScreen: (() -> Void)?, search: @escaping (String) -> Void) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
         if info.artwork != nil {
             if let open = open { items.append(ClosureMenuItem("Open Artwork", handler: open)) }
+            if let fullScreen = fullScreen { items.append(ClosureMenuItem("Open Full Screen", handler: fullScreen)) }
             items.append(ClosureMenuItem("Copy Artwork") { ArtworkActions.copy(info) })
             items.append(ClosureMenuItem("Save Artwork…") { ArtworkActions.save(info) })
             items.append(ClosureMenuItem("Open in Preview") { ArtworkActions.openInPreview(info) })
@@ -83,23 +84,39 @@ enum ArtworkActions {
 // The Now Playing artwork in a floating, borderless window styled like the players. It follows the music: each
 // update replaces the picture (a short cross-fade) and the caption without ordering the window front or taking
 // focus. Hovering shows the caption and "…"; right-click shows the same menu; Esc or ⌘W closes.
+// Full screen (double-click, ⌃⌘F or F, or the menu) is macOS full screen on its own Space: the artwork centred over
+// a gradient of its own colours or black (Full-Screen Background ▸, `Prefs.artworkColourBackground`) with the caption
+// under it; the caption, "…" and the pointer hide after a few idle seconds. Esc leaves full screen.
 final class ArtworkWindowController: NSObject, NSWindowDelegate {
     static let minSide: CGFloat = 240, maxSide: CGFloat = 600
     static let placeholderDelay: TimeInterval = 1.5    // Music often sends a new track's artwork just after its title
+    static let idleDelay: TimeInterval = 2.5           // full screen: caption, "…" and pointer hide after this
 
     let window: NSWindow
     var onClose: (() -> Void)?
     var onSearch: ((String) -> Void)?
     private(set) var info: NowPlayingInfo?
     private(set) var pictureData: Data?                // the artwork showing (nil: none yet, or the placeholder)
+    private(set) var inFullScreen = false
+    private(set) var backgroundColours: (NSColor, NSColor)?   // the gradient showing; nil = black
     private let content = ArtworkContentView()
+    private let background = ArtworkBackgroundView()
+    private let artHolder = NSView()                   // casts the artwork's shadow in full screen
     private let imageView = ArtworkImageView()
     private let shade = GradientView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
     private let dotButton = FadingButton(title: "", image: sym("ellipsis.circle.fill"), target: nil, action: nil)
+    private let artShadow: NSShadow = {
+        let s = NSShadow()
+        s.shadowColor = NSColor.black.withAlphaComponent(0.45); s.shadowBlurRadius = 30; s.shadowOffset = NSSize(width: 0, height: -10)
+        return s
+    }()
     private var placeholderToken = 0
     private var notPlaying = false
+    private var idleWork: DispatchWorkItem?
+    private var savedAspect: NSSize?                   // the windowed aspect lock, set aside while in full screen
+    private var closeAfterFullScreen = false
 
     override init() {
         let side: CGFloat = 320
@@ -112,47 +129,47 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] { window.standardWindowButton(b)?.isHidden = true }
         window.isMovableByWindowBackground = true
         window.backgroundColor = .black
-        window.level = .floating
-        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.hidesOnDeactivate = false
         window.isReleasedWhenClosed = false
-        window.contentAspectRatio = NSSize(width: 1, height: 1)
         window.minSize = NSSize(width: 120, height: 120)
         window.delegate = self
+        restoreWindowed(refit: false)                  // floating level, Space behaviour
+        window.contentAspectRatio = NSSize(width: 1, height: 1)
 
         content.frame = NSRect(x: 0, y: 0, width: side, height: side)
         content.appearance = NSAppearance(named: .darkAqua)
-        content.onHover = { [weak self] inside in self?.fadeChrome(visible: inside) }
-        content.onMenu = { [weak self] in self?.menu() }
-        content.onClose = { [weak self] in self?.window.close() }
+        content.onLayout = { [weak self] in self?.layoutViews() }
+        content.onHover = { [weak self] inside in self?.pointerMoved(inside: inside) }
+        content.onMenu = { [weak self] in self?.makeMenu() }
+        content.onClose = { [weak self] in self?.close() }
+        content.onToggleFullScreen = { [weak self] in self?.toggleFullScreen() }
+        content.onEscape = { [weak self] in
+            guard let self = self else { return }
+            if self.inFullScreen { self.toggleFullScreen() } else { self.close() }
+        }
         window.contentView = content
 
-        imageView.frame = content.bounds; imageView.autoresizingMask = [.width, .height]
+        content.addSubview(background)
         imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.wantsLayer = true
-        content.addSubview(imageView)
-
-        // Caption over a bottom gradient, shown with "…" while the cursor is over the window.
-        shade.frame = NSRect(x: 0, y: 0, width: side, height: 64); shade.autoresizingMask = [.width, .maxYMargin]
+        imageView.layer?.masksToBounds = true
+        artHolder.wantsLayer = true
+        artHolder.addSubview(imageView)
+        content.addSubview(artHolder)
+        // Caption — over a bottom gradient in the window, under the artwork in full screen — shown with "…" on hover.
         shade.alphaValue = 0
         content.addSubview(shade)
-        let captionStyles: [(NSTextField, CGFloat, NSFont.Weight, CGFloat, CGFloat)] = [   // label, size, weight, opacity, y
-            (titleLabel, 13, .semibold, 0.95, 28), (detailLabel, 11, .regular, 0.7, 11)]
-        for (label, size, weight, alpha, y) in captionStyles {
-            label.font = .systemFont(ofSize: size, weight: weight)
+        for (label, alpha) in [(titleLabel, CGFloat(0.95)), (detailLabel, CGFloat(0.7))] {
             label.textColor = NSColor.white.withAlphaComponent(alpha)
             label.lineBreakMode = .byTruncatingTail
-            label.frame = NSRect(x: 12, y: y, width: side - 24, height: size + 4); label.autoresizingMask = [.width, .maxYMargin]
             shade.addSubview(label)
         }
-
         dotButton.target = self; dotButton.action = #selector(showMenu)
         dotButton.alphaValue = 0
         dotButton.isBordered = false; dotButton.contentTintColor = NSColor.white.withAlphaComponent(0.55)
         dotButton.imageScaling = .scaleProportionallyDown; dotButton.toolTip = "Menu"
-        dotButton.frame = NSRect(x: side - 20, y: side - 20, width: 16, height: 16)
-        dotButton.autoresizingMask = [.minXMargin, .minYMargin]
         content.addSubview(dotButton)
+        layoutViews()
     }
 
     // First open (or bring back): shows `info`, sized to the artwork's own resolution and placed on the panel's spot
@@ -171,6 +188,10 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(content)
+    }
+    // Close — from full screen, after leaving it, so the window doesn't vanish mid-animation on its own Space.
+    func close() {
+        if inFullScreen { closeAfterFullScreen = true; window.toggleFullScreen(nil) } else { window.close() }
     }
 
     // A follow update. Nothing playing keeps the last picture; a new track without artwork keeps the old one for a
@@ -197,14 +218,16 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     }
 
     private func setPicture(_ image: NSImage, data: Data?) {
-        if window.isVisible, imageView.image != nil {
+        let animate = window.isVisible && imageView.image != nil
+        if animate {
             let fade = CATransition(); fade.type = .fade; fade.duration = 0.25
             imageView.layer?.add(fade, forKey: "fade")
         }
         imageView.imageScaling = data == nil ? .scaleProportionallyDown : .scaleProportionallyUpOrDown
         imageView.image = image
         pictureData = data
-        if data != nil { fitAspect(Self.pixelSize(image)) }
+        refreshBackground(animated: animate)
+        if inFullScreen { layoutViews() } else if data != nil { fitAspect(Self.pixelSize(image)) }
     }
     private func showPlaceholder() {
         guard let info = info else { return }
@@ -221,10 +244,61 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         detailLabel.stringValue = detail.joined(separator: " · ")
         imageView.setAccessibilityLabel("Artwork: \(info.title)" + (info.artist.map { " by \($0)" } ?? ""))
     }
+    // The gradient follows the artwork (black for the placeholder, or when Black is chosen).
+    private func refreshBackground(animated: Bool) {
+        backgroundColours = Prefs.artworkColourBackground && pictureData != nil ? imageView.image.flatMap(Self.palette) : nil
+        background.show(backgroundColours, animated: animated)
+    }
+    // Two colours from the artwork (ArtworkPalette), from a 16×16 sample.
+    static func palette(_ image: NSImage) -> (NSColor, NSColor)? {
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil), let sRGB = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        let side = 16
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let ctx = CGContext(data: buffer.baseAddress, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+                                      space: sRGB, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            ctx.interpolationQuality = .medium
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return true
+        }
+        guard drawn, let colours = ArtworkPalette.gradient(pixels: pixels, width: side, height: side) else { return nil }
+        func colour(_ c: RGB) -> NSColor { NSColor(srgbRed: CGFloat(c.r), green: CGFloat(c.g), blue: CGFloat(c.b), alpha: 1) }
+        return (colour(colours.start), colour(colours.end))
+    }
+
+    // Window: the artwork fills it, caption along the bottom. Full screen: ArtworkLayout — the artwork centred with
+    // rounded corners and a shadow, the caption centred under it, "…" clear of the menu bar.
+    private func layoutViews() {
+        let b = content.bounds, full = inFullScreen
+        background.frame = b
+        if full {
+            let spot = ArtworkLayout.fullScreen(artwork: imageView.image.map(Self.pixelSize) ?? NSSize(width: 1, height: 1), in: b.size)
+            artHolder.frame = spot.art
+            shade.frame = spot.caption
+            dotButton.frame = NSRect(x: b.width - 40, y: b.height - 56, width: 16, height: 16)
+        } else {
+            artHolder.frame = b
+            shade.frame = NSRect(x: 0, y: 0, width: b.width, height: 64)
+            dotButton.frame = NSRect(x: b.width - 20, y: b.height - 20, width: 16, height: 16)
+        }
+        imageView.frame = artHolder.bounds
+        imageView.layer?.cornerRadius = full ? 8 : 0
+        artHolder.shadow = full ? artShadow : nil
+        shade.showsGradient = !full
+        let styles: [(NSTextField, CGFloat, NSFont.Weight, CGFloat)] = full    // label, size, weight, y
+            ? [(titleLabel, 22, .semibold, 32), (detailLabel, 15, .regular, 6)]
+            : [(titleLabel, 13, .semibold, 28), (detailLabel, 11, .regular, 11)]
+        let inset: CGFloat = full ? 0 : 12
+        for (label, size, weight, y) in styles {
+            label.font = .systemFont(ofSize: size, weight: weight)
+            label.alignment = full ? .center : .left
+            label.frame = NSRect(x: inset, y: y, width: max(0, shade.bounds.width - 2 * inset), height: size + (full ? 6 : 4))
+        }
+    }
 
     // Album art is square, a video's thumbnail 16:9: keep the width and the top-left corner, change the height.
     private func fitAspect(_ size: NSSize) {
-        guard size.width > 0, size.height > 0 else { return }
+        guard !inFullScreen, size.width > 0, size.height > 0 else { return }
         let ratio = size.width / size.height, current = window.contentAspectRatio
         guard current.height <= 0 || abs(current.width / current.height - ratio) > 0.01 else { return }
         window.contentAspectRatio = size
@@ -251,6 +325,58 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         return image.size
     }
 
+    // MARK: full screen
+    // macOS full screen on its own Space. The window normally floats, keeps its aspect ratio and joins other apps'
+    // full-screen Spaces; all three are set aside for full screen and restored afterwards (restoreWindowed).
+    func toggleFullScreen() {
+        if !inFullScreen {
+            savedAspect = window.contentAspectRatio
+            window.contentResizeIncrements = NSSize(width: 1, height: 1)   // clears the aspect-ratio lock
+            window.level = .normal
+            window.collectionBehavior = [.fullScreenPrimary]
+        }
+        window.toggleFullScreen(nil)
+    }
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        inFullScreen = true
+        layoutViews()
+        pointerMoved(inside: true)                      // show the caption, then let it fade
+    }
+    func windowWillExitFullScreen(_ notification: Notification) {
+        inFullScreen = false
+        idleWork?.cancel()
+        layoutViews()
+    }
+    func windowDidExitFullScreen(_ notification: Notification) {
+        restoreWindowed(refit: !closeAfterFullScreen)
+        if closeAfterFullScreen { closeAfterFullScreen = false; window.close() }
+    }
+    func windowDidFailToEnterFullScreen(_ window: NSWindow) {
+        inFullScreen = false
+        restoreWindowed(refit: false)
+        layoutViews()
+    }
+    private func restoreWindowed(refit: Bool) {
+        window.level = .floating
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        if let aspect = savedAspect, aspect.width > 0, aspect.height > 0 { window.contentAspectRatio = aspect }
+        savedAspect = nil
+        if refit, pictureData != nil, let image = imageView.image { fitAspect(Self.pixelSize(image)) }   // the track may have changed
+    }
+
+    // Hover shows the caption and "…"; in full screen they — and the pointer — hide again after idleDelay.
+    private func pointerMoved(inside: Bool) {
+        fadeChrome(visible: inside)
+        idleWork?.cancel()
+        guard inFullScreen, inside else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, self.inFullScreen else { return }
+            self.fadeChrome(visible: false)
+            NSCursor.setHiddenUntilMouseMoves(true)
+        }
+        idleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.idleDelay, execute: work)
+    }
     private func fadeChrome(visible: Bool) {
         let target: CGFloat = visible ? 1 : 0
         guard dotButton.alphaValue != target else { return }
@@ -260,31 +386,53 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
             shade.animator().alphaValue = target
         }
     }
-    private func menu() -> NSMenu {
+
+    // Close · Enter/Exit Full Screen · Full-Screen Background ▸ Artwork Colours / Black — then the artwork actions.
+    func makeMenu() -> NSMenu {
         let m = NSMenu()
-        m.addItem(ClosureMenuItem("Close") { [weak self] in self?.window.close() })
+        m.addItem(ClosureMenuItem("Close") { [weak self] in self?.close() })
+        let full = ClosureMenuItem(inFullScreen ? "Exit Full Screen" : "Enter Full Screen") { [weak self] in self?.toggleFullScreen() }
+        full.keyEquivalent = "f"; full.keyEquivalentModifierMask = [.control, .command]   // shown only; the content view handles the keys
+        m.addItem(full)
+        let backgrounds = NSMenu()
+        for (title, colours) in [("Artwork Colours", true), ("Black", false)] {
+            let item = ClosureMenuItem(title) { [weak self] in
+                Prefs.artworkColourBackground = colours
+                self?.refreshBackground(animated: true)
+            }
+            item.state = Prefs.artworkColourBackground == colours ? .on : .off
+            backgrounds.addItem(item)
+        }
+        let backgroundItem = NSMenuItem(title: "Full-Screen Background", action: nil, keyEquivalent: "")
+        backgroundItem.submenu = backgrounds
+        m.addItem(backgroundItem)
         if let info = info {
             m.addItem(.separator())
-            ArtworkActions.menuItems(info, open: nil, search: { [weak self] q in self?.onSearch?(q) }).forEach(m.addItem)
+            ArtworkActions.menuItems(info, open: nil, fullScreen: nil, search: { [weak self] q in self?.onSearch?(q) }).forEach(m.addItem)
         }
         return m
     }
     @objc private func showMenu() {
-        menu().popUp(positioning: nil, at: NSPoint(x: dotButton.frame.minX - 150, y: dotButton.frame.minY - 4), in: content)
+        makeMenu().popUp(positioning: nil, at: NSPoint(x: dotButton.frame.minX - 150, y: dotButton.frame.minY - 4), in: content)
     }
     func windowWillClose(_ notification: Notification) {
         placeholderToken += 1
+        idleWork?.cancel()
+        if savedAspect != nil { inFullScreen = false; restoreWindowed(refit: false) }   // closed by the system mid-full-screen
         onClose?()
     }
 }
 
-// The window's content: hover reveals the caption, right-click shows the menu, Esc / ⌘W close. Dragging anywhere
-// moves the window — the top edge too: like PlayerSurfaceView it keeps title-bar-area clicks, so a double-click there
-// doesn't zoom the window.
+// The window's content: hover reveals the caption, right-click shows the menu; Esc (leaves full screen, else closes),
+// ⌘W, ⌃⌘F / F and double-click (full screen). Dragging anywhere moves the window — the top edge too: like
+// PlayerSurfaceView it keeps title-bar-area clicks, so a double-click there doesn't zoom the window.
 final class ArtworkContentView: NSView {
     var onHover: ((Bool) -> Void)?
     var onMenu: (() -> NSMenu?)?
     var onClose: (() -> Void)?
+    var onEscape: (() -> Void)?
+    var onToggleFullScreen: (() -> Void)?
+    var onLayout: (() -> Void)?
     override init(frame: NSRect) {
         super.init(frame: frame)
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
@@ -293,14 +441,21 @@ final class ArtworkContentView: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); onLayout?() }
     override func mouseEntered(with e: NSEvent) { onHover?(true) }
     override func mouseMoved(with e: NSEvent) { onHover?(true) }
     override func mouseExited(with e: NSEvent) { onHover?(false) }
-    override func mouseDown(with e: NSEvent) { if e.clickCount == 1 { window?.performDrag(with: e) } }
+    override func mouseDown(with e: NSEvent) {
+        if e.clickCount == 2 { onToggleFullScreen?() } else if e.clickCount == 1 { window?.performDrag(with: e) }
+    }
     override func menu(for event: NSEvent) -> NSMenu? { onMenu?() }
     override func keyDown(with e: NSEvent) {
-        let command = e.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
-        if e.keyCode == 53 || (command && e.charactersIgnoringModifiers == "w") { onClose?() } else { super.keyDown(with: e) }
+        let mods = e.modifierFlags.intersection([.command, .control, .option, .shift])
+        let key = e.charactersIgnoringModifiers?.lowercased()
+        if e.keyCode == 53 { onEscape?() }
+        else if mods == .command && key == "w" { onClose?() }
+        else if key == "f" && (mods.isEmpty || mods == [.control, .command]) { onToggleFullScreen?() }
+        else { super.keyDown(with: e) }
     }
 }
 
@@ -311,13 +466,39 @@ final class ArtworkImageView: NSImageView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-// Black → clear, bottom to top, under the caption.
+// Full screen's backdrop: a top-left → bottom-right gradient of the artwork's colours, or black. Changes cross-fade.
+final class ArtworkBackgroundView: NSView {
+    private let gradient = CAGradientLayer()
+    override init(frame: NSRect) { super.init(frame: frame); wantsLayer = true }
+    required init?(coder: NSCoder) { fatalError() }
+    override func makeBackingLayer() -> CALayer {
+        gradient.startPoint = CGPoint(x: 0, y: 1); gradient.endPoint = CGPoint(x: 1, y: 0)
+        gradient.colors = [NSColor.black.cgColor, NSColor.black.cgColor]
+        return gradient
+    }
+    func show(_ colours: (NSColor, NSColor)?, animated: Bool) {
+        if animated {
+            let fade = CATransition(); fade.type = .fade; fade.duration = 0.4
+            gradient.add(fade, forKey: "fade")
+        }
+        let (start, end) = colours ?? (NSColor.black, NSColor.black)
+        gradient.colors = [start.cgColor, end.cgColor]
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+// Black → clear, bottom to top, under the window's caption (clear in full screen, where the caption sits under the art).
 final class GradientView: NSView {
+    var showsGradient = true { didSet { if showsGradient != oldValue { (layer as? CAGradientLayer)?.colors = colours } } }
+    private var colours: [CGColor] {
+        showsGradient ? [NSColor.black.withAlphaComponent(0.7).cgColor, NSColor.black.withAlphaComponent(0).cgColor]
+                      : [NSColor.clear.cgColor, NSColor.clear.cgColor]
+    }
     override init(frame: NSRect) { super.init(frame: frame); wantsLayer = true }
     required init?(coder: NSCoder) { fatalError() }
     override func makeBackingLayer() -> CALayer {
         let g = CAGradientLayer()
-        g.colors = [NSColor.black.withAlphaComponent(0.7).cgColor, NSColor.black.withAlphaComponent(0).cgColor]
+        g.colors = colours
         g.startPoint = CGPoint(x: 0.5, y: 0); g.endPoint = CGPoint(x: 0.5, y: 1)
         return g
     }

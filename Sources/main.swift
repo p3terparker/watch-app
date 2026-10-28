@@ -39,6 +39,8 @@ enum Prefs {
     static var showFavourites: Bool { get { d.bool(forKey: "showFavourites") } set { d.set(newValue, forKey: "showFavourites") } }  // the panel's list tab
     // The panel's Now Playing row (what other apps are playing, with its artwork — NowPlaying.swift).
     static var showNowPlaying: Bool { get { d.object(forKey: "showNowPlaying") as? Bool ?? true } set { d.set(newValue, forKey: "showNowPlaying") } }
+    // Full-screen artwork backdrop: a gradient of the artwork's colours (default) or black.
+    static var artworkColourBackground: Bool { get { d.object(forKey: "artworkColourBackground") as? Bool ?? true } set { d.set(newValue, forKey: "artworkColourBackground") } }
     // Playback modes. Each player window keeps its own (its "…" menu toggles them); these are what a NEW
     // window starts with, i.e. the last choice made anywhere.
     static var autoplay: Bool { get { d.object(forKey: "autoplay") as? Bool ?? true } set { d.set(newValue, forKey: "autoplay") } }
@@ -2987,7 +2989,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         }
         row.onMenu = { [weak self] in
             let m = NSMenu()
-            ArtworkActions.menuItems(info, open: { self?.openArtwork() }, search: { self?.searchYouTube(for: $0) }).forEach(m.addItem)
+            ArtworkActions.menuItems(info, open: { self?.openArtwork() }, fullScreen: { self?.openArtwork(fullScreen: true) },
+                                     search: { self?.searchYouTube(for: $0) }).forEach(m.addItem)
             return m
         }
         nowPlayingRow.addArrangedSubview(row)
@@ -3000,13 +3003,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         if artworkWindow?.window.isVisible == true { artworkWindow?.show(info) }
     }
     // The artwork window takes the panel's spot and the panel hides, as with the first video; it then follows the music.
-    func openArtwork() {
+    // `fullScreen` (the row's Open Full Screen) goes straight on to macOS full screen.
+    func openArtwork(fullScreen: Bool = false) {
         guard let info = nowPlayingInfo, info.artwork != nil else { return }
         let viewer = artworkWindow ?? makeArtworkWindow()
         nowPlaying.want(.viewer, true)              // before the panel lets go, so the adapter keeps running
         let panelShown = dropdown.isVisible && dropdown.isOnActiveSpace
         viewer.present(info, replacing: panelShown && !viewer.window.isVisible ? dropdown.frame : nil, anchor: statusItem)
         if panelShown { stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors() }
+        if fullScreen && !viewer.inFullScreen { viewer.toggleFullScreen() }
     }
     private func makeArtworkWindow() -> ArtworkWindowController {
         let viewer = ArtworkWindowController()
@@ -3022,7 +3027,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         search(query)
     }
     func nowPlayingSettingsChanged() {
-        if !Prefs.showNowPlaying { artworkWindow?.window.close() }   // its onClose releases the adapter
+        if !Prefs.showNowPlaying { artworkWindow?.close() }   // its onClose releases the adapter
         nowPlaying.want(.panel, Prefs.showNowPlaying && dropdown.isVisible)
         rebuildNowPlayingRow()
     }

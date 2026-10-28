@@ -2,13 +2,13 @@
 
 ## 3.19 (49) — Now Playing artwork, 2026-10-28 (macOS verification pending)
 
-Adds the panel's Now Playing row and a floating artwork window that follows the music (`Sources/NowPlaying.swift`, `Sources/ArtworkWindow.swift`). macOS Now Playing is read through the bundled mediaremote-adapter (BSD-3, commit `0e82bf1c44ec39554fbfc402ec88a48c6ae2a0fd`, fetched by git and verified by commit hash), built universal for macOS 13 into `Contents/Frameworks/MediaRemoteAdapter.framework`. Only the adapter's read-only `stream` command is used, and only while the panel or the artwork window is showing. The bundle ID, preference keys (new: `showNowPlaying`), hotkey and URL handler are unchanged. The prepared FFmpeg payload's fingerprint is unchanged, so existing helper caches stay valid.
+Adds the panel's Now Playing row and a floating artwork window that follows the music, with a full-screen mode over a gradient of the artwork's colours or black (`Sources/NowPlaying.swift`, `Sources/ArtworkWindow.swift`, `Sources/ArtworkStyle.swift`). macOS Now Playing is read through the bundled mediaremote-adapter (BSD-3, commit `0e82bf1c44ec39554fbfc402ec88a48c6ae2a0fd`, fetched by git and verified by commit hash), built universal for macOS 13 into `Contents/Frameworks/MediaRemoteAdapter.framework`. Only the adapter's read-only `stream` command is used, and only while the panel or the artwork window is showing. The bundle ID, preference keys (new: `showNowPlaying`, `artworkColourBackground`), hotkey and URL handler are unchanged. The prepared FFmpeg payload's fingerprint is unchanged, so existing helper caches stay valid.
 
 ### Completed verification (Linux authoring environment, no Swift toolchain)
 
 - 18 tooling safety tests pass, including the new ones: a dylib's own install name, rejection of foreign `@rpath` libraries, the pinned-source manifest, and cached-archive commit checks.
 - The real `fetch_source` path ran against GitHub: the pinned commit fetched and verified, the archive was reused without network, a corrupted cache was rejected, and every upstream build input was present. Watch's source list matches upstream's `CMakeLists.txt`.
-- `Sources/NowPlaying.swift` and `Tests/NowPlayingChecks.swift` compiled and ran with Swift 6.1 on Linux (official `swift:6.1-noble` image, `-swift-version 5 -warnings-as-errors`): 63 checks pass. That covers parsing, line reassembly, naming, environment scrubbing, and the monitor's start/stop, de-duplication, debounce and back-off against real `/bin/sh` processes. This run caught and fixed a background closure capturing the monitor's weak `self` variable.
+- `Sources/NowPlaying.swift`, `Sources/ArtworkStyle.swift` and `Tests/NowPlayingChecks.swift` compiled and ran with Swift 6.1 on Linux (official `swift:6.1-noble` image, `-swift-version 5 -warnings-as-errors`): 80 checks pass, including background colour picking and full-screen layout. That covers parsing, line reassembly, naming, environment scrubbing, and the monitor's start/stop, de-duplication, debounce and back-off against real `/bin/sh` processes. This run caught and fixed a background closure capturing the monitor's weak `self` variable.
 - Every Swift file in Sources/ and Tests/ parses. The AppKit files (`main.swift`, `ArtworkWindow.swift`, `PanelMain.swift`) could not be type-checked on Linux.
 - Python sources compile and the shell scripts pass `bash -n`.
 
@@ -16,6 +16,7 @@ Adds the panel's Now Playing row and a floating artwork window that follows the 
 
 - Swift compilation, `./check.sh` (including the new Now Playing parser/monitor checks), `python3 Tests/panel.py` (Now Playing row and artwork window) and `./build.sh` (first build of the adapter framework). None of this has run yet.
 - `Tests/bundled.py`: the relocated adapter's read-only `get` under system perl.
+- Full screen on a real Mac: entering and leaving (double-click, ⌃⌘F/F, menu, Esc), following track changes, idle hiding, both backgrounds, closing from full screen, multiple displays. Native full screen for this accessory (menu-bar) app is not yet observed.
 - Manual checks on a real Mac:
   - Music, Spotify and a browser video. Playback must never pause, skip or stutter, and no permission prompt may appear.
   - The artwork follows track changes.

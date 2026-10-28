@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 // Now Playing without MediaRemote: adapter lines are fixtures and the adapter process is /bin/sh.
 private let png1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
@@ -162,4 +165,42 @@ func checkNowPlaying() {
     pending.want(.panel, false)
     restarts[0].1()
     expect(launched.count == 1, "nobody wants it: no restart")
+}
+
+// The full-screen artwork's background colours and layout.
+func checkArtworkStyle() {
+    func picture(_ w: Int, _ h: Int, _ colour: (Int, Int) -> [UInt8]) -> [UInt8] {
+        var p: [UInt8] = []
+        for y in 0..<h { for x in 0..<w { p += colour(x, y) } }
+        return p
+    }
+    let red = ArtworkPalette.gradient(pixels: picture(8, 8) { _, _ in [255, 0, 0, 255] }, width: 8, height: 8)!
+    expect(red.start.g == 0 && red.start.b == 0 && abs(red.start.value - ArtworkPalette.maxValue) < 1e-9, "one colour: red, darkened for white text")
+    expect(red.end.r < red.start.r && red.end.g == 0, "one colour: the second stop is a darker shade of it")
+    let split = ArtworkPalette.gradient(pixels: picture(8, 8) { x, _ in x < 4 ? [0, 0, 255, 255] : [255, 255, 0, 255] }, width: 8, height: 8)!
+    let stops = [split.start, split.end]
+    expect(stops.contains { $0.b > 0.4 && $0.r < 0.1 } && stops.contains { $0.r > 0.4 && $0.g > 0.4 && $0.b < 0.1 }, "two colours: one stop each")
+    let vivid = ArtworkPalette.gradient(pixels: picture(10, 10) { x, y in (2...7).contains(x) && (2...7).contains(y) ? [230, 30, 120, 255] : [128, 128, 128, 255] },
+                                        width: 10, height: 10)!
+    expect(vivid.start.r > vivid.start.g && vivid.start.saturation > 0.5, "a vivid subject leads over a larger grey area")
+    expect(vivid.end.saturation < 0.1, "…and the grey ground is the second stop")
+    let faint = ArtworkPalette.gradient(pixels: picture(4, 4) { _, _ in [128, 0, 0, 128] }, width: 4, height: 4)!
+    expect(abs(faint.start.r - ArtworkPalette.maxValue) < 0.01, "premultiplied alpha is undone")
+    expect(ArtworkPalette.gradient(pixels: picture(4, 4) { _, _ in [0, 0, 0, 0] }, width: 4, height: 4) == nil, "transparent: no colours")
+    expect(ArtworkPalette.gradient(pixels: [1, 2, 3], width: 4, height: 4) == nil, "short sample rejected")
+    expect(ArtworkPalette.tone(RGB(r: 1, g: 1, b: 1)) == RGB(r: 0.55, g: 0.55, b: 0.55), "white toned down")
+    expect(ArtworkPalette.tone(RGB(r: 0, g: 0, b: 0)) == RGB(r: 0.1, g: 0.1, b: 0.1), "black lifted to a dark grey")
+
+    let screen = CGSize(width: 1440, height: 900)
+    let square = ArtworkLayout.fullScreen(artwork: CGSize(width: 600, height: 600), in: screen)
+    expect(square.art == CGRect(x: 441, y: 213, width: 558, height: 558), "square art: 62% of the height, centred")
+    expect(square.caption == CGRect(x: 441, y: 129, width: 558, height: 64), "caption centred under the art")
+    expect(square.caption.origin.y + square.caption.size.height + ArtworkLayout.gap == square.art.origin.y, "gap between art and caption")
+    let wide = ArtworkLayout.fullScreen(artwork: CGSize(width: 640, height: 360), in: screen)
+    expect(wide.art.size == CGSize(width: 992, height: 558) && wide.art.origin.x == 224, "16:9 art keeps its shape")
+    let tallScreen = ArtworkLayout.fullScreen(artwork: CGSize(width: 600, height: 600), in: CGSize(width: 800, height: 1200))
+    expect(tallScreen.art.size == CGSize(width: 560, height: 560) && tallScreen.caption.size.width == 560, "narrow screen: 70% of the width")
+    let small = ArtworkLayout.fullScreen(artwork: CGSize(width: 100, height: 100), in: screen)
+    expect(small.caption.size.width == 558 && small.art.size.width == 558, "small art is scaled up to the same spot")
+    expect(ArtworkLayout.fullScreen(artwork: .zero, in: screen).art.size == CGSize(width: 558, height: 558), "unknown shape: square")
 }

@@ -206,7 +206,7 @@ snapshot("now-playing")
 panel.nowPlayingChanged(nowPlayingFixture("Fixture Song", square, playing: false)); layout()
 check(texts(panel.nowPlayingRow).contains { $0.hasPrefix("Fixture Artist") && $0.hasSuffix("Paused") }, "paused state shown")
 let rowMenu = rows(panel.nowPlayingRow).first?.onMenu?()?.items.map(\.title) ?? []
-check(rowMenu.first == "Open Artwork" && rowMenu.contains("Save Artwork…") && rowMenu.contains("Search YouTube for “Fixture Song”"), "row menu")
+check(rowMenu.prefix(2) == ["Open Artwork", "Open Full Screen"] && rowMenu.contains("Save Artwork…") && rowMenu.contains("Search YouTube for “Fixture Song”"), "row menu")
 type("Fixture")
 check(panel.nowPlayingRow.isHidden, "hidden while the field filters")
 panel.searchField.stringValue = ""; panel.searchFieldAction(panel.searchField)
@@ -228,6 +228,18 @@ func viewerSnapshot(_ name: String) {
     try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent(name + ".png"))
 }
 viewerSnapshot("artwork-window")
+let viewerMenu = viewer.makeMenu()
+check(viewerMenu.items.map(\.title).prefix(2) == ["Close", "Enter Full Screen"], "window menu offers full screen")
+let backgroundMenu = viewerMenu.items.first { $0.title == "Full-Screen Background" }?.submenu
+check(backgroundMenu?.items.map(\.title) == ["Artwork Colours", "Black"] && backgroundMenu?.items.first?.state == .on, "background choice, colours by default")
+let fixtureColours = ArtworkWindowController.palette(NSImage(data: square)!)
+check(fixtureColours != nil && fixtureColours!.0 != fixtureColours!.1, "two colours picked from the pink/indigo fixture")
+check(viewer.backgroundColours != nil, "artwork-coloured background in use")
+func choose(_ item: NSMenuItem?) { if let item = item, let action = item.action { _ = (item.target as AnyObject?)?.perform(action, with: item) } }
+choose(backgroundMenu?.items.last)
+check(!Prefs.artworkColourBackground && viewer.backgroundColours == nil, "Black background chosen and remembered")
+choose(viewer.makeMenu().items.first { $0.title == "Full-Screen Background" }?.submenu?.items.first)
+check(Prefs.artworkColourBackground && viewer.backgroundColours != nil, "back to artwork colours")
 panel.nowPlayingChanged(nowPlayingFixture("Second Song", wide)); pump(0.5)
 let followed = viewer.window.frame
 check(viewer.pictureData == wide && viewer.info?.title == "Second Song", "window follows the next track")

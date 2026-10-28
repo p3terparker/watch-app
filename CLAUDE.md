@@ -54,7 +54,10 @@ list starts with a **Now Playing** row (24×24 artwork · title · "Artist · Ap
 nothing plays, or with Preferences ▸ "Show what's playing in other apps" off). Click (or ⤢) opens the artwork in a
 floating `ArtworkWindowController` window that takes the panel's spot and **follows the music** (cross-fade, never takes
 focus); right-click / "…": Copy · Save… (original bytes, "Artist – Album.jpg") · Open in Preview · Search YouTube · Show
-‹App›. Source: macOS Now Playing via the bundled **mediaremote-adapter** (BSD-3, pinned commit in `Dependencies.json`
+‹App›. **Full screen** (double-click, ⌃⌘F/F, menu, or the row's Open Full Screen; Esc leaves): macOS full screen with the
+artwork centred over a gradient of its own two main colours or black (Full-Screen Background ▸,
+`Prefs.artworkColourBackground`), caption under it, chrome + pointer hidden when idle; colour picking and layout are pure
+in `Sources/ArtworkStyle.swift` (tested). Source: macOS Now Playing via the bundled **mediaremote-adapter** (BSD-3, pinned commit in `Dependencies.json`
 "sources") — since macOS 15.4 only Apple-signed processes may read MediaRemote, so `/usr/bin/perl` loads
 `Contents/Frameworks/MediaRemoteAdapter.framework`. **Read-only:** Watch only ever runs its `stream` command, only while the
 panel or the artwork window is showing (`NowPlayingMonitor` demand set, clean perl environment, 2/10/60 s restart

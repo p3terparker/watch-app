@@ -1,6 +1,6 @@
 # Watch — where everything lives
 
-A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift` and `ArtworkWindow.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.19** — native AVKit playback for YouTube (HD + live), in-app
+A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift`, `ArtworkWindow.swift` and `ArtworkStyle.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.19** — native AVKit playback for YouTube (HD + live), in-app
 downloads, YouTube search / History / Playlists in the panel (absorbed from the retired Tube app), an
 **Up Next** list per player window (Next/Previous · Autoplay · Repeat All/One · Shuffle), and a small library:
 watched marks, Favourites and playlist progress — plus a **Now Playing** row showing what other apps play, whose artwork
@@ -27,7 +27,10 @@ opens in a window that follows the music. See `docs/FEATURES.md` for the feature
   file naming), `LineBuffer`, `NowPlayingAdapter` (bundled paths, arguments, clean environment) and `NowPlayingMonitor` (the
   demand-driven adapter process). Foundation only; `test.sh` covers it with fixture lines and a `/bin/sh` stand-in.
 - `Sources/ArtworkWindow.swift` — `ArtworkActions` (Copy / Save / Open in Preview / Show ‹App› / the shared menu items) and
-  `ArtworkWindowController` (the floating artwork window) with its views.
+  `ArtworkWindowController` (the floating artwork window, incl. full screen) with its views.
+- `Sources/ArtworkStyle.swift` — full-screen look: `ArtworkPalette.gradient` (the artwork's two main colours from a small RGBA
+  sample, toned for white text) and `ArtworkLayout.fullScreen` (artwork + caption rects). Foundation (+ CoreGraphics);
+  `test.sh` covers it.
 - `UX_SPEC.md` — 3.16 interaction contract, 3.17 self-contained distribution acceptance, 3.19 Now Playing.
 - `Tests/panel.py` / `Tests/PanelMain.swift` — isolated real-AppKit harness; scratch source copies redirect all app defaults to a throwaway suite, replace the entry point, and override search/playback. Run separately in a macOS GUI session; snapshots in `build/watch-panel-checks/`.
 - `Info.plist` — bundle metadata. `LSUIElement` = menu-bar-only. Bundle id `com.jacob.watch`.
@@ -51,7 +54,8 @@ AVFoundation.
 UserDefaults-backed: `hotkeyKeyCode`/`hotkeyCarbon`/`hotkeyDisplay` (default **⌥⌘Y**), `detached`,
 `pinned`, `downloadDir` (default `~/Downloads`), `autoUpdate` (legacy stored key, retained but no longer acted upon),
 `hotkeyPlaysClipboard` (default on), `launchAtLogin` (persistent user intent, default on), and
-`showBrowserTabs` (browser-tab detection, default on), `showNowPlaying` (the panel's Now Playing row, default on), `showFavourites` (the panel's list tab, default Recent Links), `hasSeenWelcome`, `youtubeConnected` (default off), and the YouTube sign-in trio `cookieSource`
+`showBrowserTabs` (browser-tab detection, default on), `showNowPlaying` (the panel's Now Playing row, default on), `artworkColourBackground` (full-screen artwork backdrop: artwork
+colours, default, or black), `showFavourites` (the panel's list tab, default Recent Links), `hasSeenWelcome`, `youtubeConnected` (default off), and the YouTube sign-in trio `cookieSource`
 (`auto`|`safari`|`chrome`), `youtubeAccount` (`authuser`), `browserProfile`. (3.7.1 dropped the old `com.jacob.tube`
 fallback; Tube's values were migrated into `com.jacob.watch`.) Playback modes — `autoplay` (default **on**),
 `repeatMode` (`off`|`all`|`one`) and `shuffle` — are per player window; these keys hold the last choice made
@@ -237,7 +241,8 @@ processes, so the bundled **mediaremote-adapter** runs inside `/usr/bin/perl` (s
 - **Panel row** (`AppDelegate.nowPlayingRow`, first in the main list above the tabs; outside `clipSection`, so not in ↑/↓):
   `rebuildNowPlayingRow` (from `nowPlayingChanged` and `rebuildClipSection`) — `BrowseRowView(compact, image:, square:)` with the
   decoded `nowPlayingImage` (else the app icon), meta "Artist · App · Paused", album in the tooltip, ⤢ "Open Artwork"
-  (only with artwork). Click → `openArtwork` (no artwork → `ArtworkActions.showApp`); right-click → `ArtworkActions.menuItems`.
+  (only with artwork). Click → `openArtwork` (no artwork → `ArtworkActions.showApp`); right-click → `ArtworkActions.menuItems`
+  (Open Artwork · **Open Full Screen** → `openArtwork(fullScreen: true)` · Copy · Save… · Open in Preview · Search YouTube · Show ‹App›).
   `startPanelMonitors` / `stopPanelMonitors` replace the bare `mediaMonitor.start/stop` at every panel show/hide.
 - `openArtwork` — `nowPlaying.want(.viewer, true)` first, then `ArtworkWindowController.present` on the panel's spot
   (`WindowManager.frame(replacing:size:)`; else `frame(under:size:)`, else centred) and the panel hides. The controller is reused;
@@ -246,7 +251,16 @@ processes, so the bundled **mediaremote-adapter** runs inside `/usr/bin/perl` (s
   scale (240 pt … min(600 pt, 70% of the screen height)). `show(_:)` (every update while visible): new artwork cross-fades
   (0.25 s); a new track without artwork keeps the old picture `placeholderDelay` (1.5 s) then shows the app icon; nothing
   playing keeps the picture and says "Not playing"; `fitAspect` keeps the top-left corner when the ratio changes. Hover fades
-  in the caption (`GradientView`) and "…"; `ArtworkContentView` handles right-click, Esc and ⌘W; `ArtworkImageView` never takes clicks.
+  in the caption (`GradientView`) and "…"; `ArtworkContentView` handles right-click, Esc, ⌘W, ⌃⌘F / F and double-click, and lays
+  everything out on every size change (`setFrameSize` → `layoutViews`); `ArtworkImageView` never takes clicks. `close()` leaves
+  full screen first. Menu (`makeMenu`): Close · Enter/Exit Full Screen · Full-Screen Background ▸ Artwork Colours / Black · actions.
+- **Full screen** (`toggleFullScreen`) — macOS full screen on its own Space. Before entering it sets aside what would fight it: the
+  aspect lock (`contentResizeIncrements` clears it; `savedAspect`), the floating level and `.fullScreenAuxiliary` (→ `.fullScreenPrimary`);
+  `restoreWindowed` puts them back on exit/failure/close and re-fits the shape if the track changed meanwhile. `layoutViews` in full
+  screen uses `ArtworkLayout.fullScreen`: artwork centred (`artHolder` casts the shadow, the image view rounds its corners),
+  caption centred under it (larger, no gradient), "…" clear of the menu bar. `ArtworkBackgroundView` shows
+  `ArtworkWindowController.palette` (16×16 sRGB sample → `ArtworkPalette`) as a diagonal gradient, or black (placeholder / Black),
+  cross-fading on changes. Idle: caption, "…" and the pointer hide after `idleDelay` (2.5 s) of no movement.
 - `ArtworkActions` — `copy` (original bytes under their UTI + TIFF), `save` (`NSSavePanel.runModal`, original bytes),
   `openInPreview` (one reused file in `~/Library/Caches/com.jacob.watch/artwork/`), `showApp` (`NSRunningApplication.activate`),
   `appName` / `appIcon` (cached), `menuItems`.

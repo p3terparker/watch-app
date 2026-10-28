@@ -15,7 +15,10 @@
   panel's spot, starts at the artwork's own sharp size, drags and resizes freely, and **follows the music** — the next
   track's artwork cross‑fades in without ever taking focus. Hover for the caption and "…"; right‑click or "…" →
   **Copy · Save…** (the original image, named *Artist – Album*) **· Open in Preview · Search YouTube for this song ·
-  Show ‹App›**; Esc closes. A row without artwork brings that app forward instead. **It never touches playback** — Watch
+  Show ‹App›**; Esc closes. A row without artwork brings that app forward instead. **Full screen:** double‑click the
+  artwork (or ⌃⌘F / F, the "…" menu, or the row's **Open Full Screen**): the artwork fills the middle of the screen over a
+  **gradient of its own colours** — or **black** (… ▸ Full‑Screen Background, remembered) — with the title and artist
+  under it; they, the "…" and the pointer fade after a couple of idle seconds. It still follows the music; Esc leaves full screen. **It never touches playback** — Watch
   only reads macOS's Now Playing information (no play/pause/skip, no permission prompts) and only while the panel or the
   artwork window is open. Hidden while you type, when nothing is playing, or with Preferences ▸ *Show what's playing in
   other apps* off.
@@ -137,7 +140,8 @@
 
 **Changelog**
 - **3.19** — **Now Playing artwork:** a Now Playing row for whatever another app is playing, opening its artwork in a
-  floating window that follows the music (Copy · Save · Open in Preview · Search YouTube · Show ‹App›). Read-only
+  floating window that follows the music (Copy · Save · Open in Preview · Search YouTube · Show ‹App›), with a full-screen
+  mode over a gradient of the artwork's colours or black. Read-only
   macOS Now Playing access through the bundled, pinned mediaremote-adapter; no playback control, no prompts; runs only
   while the panel or artwork window shows. Preferences toggle.
 - **3.18** — Standalone Watch App repository under MIT, with its own build/test/package commands and no sibling-project dependencies. Fully bundled installer retained; existing preferences and URL handlers remain compatible.
