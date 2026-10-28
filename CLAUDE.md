@@ -59,17 +59,22 @@ artwork centred over a gradient of its own two main colours or black (Full-Scree
 `Prefs.artworkColourBackground`), caption under it, chrome + pointer hidden when idle; colour picking and layout are pure
 in `Sources/ArtworkStyle.swift` (tested). Source: macOS Now Playing via the bundled **mediaremote-adapter** (BSD-3, pinned commit in `Dependencies.json`
 "sources") — since macOS 15.4 only Apple-signed processes may read MediaRemote, so `/usr/bin/perl` loads
-`Contents/Frameworks/MediaRemoteAdapter.framework`. **Read-only:** Watch only ever runs its `stream` command, only while the
+`Contents/Frameworks/MediaRemoteAdapter.framework`. Watch reads with its `stream --micros` command, only while the
 panel or the artwork window is showing (`NowPlayingMonitor` demand set, clean perl environment, 2/10/60 s restart
-back-off then give up). Pure logic + monitor in `Sources/NowPlaying.swift` (tested by `test.sh`); window and actions in
-`Sources/ArtworkWindow.swift`.
+back-off then give up). **Playback controls** (build 50): resting the pointer on the artwork window's caption slides in a
+timeline (elapsed / -remaining), ⏮ ⏯ ⏭ and — for Music/Spotify — the app's own volume (`AppVolume` via AppleScript
+`sound volume`, Automation asked once on the first drag's release). Commands go out only on a click (`NowPlayingRemote`:
+one short adapter `send`/`seek` run each). Thin white sliders (`ThinSlider`, `Sources/ThinSlider.swift`) are shared with the
+video player, whose speaker icon now slides out a volume slider on hover (↑/↓ keys too; `Prefs.playerVolume`). Pure logic +
+monitor in `Sources/NowPlaying.swift` (tested by `test.sh`); window, controls and actions in `Sources/ArtworkWindow.swift`.
 
 **Gotchas (see GOTCHAS.md):** never AppleScript an app by name unless it's running (uninstalled names pop a
 "Where is …?" chooser) and never send Apple Events without checking `AEDeterminePermissionToAutomateTarget`
 with ask=false first — no unrequested popups. Remote fMP4 in AVFoundation is unusably slow → the HLS bridge.
 A stale yt-dlp can cause YouTube failures — replace Watch with a newer build. Media tools are included. Browser-tab detection needs "Allow JavaScript from Apple Events" in the browser. App Nap is disabled while playing.
-Now Playing: never run the adapter's `test` (it registers a fake player) or any playback command (`send`/`seek`/…); no
-AppleScript to Music/Spotify (3.3 removed it for its Automation prompts).
+Now Playing: never run the adapter's `test` (it registers a fake player); `send`/`seek` only from a click on the artwork
+window's controls, never automatically. AppleScript to Music/Spotify only for their volume, only when running, addressed by
+bundle id, and asking Automation only on the user's own drag (3.3 removed the automatic probes for their prompts).
 
 **Build:** `./build.sh` (build only → `build/native/Watch.app`; add `--install` for an explicit install after quitting the app).
 

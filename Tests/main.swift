@@ -316,4 +316,5 @@ expect(!queries.contains("cancel"), "navigation or submit cancels scheduled work
 checkMediaTools()
 checkNowPlaying()
 checkArtworkStyle()
+checkPlaybackControls()
 print("Watch downloads + positions + links + search + tiling + zones + library + now playing: \(checks) checks passed")

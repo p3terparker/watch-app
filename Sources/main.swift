@@ -40,6 +40,7 @@ enum Prefs {
     // The panel's Now Playing row (what other apps are playing, with its artwork — NowPlaying.swift).
     static var showNowPlaying: Bool { get { d.object(forKey: "showNowPlaying") as? Bool ?? true } set { d.set(newValue, forKey: "showNowPlaying") } }
     // Full-screen artwork backdrop: a gradient of the artwork's colours (default) or black.
+    static var playerVolume: Double { get { d.object(forKey: "playerVolume") as? Double ?? 1 } set { d.set(newValue, forKey: "playerVolume") } }  // what a new player starts at
     static var artworkColourBackground: Bool { get { d.object(forKey: "artworkColourBackground") as? Bool ?? true } set { d.set(newValue, forKey: "artworkColourBackground") } }
     // Playback modes. Each player window keeps its own (its "…" menu toggles them); these are what a NEW
     // window starts with, i.e. the last choice made anywhere.
@@ -1328,6 +1329,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         controls.onPlayPause = { [weak self] in self?.togglePlay() }
         controls.onSkip = { [weak self] s in self?.skip(s); self?.showControls() }
         controls.onMute = { [weak self] in self?.player?.isMuted.toggle(); self?.refreshControls() }
+        controls.onVolume = { [weak self] level in self?.setVolume(level) }
         controls.onSeek = { [weak self] f in self?.seek(toFraction: f) }
         drop.addSubview(controls)
 
@@ -1477,6 +1479,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         self.bridge = bridge
         let item = AVPlayerItem(asset: asset)
         let p = AVPlayer(playerItem: item)
+        p.volume = Float(Prefs.playerVolume)
         // A bare AVPlayerLayer, NOT AVPlayerView: AVPlayerView's built-in controls pin the view to ≥130pt tall,
         // which stops the window shrinking and letterboxes the video (see GOTCHAS).
         let vv = PlayerVideoView(frame: window.contentView!.bounds)
@@ -1699,7 +1702,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         guard let p = player, let item = p.currentItem else { return }
         let dur = item.duration
         let live = isLive || !(dur.isNumeric && dur.seconds > 0)
-        controls.update(playing: p.timeControlStatus != .paused, muted: p.isMuted,
+        controls.update(playing: p.timeControlStatus != .paused, muted: p.isMuted, volume: Double(p.volume),
                         current: p.currentTime().seconds, duration: live ? nil : dur.seconds)
     }
     private func togglePlay() {
@@ -1757,9 +1760,20 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         case 49:  togglePlay(); showControls()       // space
         case 123: skip(-5); showControls()           // ←
         case 124: skip(5); showControls()            // →
+        case 126: setVolume(Double(player?.volume ?? 1) + 0.1); showControls()   // ↑
+        case 125: setVolume(Double(player?.volume ?? 1) - 0.1); showControls()   // ↓
         default:  return false
         }
         return true
+    }
+    // The volume slider and ↑/↓: this window's volume, remembered for the next window. Any level above zero unmutes.
+    private func setVolume(_ value: Double) {
+        guard let p = player else { return }
+        let level = min(1, max(0, (value * 100).rounded() / 100))
+        p.volume = Float(level)
+        if level > 0 { p.isMuted = false }
+        Prefs.playerVolume = level
+        refreshControls()
     }
     private func showControls() {
         guard player != nil, loadingView.isHidden else { return }
@@ -2267,22 +2281,30 @@ final class FadingButton: NSButton {
     override func hitTest(_ point: NSPoint) -> NSView? { alphaValue < 0.05 ? nil : super.hitTest(point) }
 }
 
-// The playback bar: ⟲10 · play/pause · ⟳10 · scrubber · time · mute. Parts drop out as the window narrows
-// (the skip buttons first, then the time, then mute).
+// The playback bar: ⟲10 · play/pause · ⟳10 · scrubber · time · volume. Parts drop out as the window narrows (the skip
+// buttons first, then the time, then the volume). The volume is the speaker icon — its glyph shows the level, a click
+// mutes — and hovering it slides a short slider out to its left (so the icon stays under the pointer), taking room
+// from the scrubber; it tucks away shortly after the pointer leaves. Both sliders are ThinSliders.
 final class PlayerControlBar: NSView {
+    static let volumeWidth: CGFloat = 50, volumeMinWidth: CGFloat = 180   // no slide-out in narrower bars
     var onPlayPause: (() -> Void)?
     var onSkip: ((Double) -> Void)?
     var onMute: (() -> Void)?
     var onSeek: ((Double) -> Void)?
-    private(set) var isScrubbing = false
+    var onVolume: ((Double) -> Void)?
+    // Dragging the scrubber or the volume: the bar stays up, and refreshes leave that slider where the finger is.
+    var isScrubbing: Bool { scrubber.isTracking || volumeSlider.isTracking }
+    private(set) var volumeOpen = false
     private let backButton = NSButton(title: "", image: NSImage(), target: nil, action: nil)
     private let playButton = NSButton(title: "", image: NSImage(), target: nil, action: nil)
     private let forwardButton = NSButton(title: "", image: NSImage(), target: nil, action: nil)
     private let muteButton = NSButton(title: "", image: NSImage(), target: nil, action: nil)
-    private let slider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
+    private let scrubber = ThinSlider()
+    private let volumeSlider = ThinSlider()
     private let timeLabel = NSTextField(labelWithString: "")
     private var isLiveStream = false
     private var longClock = false                    // an hour or more: "1:02:03 / 1:23:45" needs a wider label
+    private var closeVolumeWork: DispatchWorkItem?
     private static let symbolConfig = NSImage.SymbolConfiguration(pointSize: 10, weight: .bold)
     private static let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium)
 
@@ -2301,62 +2323,118 @@ final class PlayerControlBar: NSView {
         }
         backButton.image = sym("gobackward.10").withSymbolConfiguration(Self.symbolConfig); backButton.toolTip = "Back 10 seconds"
         forwardButton.image = sym("goforward.10").withSymbolConfiguration(Self.symbolConfig); forwardButton.toolTip = "Forward 10 seconds"
-        slider.controlSize = .small; slider.isContinuous = true
-        slider.target = self; slider.action = #selector(sliderMoved)
-        addSubview(slider)
+        muteButton.toolTip = "Volume — click to mute"
+        scrubber.onChange = { [weak self] value, _ in self?.onSeek?(value) }
+        scrubber.setAccessibilityLabel("Position")
+        addSubview(scrubber)
+        volumeSlider.onChange = { [weak self] value, finished in
+            self?.onVolume?(value)
+            if finished { self?.scheduleVolumeClose() }
+        }
+        volumeSlider.setAccessibilityLabel("Volume")
+        volumeSlider.alphaValue = 0
+        addSubview(volumeSlider)
         timeLabel.font = Self.timeFont
         timeLabel.textColor = NSColor.white.withAlphaComponent(0.8)
         timeLabel.alignment = .right
         addSubview(timeLabel)
-        setIcons(playing: false, muted: false)
+        setIcons(playing: false, volume: volumeSymbol(1))
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: nil))
         layoutParts()
     }
     required init?(coder: NSCoder) { fatalError() }
     override func hitTest(_ point: NSPoint) -> NSView? { alphaValue < 0.05 ? nil : super.hitTest(point) }
     override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); layoutParts() }
 
-    private func layoutParts() {
+    // MARK: volume slide-out
+    override func mouseEntered(with e: NSEvent) { pointerMoved(at: convert(e.locationInWindow, from: nil)) }
+    override func mouseMoved(with e: NSEvent) { pointerMoved(at: convert(e.locationInWindow, from: nil)) }
+    override func mouseExited(with e: NSEvent) { pointerMoved(at: nil) }
+    private var volumeZone: NSRect { (volumeOpen ? muteButton.frame.union(volumeSlider.frame) : muteButton.frame).insetBy(dx: -4, dy: -6) }
+    func pointerMoved(at point: NSPoint?) {
+        if let p = point, volumeZone.contains(p), !muteButton.isHidden, bounds.width >= Self.volumeMinWidth {
+            closeVolumeWork?.cancel(); closeVolumeWork = nil
+            if !volumeOpen { volumeOpen = true; layoutParts(animated: true) }
+        } else if volumeOpen {
+            scheduleVolumeClose()
+        }
+    }
+    private func scheduleVolumeClose() {
+        guard closeVolumeWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.closeVolumeWork = nil
+            guard !self.volumeSlider.isTracking else { return }          // its release schedules this again
+            if let w = self.window, self.volumeZone.contains(self.convert(w.mouseLocationOutsideOfEventStream, from: nil)) { return }
+            self.volumeOpen = false
+            self.layoutParts(animated: true)
+        }
+        closeVolumeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    private func layoutParts(animated: Bool = false) {
         let h = bounds.height, btn: CGFloat = 16, gap: CGFloat = 4, pad: CGFloat = 5, labelH: CGFloat = 12, y = (h - btn) / 2
+        var frames: [(NSView, NSRect)] = []
         let skips = bounds.width >= 150
         backButton.isHidden = !skips; forwardButton.isHidden = !skips
         var x = pad
         for b in [backButton, playButton, forwardButton] where !b.isHidden {
-            b.frame = NSRect(x: x, y: y, width: btn, height: btn); x += btn + gap
+            frames.append((b, NSRect(x: x, y: y, width: btn, height: btn))); x += btn + gap
         }
         var right = bounds.width - pad
         muteButton.isHidden = bounds.width < 100
-        if !muteButton.isHidden { muteButton.frame = NSRect(x: right - btn, y: y, width: btn, height: btn); right -= btn + gap }
+        if !muteButton.isHidden { frames.append((muteButton, NSRect(x: right - btn, y: y, width: btn, height: btn))); right -= btn + gap }
+        let showVolume = volumeOpen && !muteButton.isHidden && bounds.width >= Self.volumeMinWidth
+        let volumeW = showVolume ? Self.volumeWidth : 0
+        frames.append((volumeSlider, NSRect(x: right - volumeW, y: 0, width: volumeW, height: h)))
+        if showVolume { right -= volumeW + gap }
         let left = x + 2
         if isLiveStream {
-            slider.isHidden = true
+            scrubber.isHidden = true
             timeLabel.isHidden = false; timeLabel.alignment = .left; timeLabel.stringValue = "LIVE"
-            timeLabel.frame = NSRect(x: left, y: (h - labelH) / 2, width: max(0, right - left), height: labelH)
-            return
+            frames.append((timeLabel, NSRect(x: left, y: (h - labelH) / 2, width: max(0, right - left), height: labelH)))
+        } else {
+            scrubber.isHidden = false; timeLabel.alignment = .right
+            timeLabel.isHidden = bounds.width < 210
+            if !timeLabel.isHidden {
+                let w = Self.clockWidth(long: longClock)
+                frames.append((timeLabel, NSRect(x: right - w, y: (h - labelH) / 2, width: w, height: labelH))); right -= w + gap
+            }
+            frames.append((scrubber, NSRect(x: left, y: 0, width: max(0, right - left), height: h)))
         }
-        slider.isHidden = false; timeLabel.alignment = .right
-        timeLabel.isHidden = bounds.width < 210
-        if !timeLabel.isHidden {
-            let w = Self.clockWidth(long: longClock)
-            timeLabel.frame = NSRect(x: right - w, y: (h - labelH) / 2, width: w, height: labelH); right -= w + gap
+        let volumeAlpha: CGFloat = showVolume ? 1 : 0
+        if animated {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.2
+                for (v, f) in frames { v.animator().frame = f }
+                volumeSlider.animator().alphaValue = volumeAlpha
+            }
+        } else {
+            for (v, f) in frames { v.frame = f }
+            volumeSlider.alphaValue = volumeAlpha
         }
-        slider.frame = NSRect(x: left, y: 0, width: max(0, right - left), height: h)
     }
     private static func clockWidth(long: Bool) -> CGFloat {
         let sample = long ? "0:00:00 / 0:00:00" : "00:00 / 00:00"
         return ceil((sample as NSString).size(withAttributes: [.font: timeFont]).width) + 4
     }
-    private var iconState = (playing: false, muted: false)
-    private func setIcons(playing: Bool, muted: Bool) {
-        iconState = (playing, muted)
-        playButton.image = sym(playing ? "pause.fill" : "play.fill").withSymbolConfiguration(Self.symbolConfig)
-        muteButton.image = sym(muted ? "speaker.slash.fill" : "speaker.wave.2.fill").withSymbolConfiguration(Self.symbolConfig)
+    private var iconState = (playing: false, volume: "")
+    private func setIcons(playing: Bool, volume: String) {
+        if playing != iconState.playing || iconState.volume.isEmpty {
+            playButton.image = sym(playing ? "pause.fill" : "play.fill").withSymbolConfiguration(Self.symbolConfig)
+        }
+        if volume != iconState.volume { muteButton.image = sym(volume).withSymbolConfiguration(Self.symbolConfig) }
+        iconState = (playing, volume)
     }
-    func update(playing: Bool, muted: Bool, current: Double, duration: Double?) {
-        if playing != iconState.playing || muted != iconState.muted { setIcons(playing: playing, muted: muted) }
+    func update(playing: Bool, muted: Bool, volume: Double, current: Double, duration: Double?) {
+        setIcons(playing: playing, volume: volumeSymbol(volume, muted: muted))
+        if !volumeSlider.isTracking { volumeSlider.value = muted ? 0 : volume }
         let live = duration == nil, long = (duration ?? 0) >= 3600
         if live != isLiveStream || long != longClock { isLiveStream = live; longClock = long; layoutParts() }
         guard let d = duration, current.isFinite else { return }
-        if !isScrubbing { slider.doubleValue = min(1, max(0, current / d)) }
+        if !scrubber.isTracking { scrubber.value = min(1, max(0, current / d)) }
         timeLabel.stringValue = "\(Self.clock(current)) / \(Self.clock(d))"
     }
     private static func clock(_ s: Double) -> String {
@@ -2367,10 +2445,6 @@ final class PlayerControlBar: NSView {
     @objc private func backTapped() { onSkip?(-10) }
     @objc private func forwardTapped() { onSkip?(10) }
     @objc private func muteTapped() { onMute?() }
-    @objc private func sliderMoved() {
-        isScrubbing = NSApp.currentEvent?.type != .leftMouseUp   // continuous slider: last action arrives on mouse-up
-        onSeek?(slider.doubleValue)
-    }
 }
 
 // ============================================================================
@@ -2582,6 +2656,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     // Now Playing: what another app is playing (NowPlaying.swift) — the list's first row; its artwork opens in
     // `artworkWindow`, which then follows the music. The adapter runs only while the panel or that window shows.
     let nowPlaying = NowPlayingMonitor()
+    let nowPlayingRemote = NowPlayingRemote()       // the artwork window's controls — only on a click
     var nowPlayingInfo: NowPlayingInfo?
     var nowPlayingImage: NSImage?               // decoded once per artwork change
     var nowPlayingRow: NSStackView!
@@ -3017,6 +3092,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         let viewer = ArtworkWindowController()
         viewer.onClose = { [weak self] in self?.nowPlaying.want(.viewer, false) }
         viewer.onSearch = { [weak self] q in self?.searchYouTube(for: q) }
+        viewer.onCommand = { [weak self] request in _ = self?.nowPlayingRemote.send(request) }
         artworkWindow = viewer
         return viewer
     }

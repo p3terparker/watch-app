@@ -54,7 +54,8 @@ AVFoundation.
 UserDefaults-backed: `hotkeyKeyCode`/`hotkeyCarbon`/`hotkeyDisplay` (default **⌥⌘Y**), `detached`,
 `pinned`, `downloadDir` (default `~/Downloads`), `autoUpdate` (legacy stored key, retained but no longer acted upon),
 `hotkeyPlaysClipboard` (default on), `launchAtLogin` (persistent user intent, default on), and
-`showBrowserTabs` (browser-tab detection, default on), `showNowPlaying` (the panel's Now Playing row, default on), `artworkColourBackground` (full-screen artwork backdrop: artwork
+`showBrowserTabs` (browser-tab detection, default on), `showNowPlaying` (the panel's Now Playing row, default on), `playerVolume` (what a new player window starts at, default 1),
+`artworkColourBackground` (full-screen artwork backdrop: artwork
 colours, default, or black), `showFavourites` (the panel's list tab, default Recent Links), `hasSeenWelcome`, `youtubeConnected` (default off), and the YouTube sign-in trio `cookieSource`
 (`auto`|`safari`|`chrome`), `youtubeAccount` (`authuser`), `browserProfile`. (3.7.1 dropped the old `com.jacob.tube`
 fallback; Tube's values were migrated into `com.jacob.watch`.) Playback modes — `autoplay` (default **on**),
@@ -222,11 +223,11 @@ Playing row shows what those apps play through MediaRemote instead, with no Appl
 
 ### Now Playing — `NowPlayingInfo` / `NowPlayingMonitor` / `ArtworkWindowController` (3.19)
 What another app is playing, from macOS's Now Playing information. Since macOS 15.4 MediaRemote answers only Apple-signed
-processes, so the bundled **mediaremote-adapter** runs inside `/usr/bin/perl` (see GOTCHAS). **Read-only:** only its
-`stream` command is ever run — never `send`/`seek`/`shuffle`/`repeat`/`speed` (playback control) or `test` (registers a fake player).
+processes, so the bundled **mediaremote-adapter** runs inside `/usr/bin/perl` (see GOTCHAS). It reads with `stream`; `send`/`seek`
+run only from a click on the artwork window's controls (`NowPlayingRemote`); `test` (registers a fake player) never runs.
 - `NowPlayingAdapter` — `Contents/Frameworks/MediaRemoteAdapter.framework` + `Contents/Resources/NowPlaying/mediaremote-adapter.pl`;
-  `isAvailable` (also needs system perl; missing → feature off, never an error); `arguments` = `stream --no-diff --debounce=150`
-  (every line a full state); `environment` drops `PERL*`, `DYLD_*`, `MEDIAREMOTEADAPTER_*`, `ADAPTER_TEST_MODE`, PATH `/usr/bin:/bin`.
+  `isAvailable` (also needs system perl; missing → feature off, never an error); `arguments` = `stream --no-diff --debounce=150 --micros`
+  (every line a full state, times in µs); `arguments(for:)` = `send <id>` / `seek <µs>` for a `NowPlayingRequest`; `environment` drops `PERL*`, `DYLD_*`, `MEDIAREMOTEADAPTER_*`, `ADAPTER_TEST_MODE`, PATH `/usr/bin:/bin`.
 - `NowPlayingInfo.parse(line:ignoring:)` — `{"type":"data","diff":false,"payload":{…}}` → `.info` (title, artist, album, bundle id,
   parent bundle id, playing, base64 artwork + MIME), `.nothing` (empty payload, no title, or Watch's own bundle as either id), or
   `.invalid` (bad JSON, diff lines; ignored). `appBundleID` = parent ?? bundle (a browser's web-content process → the browser).
@@ -261,6 +262,18 @@ processes, so the bundled **mediaremote-adapter** runs inside `/usr/bin/perl` (s
   caption centred under it (larger, no gradient), "…" clear of the menu bar. `ArtworkBackgroundView` shows
   `ArtworkWindowController.palette` (16×16 sRGB sample → `ArtworkPalette`) as a diagonal gradient, or black (placeholder / Black),
   cross-fading on changes. Idle: caption, "…" and the pointer hide after `idleDelay` (2.5 s) of no movement.
+- **Playback controls** (`ArtworkControlsView`, build 50) — `pointerMoved(at:)` (from `ArtworkContentView.onPointer`) reveals them after
+  `revealDelay` (0.15 s) while the pointer is on the caption band (`controlsZone`: the band, grown while revealed; in full screen
+  the caption + the reserved controls row) and collapses them `collapseDelay` (0.4 s) after it leaves (at once when it leaves
+  the window), never mid-drag. Revealing grows the window's band by `ArtworkLayout.controlsHeight` and lifts the text
+  (`layoutViews(animated:)`). Timeline: `refreshControls` every 0.5 s while shown, from `NowPlayingInfo.position(at:)`; a drag
+  previews the time and its release sends `.seek` and shows the target until the app reports it (`seekHold`, 2 s). ⏯ sends play
+  or pause from the shown state and updates the shown info at once; ⏮ ⏭ send previous/next. Everything goes through `onCommand`
+  (AppDelegate → `NowPlayingRemote`). Volume: `AppVolumeControl.check` (off-main, never prompts) when revealed → `.granted`
+  (slider at the app's level; drags coalesce through `CoalescingSender`), `.undetermined` (slider; the first drag's release
+  calls `requestAccess` — macOS asks once), `.denied` (dimmed icon whose tooltip names the Automation setting), `.unsupported`
+  (not Music/Spotify, or not running: nothing). The icon toggles mute (0 ↔ last level). Layout: timeline row (times hide under
+  170pt), ⏮ ⏯ ⏭ centred, the volume at the right edge when it fits beside them (slider, else the icon alone).
 - `ArtworkActions` — `copy` (original bytes under their UTI + TIFF), `save` (`NSSavePanel.runModal`, original bytes),
   `openInPreview` (one reused file in `~/Library/Caches/com.jacob.watch/artwork/`), `showApp` (`NSRunningApplication.activate`),
   `appName` / `appIcon` (cached), `menuItems`.
@@ -347,11 +360,18 @@ Z-order: video/web view → loading → `surface` → `controls` → "…".
   title-bar-area clicks here.
 - `FadingButton` — an `NSButton` whose `hitTest` ignores clicks while faded out.
 - `PlayerControlBar` — 20pt bar, inset `barInset` (16pt) from the sides and 6pt from the bottom so it stays off the
-  window's resize corners: ⟲10 · play/pause · ⟳10 (`onSkip`) · small `NSSlider` scrubber · time · mute. Frame-based
-  `layoutParts` hides the skip buttons below 150pt wide, the time below 210pt and mute below 100pt; the time label
-  widens for hour-plus videos (`longClock`, `clockWidth`). Live (no duration) → "LIVE" instead of
-  the scrubber. `isScrubbing` comes from the slider's continuous action, which ends on mouse-up. `hitTest`
-  ignores clicks while faded out.
+  window's resize corners: ⟲10 · play/pause · ⟳10 (`onSkip`) · `ThinSlider` scrubber · time · volume. The volume is the
+  speaker button (glyph from `volumeSymbol` — slash / 1 / 2 / 3 waves; click = `onMute`); hovering it (`pointerMoved(at:)`, the
+  bar's own tracking area) slides a 50pt `ThinSlider` out to its **left** — so the icon stays under the pointer — taking room
+  from the scrubber (`volumeOpen`, animated `layoutParts(animated:)`), and it tucks away 0.6 s after the pointer leaves, never
+  mid-drag; no slide-out in bars under 180pt. `onVolume` → `PlayerWindowController.setVolume` (rounded to 1%, unmutes above
+  0, saved to `Prefs.playerVolume`, which new players start at; ↑/↓ in `handleKey` ±10%). Frame-based `layoutParts` hides the
+  skip buttons below 150pt wide, the time below 210pt and the volume below 100pt; the time label widens for hour-plus videos
+  (`longClock`, `clockWidth`). Live (no duration) → "LIVE" instead of the scrubber. `isScrubbing` = either slider is being
+  dragged. `hitTest` ignores clicks while faded out.
+- `ThinSlider` / `GlyphButton` (`Sources/ThinSlider.swift`) — the shared minimal slider (2pt white line, brighter played part,
+  dot only while hovered/dragged, whole view is the hit area, `onChange(value, finished)`) and borderless SF Symbol button
+  (85% white, full on hover, `dimmed`, `onPress`); both ignore clicks while faded out.
 
 ### Window layout/lifecycle — `WindowManager`
 `open(_:anchor:queue:replacing:)` creates a player, `place`s it (or, with `replacing`, `take`s the panel's spot — the usual
@@ -476,7 +496,7 @@ last player's), assigned by `Tiling.readingOrder` and animated together (0.25 s)
 ## Shortcuts
 ⌥⌘Y open/toggle panel (or play clipboard link, if enabled) · ⌘D duplicate frontmost player ·
 ⌘, Preferences · ⌘Q quit · standard ⌘X/C/V/A in the field. In the panel's field: Return search/play (empty = copied
-link) · ↑/↓ pick a row · Esc clear → back → hide. In a player: space play/pause · ←/→ ±5s ·
+link) · ↑/↓ pick a row · Esc clear → back → hide. In a player: space play/pause · ←/→ ±5s · ↑/↓ volume ±10% ·
 ⌘←/⌘→ previous/next in Up Next · double-click swap size.
 
 ## September 2026 reliability cleanup

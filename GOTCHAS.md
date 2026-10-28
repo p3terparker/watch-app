@@ -2,6 +2,14 @@
 
 ## Watch
 
+> **There is no common "app volume" — Music/Spotify need AppleScript, and that means an Automation prompt** *(Watch · 2026-10-28)*
+> MediaRemote (and the adapter) can play, pause, skip and seek, but has no per-app volume; the system output volume
+> would move everything, Watch's own videos included. Music and Spotify expose `sound volume` (0–100) to AppleScript,
+> which needs Automation access per app. Check it with `AEDeterminePermissionToAutomateTarget(ask: false)` when the
+> controls appear (never prompts); only the user's own volume drag may ask (`ask: true`), and only on its release — a
+> system prompt arriving mid-drag swallows the mouse-up and leaves the slider stuck "tracking". Address the app by bundle
+> id and only while it's running (see the "Where is …?" entry). Browsers have no such property: no volume control there.
+
 > **Now Playing: MediaRemote answers only Apple-signed processes since macOS 15.4** *(Watch · 2026-10-28)*
 > **Problem:** reading what Music/Spotify/a browser is playing (with artwork) has no public API; calling the private
 > `MRMediaRemoteGetNowPlayingInfo` from Watch returns nothing on macOS 15.4+. AppleScript to Music/Spotify works but
@@ -9,8 +17,10 @@
 > **Fix:** bundle **mediaremote-adapter** (pinned commit): `/usr/bin/perl` — Apple-signed, so entitled — loads
 > `MediaRemoteAdapter.framework` and streams JSON lines. Run only `stream --no-diff`, only while the panel or the artwork
 > window shows, with a scrubbed environment (no `PERL5OPT`/`PERL5LIB`/`DYLD_*`). **Never run the adapter's `test`** (it
-> registers a fake Now Playing client that can disturb other apps) **or `send`/`seek`/`shuffle`/`repeat`/`speed`** (they
-> control the other app's playback). Its first line is often `{}` before the real state, so "nothing playing" is
+> registers a fake Now Playing client that can disturb other apps). `send`/`seek` control the other app's playback, so
+> they run only from a click on the artwork window's controls — one short adapter run per click, never automatically.
+> Use `--micros`: without it the adapter serializes `timestamp` as a whole-second date string, too coarse to keep a
+> timeline in step. Its first line is often `{}` before the real state, so "nothing playing" is
 > debounced. Watch's own web view can be the Now Playing client — ignore its bundle id as either the client or the parent.
 > If the app is force-quit, an orphaned perl exits on its next write (SIGPIPE). If Apple closes the loophole, the
 > adapter exits/streams nothing, the monitor gives up after its back-off, and the row just doesn't appear.

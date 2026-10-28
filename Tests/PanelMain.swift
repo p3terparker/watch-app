@@ -249,6 +249,68 @@ panel.nowPlayingChanged(nowPlayingFixture("Third Song", nil))
 check(viewer.pictureData == wide, "a track without artwork keeps the old picture for a moment")
 pump(ArtworkWindowController.placeholderDelay + 0.3)
 check(viewer.pictureData == nil, "then the app's icon stands in")
+// Playback controls: revealed by resting on the caption; they send requests only when clicked (recorded here).
+final class FixtureVolume: AppVolumeControl {
+    var sets: [Double] = []
+    override func check(_ bundleID: String, completion: @escaping (AppVolumeAccess, Double?) -> Void) {
+        completion(AppVolume.supported.contains(bundleID) ? .granted : .unsupported, 0.4)
+    }
+    override func requestAccess(_ bundleID: String, completion: @escaping (AppVolumeAccess) -> Void) { completion(.granted) }
+    override func set(_ bundleID: String, _ level: Double) { sets.append(level) }
+}
+var sent: [NowPlayingRequest] = []
+viewer.onCommand = { sent.append($0) }
+let fixtureVolume = FixtureVolume()
+viewer.appVolume = fixtureVolume
+var timedSong = nowPlayingFixture("Timed Song", square)
+timedSong.duration = 200; timedSong.elapsed = 50; timedSong.elapsedAt = Date(); timedSong.rate = 1
+panel.nowPlayingChanged(timedSong); pump(0.5)
+var area = viewer.window.contentView!.bounds
+viewer.pointerMoved(at: NSPoint(x: area.midX, y: area.maxY - 20)); pump(0.4)
+check(!viewer.controlsRevealed, "hovering the artwork shows only the caption")
+viewer.pointerMoved(at: NSPoint(x: area.midX, y: 30)); pump(0.5)
+check(viewer.controlsRevealed && viewer.controls.alphaValue > 0.9, "resting on the caption reveals the controls")
+check(!viewer.controls.volume.isHidden && abs(viewer.controls.volume.value - 0.4) < 0.001, "Music's own volume shows its level")
+check(abs(viewer.controls.timeline.value - 0.25) < 0.02, "timeline at the reported position")
+viewerSnapshot("artwork-controls")
+viewer.controls.playPause.performClick(nil)
+check(sent == [.command(.pause)] && viewer.info?.isPlaying == false, "play/pause on a playing track sends pause and shows paused at once")
+viewer.controls.next.performClick(nil)
+viewer.controls.previous.performClick(nil)
+check(sent.suffix(2) == [.command(.next), .command(.previous)], "next and previous")
+viewer.controls.timeline.onChange?(0.5, true)
+check(sent.last == .seek(100), "letting go of the timeline halfway seeks to half the length")
+viewer.controls.volume.onChange?(0.7, true)
+check(fixtureVolume.sets.last == 0.7, "the volume slider sets the app's own volume")
+viewer.pointerMoved(at: NSPoint(x: area.midX, y: area.maxY - 20)); pump(0.8)
+check(!viewer.controlsRevealed, "moving off the caption tucks the controls away")
+var browserClip = nowPlayingFixture("Browser Clip", square)
+browserClip.bundleID = "com.google.Chrome"
+panel.nowPlayingChanged(browserClip); pump(0.5)
+area = viewer.window.contentView!.bounds
+viewer.pointerMoved(at: NSPoint(x: area.midX, y: 30)); pump(0.5)
+check(viewer.controlsRevealed && viewer.controls.volumeIcon.isHidden && viewer.controls.volume.isHidden, "no volume for an app Watch can't set")
+check(viewer.controls.timeline.isHidden, "no length: no timeline")
+viewer.pointerMoved(at: nil); pump(0.3)
+check(!viewer.controlsRevealed && sent.count == 4, "leaving the window hides them; nothing was sent without a click")
+// The player's volume: tucked away until the speaker is hovered, then a slider that sets the volume.
+let bar = PlayerControlBar(frame: NSRect(x: 0, y: 0, width: 408, height: 20))
+var volumes: [Double] = []
+bar.onVolume = { volumes.append($0) }
+bar.update(playing: true, muted: false, volume: 0.8, current: 30, duration: 120)
+let barVolume = bar.subviews.compactMap { $0 as? ThinSlider }.first { $0.accessibilityLabel() == "Volume" }!
+check(!bar.volumeOpen && barVolume.frame.width == 0, "player volume tucked away at rest")
+bar.pointerMoved(at: NSPoint(x: 408 - 13, y: 10)); pump(0.4)
+check(bar.volumeOpen && barVolume.frame.width == PlayerControlBar.volumeWidth && abs(barVolume.value - 0.8) < 0.001, "hovering the speaker slides the volume out")
+barVolume.onChange?(0.3, false)
+check(volumes == [0.3], "dragging it sets the volume")
+bar.update(playing: true, muted: true, volume: 0.3, current: 30, duration: 120)
+check(barVolume.value == 0, "muted shows as zero")
+bar.pointerMoved(at: NSPoint(x: 20, y: 10)); pump(0.9)
+check(!bar.volumeOpen, "it tucks away after the pointer leaves")
+let narrowBar = PlayerControlBar(frame: NSRect(x: 0, y: 0, width: 150, height: 20))
+narrowBar.pointerMoved(at: NSPoint(x: 150 - 13, y: 10)); pump(0.3)
+check(!narrowBar.volumeOpen, "no slide-out in a narrow bar")
 let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: viewer.window.windowNumber,
                               context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!
 viewer.window.contentView!.keyDown(with: escape)

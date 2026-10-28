@@ -2,8 +2,8 @@ import Foundation
 
 // What another app is playing (Music, Spotify, a browser video…), from macOS's Now Playing info. Since macOS 15.4
 // only Apple-signed processes may read it, so the bundled mediaremote-adapter runs inside /usr/bin/perl (see
-// GOTCHAS). Read-only by design: Watch only ever runs the adapter's `stream` command — never send/seek/test, which
-// would control or disturb the other app's playback.
+// GOTCHAS). Watch reads with the adapter's `stream` command; it sends `send`/`seek` (NowPlayingRemote) only when you
+// click the artwork window's controls, and never runs `test`, which registers a fake player.
 struct NowPlayingInfo: Equatable {
     var title: String
     var artist: String?
@@ -13,6 +13,27 @@ struct NowPlayingInfo: Equatable {
     var isPlaying: Bool
     var artwork: Data?
     var artworkMIME: String?
+    // Timing (`stream --micros`): the position `elapsed` was reported at `elapsedAt`, moving at `rate` while playing.
+    var duration: Double?
+    var elapsed: Double?
+    var elapsedAt: Date?
+    var rate: Double?
+
+    // Where playback is at `now`: the reported position plus the time since, at the playback rate (1 when an app
+    // reports none while playing), never past the end. nil when the app reports no position.
+    func position(at now: Date) -> Double? {
+        guard let start = elapsed else { return nil }
+        var p = start
+        if isPlaying, let at = elapsedAt { p += max(0, now.timeIntervalSince(at)) * (rate.flatMap { $0 > 0 ? $0 : nil } ?? 1) }
+        if let d = duration, d > 0 { p = min(p, d) }
+        return max(0, p)
+    }
+    // "1:12", "1:02:03"; `remaining` prefixes a minus ("-2:51").
+    static func clock(_ seconds: Double, remaining: Bool = false) -> String {
+        let t = Int(max(0, seconds.isFinite ? seconds : 0).rounded(.down)), h = t / 3600, m = (t % 3600) / 60, s = t % 60
+        let text = h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+        return remaining ? "-" + text : text
+    }
 
     // A browser's media is reported by its web-content process; the parent is the app to name and bring forward.
     var appBundleID: String { parentBundleID ?? bundleID }
@@ -82,10 +103,22 @@ extension NowPlayingInfo {
         guard let title = text("title"), let bundle = text("bundleIdentifier") else { return .nothing }
         let parent = text("parentApplicationBundleIdentifier")
         if ignoring.contains(bundle) || parent.map({ ignoring.contains($0) }) == true { return .nothing }
+        func number(_ key: String) -> Double? {
+            switch payload[key] {
+            case let d as Double: return d.isFinite ? d : nil
+            case let i as Int: return Double(i)
+            case let n as NSNumber: return n.doubleValue
+            default: return nil
+            }
+        }
         let artwork = (payload["artworkData"] as? String).flatMap { Data(base64Encoded: $0) }.flatMap { $0.isEmpty ? nil : $0 }
         return .info(NowPlayingInfo(title: title, artist: text("artist"), album: text("album"), bundleID: bundle,
                                     parentBundleID: parent, isPlaying: payload["playing"] as? Bool ?? false,
-                                    artwork: artwork, artworkMIME: artwork == nil ? nil : text("artworkMimeType")))
+                                    artwork: artwork, artworkMIME: artwork == nil ? nil : text("artworkMimeType"),
+                                    duration: number("durationMicros").map { $0 / 1_000_000 }.flatMap { $0 > 0 ? $0 : nil },
+                                    elapsed: number("elapsedTimeMicros").map { $0 / 1_000_000 },
+                                    elapsedAt: number("timestampEpochMicros").map { Date(timeIntervalSince1970: $0 / 1_000_000) },
+                                    rate: number("playbackRate")))
     }
 }
 
@@ -124,8 +157,16 @@ struct NowPlayingAdapter {
         return fm.isReadableFile(atPath: script.path) && fm.fileExists(atPath: framework.appendingPathComponent("MediaRemoteAdapter").path)
             && fm.isExecutableFile(atPath: Self.perl.path)
     }
-    // Full state on every line (no diff merging); updates only come on track changes, play/pause and seeks.
-    var arguments: [String] { [script.path, framework.path, "stream", "--no-diff", "--debounce=150"] }
+    // Full state on every line (no diff merging), times in microseconds; updates only come on track changes,
+    // play/pause and seeks.
+    var arguments: [String] { [script.path, framework.path, "stream", "--no-diff", "--debounce=150", "--micros"] }
+    // One playback command or seek, from the artwork window's controls.
+    func arguments(for request: NowPlayingRequest) -> [String] {
+        switch request {
+        case .command(let c): return [script.path, framework.path, "send", String(c.rawValue)]
+        case .seek(let seconds): return [script.path, framework.path, "seek", String(Int64((max(0, seconds) * 1_000_000).rounded()))]
+        }
+    }
     // Nothing from the user's shell may reach perl or the adapter: no PERL5OPT/PERL5LIB, no DYLD_*, no adapter options.
     static func environment(_ inherited: [String: String]) -> [String: String] {
         var env = inherited.filter { key, _ in
@@ -134,15 +175,79 @@ struct NowPlayingAdapter {
         env["PATH"] = "/usr/bin:/bin"
         return env
     }
-    func process(environment: [String: String] = ProcessInfo.processInfo.environment) -> Process? {
+    func process(_ request: NowPlayingRequest? = nil, environment: [String: String] = ProcessInfo.processInfo.environment) -> Process? {
         guard isAvailable else { return nil }
         let p = Process()
         p.executableURL = Self.perl
-        p.arguments = arguments
+        p.arguments = request.map(arguments(for:)) ?? arguments
         p.environment = Self.environment(environment)
         p.standardInput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice   // every stderr line is a non-fatal adapter message
         return p
+    }
+}
+
+// The artwork window's controls. IDs are the adapter's (kMRAPlay = 0, kMRAPause = 1, kMRANextTrack = 4,
+// kMRAPreviousTrack = 5); seeks are in seconds.
+enum NowPlayingCommand: Int { case play = 0, pause = 1, next = 4, previous = 5 }
+enum NowPlayingRequest: Equatable { case command(NowPlayingCommand), seek(Double) }
+
+// Sends a request to whatever is playing — only ever from a click on the artwork window's controls. Each is one short
+// adapter run with the same clean environment as the stream; one that hasn't finished after `timeout` is stopped.
+final class NowPlayingRemote {
+    private let timeout: TimeInterval
+    private let launch: (NowPlayingRequest) -> Process?
+    init(timeout: TimeInterval = 5, launch: @escaping (NowPlayingRequest) -> Process? = { NowPlayingAdapter.bundled.process($0) }) {
+        self.timeout = timeout; self.launch = launch
+    }
+    @discardableResult
+    func send(_ request: NowPlayingRequest) -> Process? {
+        guard let p = launch(request) else { return nil }
+        do { try p.run() } catch { return nil }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if p.isRunning { p.terminate() } }
+        return p
+    }
+}
+
+// Music's and Spotify's own volume (`sound volume`, 0–100), for the artwork window's slider. Pure: the scripts address
+// the app by bundle ID, never by name (GOTCHAS); the caller runs them only for a running app with Automation access.
+enum AppVolume {
+    static let supported: Set<String> = ["com.apple.Music", "com.spotify.client"]
+    static func readScript(_ bundleID: String) -> String? {
+        supported.contains(bundleID) ? "tell application id \"\(bundleID)\" to get sound volume" : nil
+    }
+    static func writeScript(_ bundleID: String, level: Double) -> String? {
+        guard supported.contains(bundleID) else { return nil }
+        return "tell application id \"\(bundleID)\" to set sound volume to \(percent(level))"
+    }
+    static func percent(_ level: Double) -> Int { Int((min(1, max(0, level.isFinite ? level : 0)) * 100).rounded()) }
+    static func level(percent: Int) -> Double { min(1, max(0, Double(percent) / 100)) }
+}
+
+// Hands `work` the newest value only, one at a time on `queue`: a slider moves far faster than an app answers Apple
+// Events, so values sent while one is being applied collapse into the latest.
+final class CoalescingSender<Value> {
+    private let queue: DispatchQueue
+    private let work: (Value) -> Void
+    private let lock = NSLock()
+    private var pending: Value?
+    private var busy = false
+    init(queue: DispatchQueue, work: @escaping (Value) -> Void) { self.queue = queue; self.work = work }
+    func send(_ value: Value) {
+        lock.lock(); pending = value
+        let start = !busy
+        busy = true
+        lock.unlock()
+        if start { queue.async { self.drain() } }
+    }
+    private func drain() {
+        while true {
+            lock.lock()
+            guard let value = pending else { busy = false; lock.unlock(); return }
+            pending = nil
+            lock.unlock()
+            work(value)
+        }
     }
 }
 

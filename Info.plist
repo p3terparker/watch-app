@@ -28,13 +28,13 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>49</string>
+	<string>50</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Watch lists the videos playing in your browser tabs so you can open them in a player window.</string>
+	<string>Watch lists the videos playing in your browser tabs so you can open them in a player window, and sets the volume of Music or Spotify when you use its volume slider.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSPrincipalClass</key>

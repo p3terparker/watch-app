@@ -95,7 +95,7 @@ func checkNowPlaying() {
     expect(!adapter.isAvailable, "script alone is not enough")
     try! Data().write(to: adapter.framework.appendingPathComponent("MediaRemoteAdapter"))
     expect(adapter.isAvailable == FileManager.default.isExecutableFile(atPath: "/usr/bin/perl"), "complete adapter found (with system perl)")
-    expect(adapter.arguments == [adapter.script.path, adapter.framework.path, "stream", "--no-diff", "--debounce=150"], "stream only, full state, paths with spaces intact")
+    expect(adapter.arguments == [adapter.script.path, adapter.framework.path, "stream", "--no-diff", "--debounce=150", "--micros"], "stream, full state, paths with spaces intact")
     expect(!adapter.arguments.contains { ["send", "seek", "test", "shuffle", "repeat", "speed", "get"].contains($0) }, "never a playback or test command")
     let env = NowPlayingAdapter.environment(["PATH": "/opt/homebrew/bin", "HOME": "/Users/x", "PERL5OPT": "-Mevil", "PERL5LIB": "/x", "PERLLIB": "/y",
                                             "PERL_MB_OPT": "z", "DYLD_INSERT_LIBRARIES": "/z.dylib", "MEDIAREMOTEADAPTER_OPTION_no_artwork": "", "ADAPTER_TEST_MODE": "1"])
@@ -193,9 +193,11 @@ func checkArtworkStyle() {
 
     let screen = CGSize(width: 1440, height: 900)
     let square = ArtworkLayout.fullScreen(artwork: CGSize(width: 600, height: 600), in: screen)
-    expect(square.art == CGRect(x: 441, y: 213, width: 558, height: 558), "square art: 62% of the height, centred")
-    expect(square.caption == CGRect(x: 441, y: 129, width: 558, height: 64), "caption centred under the art")
+    expect(square.art == CGRect(x: 441, y: 240, width: 558, height: 558), "square art: 62% of the height, centred with its caption and controls")
+    expect(square.caption == CGRect(x: 441, y: 156, width: 558, height: 64), "caption centred under the art")
+    expect(square.controls == CGRect(x: 441, y: 102, width: 558, height: 54), "controls' row reserved under the caption")
     expect(square.caption.origin.y + square.caption.size.height + ArtworkLayout.gap == square.art.origin.y, "gap between art and caption")
+    expect(square.controls.origin.y + square.controls.size.height == square.caption.origin.y, "controls directly under the caption")
     let wide = ArtworkLayout.fullScreen(artwork: CGSize(width: 640, height: 360), in: screen)
     expect(wide.art.size == CGSize(width: 992, height: 558) && wide.art.origin.x == 224, "16:9 art keeps its shape")
     let tallScreen = ArtworkLayout.fullScreen(artwork: CGSize(width: 600, height: 600), in: CGSize(width: 800, height: 1200))
@@ -203,4 +205,69 @@ func checkArtworkStyle() {
     let small = ArtworkLayout.fullScreen(artwork: CGSize(width: 100, height: 100), in: screen)
     expect(small.caption.size.width == 558 && small.art.size.width == 558, "small art is scaled up to the same spot")
     expect(ArtworkLayout.fullScreen(artwork: .zero, in: screen).art.size == CGSize(width: 558, height: 558), "unknown shape: square")
+}
+
+// The artwork window's playback controls: timing from the stream, the requests they send, the app volume scripts.
+func checkPlaybackControls() {
+    var timed = song("Timed")
+    timed["durationMicros"] = 240_000_000; timed["elapsedTimeMicros"] = 72_500_000
+    timed["timestampEpochMicros"] = 1_800_000_000_000_000; timed["playbackRate"] = 1
+    let t = info(NowPlayingInfo.parse(line: adapterLine(timed), ignoring: watchID))!
+    let reported = Date(timeIntervalSince1970: 1_800_000_000)
+    expect(t.duration == 240 && t.elapsed == 72.5 && t.elapsedAt == reported && t.rate == 1, "timing parsed from microseconds")
+    expect(t.position(at: reported.addingTimeInterval(10)) == 82.5, "position moves on while playing")
+    expect(t.position(at: reported.addingTimeInterval(1_000)) == 240, "never past the end")
+    expect(t.position(at: reported.addingTimeInterval(-5)) == 72.5, "a clock behind the report doesn't go backwards")
+    var paused = t; paused.isPlaying = false
+    expect(paused.position(at: reported.addingTimeInterval(10)) == 72.5, "paused: the position stays")
+    var unrated = t; unrated.rate = 0
+    expect(unrated.position(at: reported.addingTimeInterval(4)) == 76.5, "playing with no rate counts as 1×")
+    var double = t; double.rate = 2
+    expect(double.position(at: reported.addingTimeInterval(4)) == 80.5, "playback rate respected")
+    let radio = info(NowPlayingInfo.parse(line: adapterLine(song("Radio")), ignoring: watchID))!
+    expect(radio.duration == nil && radio.position(at: reported) == nil, "no timing: no timeline")
+    var zero = timed; zero["durationMicros"] = 0
+    expect(info(NowPlayingInfo.parse(line: adapterLine(zero), ignoring: watchID))?.duration == nil, "zero length is no length")
+    expect(NowPlayingInfo.clock(72.9) == "1:12" && NowPlayingInfo.clock(171, remaining: true) == "-2:51", "clock")
+    expect(NowPlayingInfo.clock(3723) == "1:02:03" && NowPlayingInfo.clock(-4) == "0:00" && NowPlayingInfo.clock(.nan) == "0:00", "clock: hours, negatives, NaN")
+
+    let adapter = NowPlayingAdapter(contents: URL(fileURLWithPath: "/Watch Fixture.app/Contents"))
+    expect(adapter.arguments.suffix(4) == ["stream", "--no-diff", "--debounce=150", "--micros"], "stream reports microsecond timing")
+    expect(adapter.arguments(for: .command(.pause)).suffix(2) == ["send", "1"], "pause is send 1")
+    expect(adapter.arguments(for: .command(.play)).suffix(2) == ["send", "0"] && adapter.arguments(for: .command(.next)).suffix(2) == ["send", "4"]
+           && adapter.arguments(for: .command(.previous)).suffix(2) == ["send", "5"], "play 0 · next 4 · previous 5")
+    expect(adapter.arguments(for: .seek(83.25)).suffix(2) == ["seek", "83250000"] && adapter.arguments(for: .seek(-3)).last == "0", "seek in microseconds, never negative")
+    let every = [NowPlayingRequest.command(.play), .command(.pause), .command(.next), .command(.previous), .seek(1)].flatMap(adapter.arguments(for:))
+    expect(!every.contains("test") && !every.contains("stream"), "controls never run test (or a second stream)")
+
+    expect(AppVolume.readScript("com.apple.Music") == #"tell application id "com.apple.Music" to get sound volume"#, "Music addressed by bundle id")
+    expect(AppVolume.writeScript("com.spotify.client", level: 0.426) == #"tell application id "com.spotify.client" to set sound volume to 43"#, "Spotify set, rounded")
+    expect(AppVolume.writeScript("com.apple.Music", level: 7) == #"tell application id "com.apple.Music" to set sound volume to 100"#
+           && AppVolume.percent(-1) == 0 && AppVolume.percent(.nan) == 0, "levels clamped")
+    expect(AppVolume.readScript("com.google.Chrome") == nil && AppVolume.writeScript("com.google.Chrome", level: 1) == nil, "unsupported apps get no script")
+    expect(AppVolume.level(percent: 64) == 0.64 && AppVolume.level(percent: 250) == 1, "percent to level")
+
+    // Coalescing: values sent while one is being applied collapse into the newest.
+    let started = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0), finished = DispatchSemaphore(value: 0)
+    let applied = NSMutableArray()
+    let sender = CoalescingSender<Int>(queue: DispatchQueue(label: "fixture.coalesce")) { value in
+        applied.add(value)
+        if value == 1 { started.signal(); release.wait() }
+        if value == 4 { finished.signal() }
+    }
+    sender.send(1)
+    started.wait()
+    sender.send(2); sender.send(3); sender.send(4)
+    release.signal()
+    expect(finished.wait(timeout: .now() + 5) == .success && applied as? [Int] == [1, 4], "only the newest value follows the one in flight")
+
+    // The remote: one adapter run per request, stopped if it hangs.
+    var requests: [NowPlayingRequest] = [], launched: [Process] = []
+    let remote = NowPlayingRemote(timeout: 0.3) { request in
+        requests.append(request)
+        return shell("exec sleep 30", [:], into: &launched)
+    }
+    expect(remote.send(.command(.next)) != nil && requests == [.command(.next)], "a click sends one request")
+    expect(pumpUntil { !launched[0].isRunning } && launched[0].terminationReason == .uncaughtSignal, "a hung adapter run is stopped")
+    expect(NowPlayingRemote { _ in nil }.send(.command(.play)) == nil, "no adapter: nothing sent")
 }

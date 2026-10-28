@@ -53,17 +53,22 @@ enum ArtworkPalette {
 
 enum ArtworkLayout {
     static let captionHeight: CGFloat = 64, gap: CGFloat = 20
+    static let controlsHeight: CGFloat = 54                     // timeline row + buttons row
+    static let windowBand: CGFloat = 64                         // the window's caption band; + controlsHeight when revealed
 
-    // Full screen: the artwork centred at up to 70% of the width and 62% of the height (keeping its shape), with the
-    // caption block centred under it; the pair is centred vertically. Unflipped coordinates (y up), like AppKit.
-    static func fullScreen(artwork: CGSize, in screen: CGSize) -> (art: CGRect, caption: CGRect) {
+    // Full screen: the artwork centred at up to 70% of the width and 62% of the height (keeping its shape), the caption
+    // centred under it and the playback controls' row under that — reserved even while they're hidden, so the artwork
+    // never moves when they appear. The group is centred vertically. Unflipped coordinates (y up), like AppKit.
+    static func fullScreen(artwork: CGSize, in screen: CGSize) -> (art: CGRect, caption: CGRect, controls: CGRect) {
         let shape = artwork.width > 0 && artwork.height > 0 ? artwork : CGSize(width: 1, height: 1)
         let scale = min(screen.width * 0.7 / shape.width, screen.height * 0.62 / shape.height)
         let w = (shape.width * scale).rounded(), h = (shape.height * scale).rounded()
-        let bottom = ((screen.height - h - gap - captionHeight) / 2).rounded()
-        let art = CGRect(x: ((screen.width - w) / 2).rounded(), y: bottom + captionHeight + gap, width: w, height: h)
+        let bottom = ((screen.height - h - gap - captionHeight - controlsHeight) / 2).rounded()
+        let art = CGRect(x: ((screen.width - w) / 2).rounded(), y: bottom + controlsHeight + captionHeight + gap, width: w, height: h)
         let captionWidth = min(screen.width * 0.8, max(w, 480)).rounded()
-        let caption = CGRect(x: ((screen.width - captionWidth) / 2).rounded(), y: bottom, width: captionWidth, height: captionHeight)
-        return (art, caption)
+        let x = ((screen.width - captionWidth) / 2).rounded()
+        let caption = CGRect(x: x, y: bottom + controlsHeight, width: captionWidth, height: captionHeight)
+        let controls = CGRect(x: x, y: bottom, width: captionWidth, height: controlsHeight)
+        return (art, caption, controls)
     }
 }

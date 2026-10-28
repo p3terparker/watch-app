@@ -18,7 +18,11 @@
   Show ‹App›**; Esc closes. A row without artwork brings that app forward instead. **Full screen:** double‑click the
   artwork (or ⌃⌘F / F, the "…" menu, or the row's **Open Full Screen**): the artwork fills the middle of the screen over a
   **gradient of its own colours** — or **black** (… ▸ Full‑Screen Background, remembered) — with the title and artist
-  under it; they, the "…" and the pointer fade after a couple of idle seconds. It still follows the music; Esc leaves full screen. **It never touches playback** — Watch
+  under it; they, the "…" and the pointer fade after a couple of idle seconds. It still follows the music; Esc leaves full screen.
+  **Playback controls:** rest the pointer on the title at the bottom and quiet controls slide in under it — a thin
+  timeline with elapsed / remaining time (drag to seek), **⏮ ⏯ ⏭**, and for Music and Spotify a small **volume** slider
+  that sets that app's own volume (macOS asks once, the first time you drag it). They tuck away when you move off. Watch
+  only acts on the other app when you click one of these. **It never touches playback** — Watch
   only reads macOS's Now Playing information (no play/pause/skip, no permission prompts) and only while the panel or the
   artwork window is open. Hidden while you type, when nothing is playing, or with Preferences ▸ *Show what's playing in
   other apps* off.
@@ -111,12 +115,12 @@
 - **Minimal player chrome:** only a "…" button at the top, and it appears only while the cursor is over the
   window. Its menu (also on **right‑click** anywhere on the video) starts with **Close** and **Pin**, then Tile
   Windows (2+ players), **Add to Favourites**, Up Next, playback modes, downloads, and copy/open link. A **20 pt control bar** (⟲10 ·
-  play/pause · ⟳10 · scrubber · time · mute) fades in at the bottom on hover, set in from the edges so it never
+  play/pause · ⟳10 · scrubber · time · volume) fades in at the bottom on hover, set in from the edges so it never
   competes with the window's resize corners. **Drag anywhere** to move the window. **Click zones:** click the
   middle to play/pause; double‑click the left or right side (below the top third) to skip back/forward 10 s —
   keep clicking to skip further; double‑click the top third or the bottom middle to return to the size the window
   had before its last resize (every manual resize updates it, so double‑clicking again toggles back). The window shrinks to **68×38** without letterboxing. Space =
-  play/pause, ←/→ = ±5 s, ⌘←/⌘→ = previous/next in Up Next.
+  play/pause, ←/→ = ±5 s, ↑/↓ = volume ±10%, ⌘←/⌘→ = previous/next in Up Next.
 - **Clipboard‑plays‑on‑hotkey** (Preferences toggle, default on).
 - **URL scheme handoff:** `glasskit-watch://play?url=<percent-encoded-video-url>` plays a link from any app or script.
 
@@ -141,9 +145,11 @@
 **Changelog**
 - **3.19** — **Now Playing artwork:** a Now Playing row for whatever another app is playing, opening its artwork in a
   floating window that follows the music (Copy · Save · Open in Preview · Search YouTube · Show ‹App›), with a full-screen
-  mode over a gradient of the artwork's colours or black. Read-only
-  macOS Now Playing access through the bundled, pinned mediaremote-adapter; no playback control, no prompts; runs only
-  while the panel or artwork window shows. Preferences toggle.
+  mode over a gradient of the artwork's colours or black, and quiet playback controls under the caption (timeline,
+  ⏮ ⏯ ⏭, Music/Spotify volume) that act only when clicked. macOS Now Playing through the bundled, pinned
+  mediaremote-adapter; runs only while the panel or artwork window shows. Preferences toggle. **Video player:** the
+  speaker icon slides out a volume slider on hover (↑/↓ too; new windows start at your last volume), and both
+  sliders are a thinner, quieter line.
 - **3.18** — Standalone Watch App repository under MIT, with its own build/test/package commands and no sibling-project dependencies. Fully bundled installer retained; existing preferences and URL handlers remain compatible.
 - **3.17** — **Self-contained installer:** pinned universal media tools, no system-tool fallback, no-Terminal first-run guide with local checks and recovery, optional YouTube connection, included notices/sources. Whole-app updates replace helper self-updates.
 - **3.16** — **Full lists at the same size:** Recent Links and Favourites start fully listed and scroll inside the existing 320×250 panel; All/Less and automatic expansion resizing are removed. **Live search:** typing searches after 350 ms, Return searches immediately without duplicate requests, edits cancel obsolete work, and clear/Escape returns home. Links, local paths and unfinished input-method composition do not auto-search or play.
