@@ -417,7 +417,12 @@ check(!bar.volumeOpen, "it tucks away after the pointer leaves")
 let narrowBar = PlayerControlBar(frame: NSRect(x: 0, y: 0, width: 150, height: 20))
 narrowBar.pointerMoved(at: NSPoint(x: 150 - 13, y: 10)); pump(0.3)
 check(!narrowBar.volumeOpen, "no slide-out in a narrow bar")
-// Windows never cover each other: a new player's spot avoids the music window.
+// Windows never cover each other (when the screen has room): a new player's spot avoids the music window. The music
+// window sits where it opens for real, under the menu-bar icon at the top right (the harness has no icon; CI's screen is
+// 1024×768 at 1×, too small for two windows side by side when one is centred).
+if let visible = viewer.window.screen?.visibleFrame {
+    viewer.window.setFrame(NSRect(x: visible.maxX - 300, y: visible.maxY - 300, width: 300, height: 300), display: true)
+}
 let freeSpot = panel.windowManager.freeFrame(size: NSSize(width: 440, height: 275), anchor: nil)
 check(!freeSpot.intersects(viewer.window.frame), "a new player's spot avoids the music window (\(freeSpot) vs \(viewer.window.frame))")
 // The video player end to end on a local file made by the bundled FFmpeg (panel.py): it plays natively, and the click
@@ -483,6 +488,7 @@ if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
 key(viewer.surface, 53, "\u{1b}")
 check(!viewer.window.isVisible, "Esc closes the artwork window")
 if let player = fixturePlayer {
+    panel.nowPlayingChanged(nowPlayingFixture("Fixture Song", artwork(300, 300))); pump(0.1)   // a window that fits beside it
     panel.openArtwork(); pump(0.3)
     check(viewer.window.isVisible && !viewer.window.frame.intersects(player.window.frame), "the music window opens beside a player, never on it")
     viewer.close(); player.window.close(); pump(0.2)
@@ -494,8 +500,9 @@ snapshot("recent-light")
 panel.dropdown.setContentSize(NSSize(width: 260, height: 200)); layout()
 check(rows(panel.clipSection).count == 100, "manual small resize retains full list")
 snapshot("recent-small")
-// Quality follows the window: DashHLSBridge describes every rendition (fixture 720p + 360p H.264 and AAC, laid out like
-// YouTube's and served by range from panel.py's local server); AVPlayer keeps to the cap the player sets from its size.
+// Quality follows the window: DashHLSBridge describes every rendition (fixture 360p + 180p H.264 and AAC, laid out like
+// YouTube's and served by range from panel.py's local server), shown in a PlayerVideoView as in the player, with the
+// player's cap (StreamLadder.cap of the video area). The sizes work at 1× and 2×: 240×135 pt allows only 180p, 880×495 pt 360p.
 if let base = ProcessInfo.processInfo.environment["WATCH_FIXTURE_BASE"] {
     func rendition(_ name: String, _ vcodec: String, _ acodec: String, _ size: (Int, Int)?, kbps: Double) -> StreamRef {
         var f: [String: Any] = ["url": base + name, "protocol": "https", "ext": name.hasSuffix(".m4a") ? "m4a" : "mp4",
@@ -504,23 +511,40 @@ if let base = ProcessInfo.processInfo.environment["WATCH_FIXTURE_BASE"] {
         return StreamRef(f)!
     }
     var made: (bridge: DashHLSBridge?, asset: AVURLAsset?)?
-    DashHLSBridge.make(videos: [rendition("v720.mp4", "avc1.64001f", "none", (1280, 720), kbps: 1500),
-                                rendition("v360.mp4", "avc1.64001e", "none", (640, 360), kbps: 500)],
+    DashHLSBridge.make(videos: [rendition("v360.mp4", "avc1.64001e", "none", (640, 360), kbps: 500),
+                                rendition("v180.mp4", "avc1.640015", "none", (320, 180), kbps: 200)],
                        audio: rendition("a.m4a", "none", "mp4a.40.2", nil, kbps: 128)) { made = ($0, $1) }
     _ = waitFor(15) { made != nil }
     if let bridge = made?.bridge, let asset = made?.asset {
+        let screen = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 240, height: 135), styleMask: [.titled, .resizable, .fullSizeContentView],
+                              backing: .buffered, defer: false)
+        screen.isReleasedWhenClosed = false
+        let videoView = PlayerVideoView(frame: screen.contentView!.bounds)
+        videoView.autoresizingMask = [.width, .height]
+        screen.contentView!.addSubview(videoView)
+        func playerCap() -> CGSize { StreamLadder.cap(points: screen.contentView!.bounds.size, scale: screen.backingScaleFactor) }
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = 4
-        item.preferredMaximumResolution = StreamLadder.cap(points: PlayerWindowController.standardSize, scale: 2)   // a standard window on Retina
+        item.preferredMaximumResolution = playerCap()
         let bridged = AVPlayer(playerItem: item)
         bridged.isMuted = true
+        videoView.playerLayer.player = bridged
+        screen.orderFront(nil)
         bridged.play()
+        func accessLog() -> String {
+            let events = item.accessLog()?.events ?? []
+            return "cap \(item.preferredMaximumResolution), " + events.map {
+                "\(Int($0.indicatedBitrate / 1000)) kb/s chosen, \(Int($0.observedBitrate / 1000)) kb/s measured, \($0.numberOfMediaRequests) requests"
+            }.joined(separator: " | ")
+        }
         check(waitFor(20) { item.status == .readyToPlay && item.presentationSize.height > 0 },
               "the bridge's multi-rendition playlist plays (\(item.error?.localizedDescription ?? "no error"))")
-        check(item.presentationSize.height == 360, "a standard window gets 360p, not 720p (\(item.presentationSize))")
-        item.preferredMaximumResolution = StreamLadder.cap(points: NSSize(width: 880, height: 495), scale: 2)
-        check(waitFor(30) { item.presentationSize.height == 720 }, "a bigger window switches up to 720p (now \(item.presentationSize))")
+        check(item.presentationSize.height == 180, "a small window gets the small rendition (\(item.presentationSize); \(accessLog()))")
+        screen.setContentSize(NSSize(width: 880, height: 495))
+        item.preferredMaximumResolution = playerCap()           // as PlayerWindowController.windowDidResize does
+        check(waitFor(40) { item.presentationSize.height == 360 }, "a bigger window switches up (now \(item.presentationSize); \(accessLog()))")
         bridged.pause()
+        screen.close()
         withExtendedLifetime(bridge) {}
     } else {
         check(false, "the bridge reads the fixture renditions' indexes")

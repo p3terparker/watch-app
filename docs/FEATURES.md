@@ -120,7 +120,7 @@
   **"Playlist: 8 of 20 · Start from the Top"** chip to go back to the beginning.
 - **The control panel always opens under the menu‑bar icon.** Dragging it off keeps it open until you hide it.
 - **Player windows remember the last one's position and size** (across launches). The first window reopens
-  where the last one was; more windows open **beside** the existing ones (and the music window) at that size, never overlapping, and
+  where the last one was; more windows open **beside** the existing ones (and the music window) at that size, never overlapping while the screen has room (otherwise they cascade), and
   existing windows stay put. **Tile Windows** (in a player's menu and the panel's ••• menu, whenever 2+ players are
   open) sorts them all into a grid that fills that screen — each as large as fits at 16:9, keeping their
   top‑to‑bottom, left‑to‑right order; double‑click a tiled window to get its old size back. App Nap is disabled
@@ -162,7 +162,7 @@
   ⏮ ⏯ ⏭, Music/Spotify volume) that act only when clicked; music apps only (videos never replace the song), the
   video window's click zones, Music/Spotify addressed directly. **YouTube plays natively again** — no automatic
   YouTube web page: a failure card with the reason, a signed‑in retry for bot checks, a playback log — and **quality
-  follows the window size** (H.264 ladder + AVPlayer resolution cap). Windows never cover each other. macOS Now Playing through the bundled, pinned
+  follows the window size** (H.264 ladder + AVPlayer resolution cap). Windows open beside each other instead of on top (cascading only when the screen is full). macOS Now Playing through the bundled, pinned
   mediaremote-adapter; runs only while the panel or artwork window shows. Preferences toggle. **Video player:** the
   speaker icon slides out a volume slider on hover (↑/↓ too; new windows start at your last volume), and both
   sliders are a thinner, quieter line.

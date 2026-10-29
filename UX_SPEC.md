@@ -40,7 +40,7 @@ Requested 2026-10-29 after build 50 seemed to lose basics. Every change keeps th
 - ★ Player click zones: click the middle = play/pause; double-click the left/right side = ∓10 s, more clicks skip further; double-click the top third or bottom middle = back to the previous size. Drag anywhere moves the window.
 - ★ Player keys: Space, ←/→ ±5 s, ↑/↓ volume; ⌘←/⌘→ Up Next. ★ The volume slider slides out of the speaker.
 - ★ Resizing resizes the video, and the quality follows the window (the "…" menu shows "Playing at …p").
-- ★ Videos and the music window are separate windows that never cover each other. A video never replaces the song in the music window.
+- ★ Videos and the music window are separate windows that open beside each other, never on top, while the screen has room (then they cascade). A video never replaces the song in the music window.
 - ★ Music window: click the middle = play/pause; double-click the sides = ∓10 s; Space, ←/→, F, Esc. Commands reach the music app, never the video.
 - Resume where left off, Up Next, downloads, drop-to-replace and the panel's search all keep working (their own checks above).
 

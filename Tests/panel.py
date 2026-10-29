@@ -75,9 +75,9 @@ def media_fixtures(folder):
     jobs = {
         'player.mp4': ['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100',
                        '-t', '40', '-c:v', 'h264_videotoolbox', '-b:v', '800k', '-g', '24', '-c:a', 'aac', '-movflags', '+faststart'],
-        'v720.mp4': ['-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=24', '-t', '60', '-c:v', 'h264_videotoolbox', '-b:v', '1500k',
-                     '-g', '48', '-an'] + fragmented,
         'v360.mp4': ['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24', '-t', '60', '-c:v', 'h264_videotoolbox', '-b:v', '500k',
+                     '-g', '48', '-an'] + fragmented,
+        'v180.mp4': ['-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=24', '-t', '60', '-c:v', 'h264_videotoolbox', '-b:v', '200k',
                      '-g', '48', '-an'] + fragmented,
         'a.m4a': ['-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=44100', '-t', '60', '-c:a', 'aac', '-b:a', '128k', '-vn',
                   '-frag_duration', '2000000', '-movflags', '+empty_moov+default_base_moof+global_sidx'],

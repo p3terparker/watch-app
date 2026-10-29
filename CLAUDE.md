@@ -75,7 +75,7 @@ master + `preferredMaximumResolution` on resize; "Playing at 720p" in the menu).
 (`NowPlayingInfo.isMusicSource`; Music/Spotify distributed notifications keep it current while a video holds the slot;
 Music/Spotify commands by AppleScript to that app, `MusicAppControl`) and uses the player's `PlayerSurfaceView`/`PlayerZone`
 (centre = play/pause, sides ∓10 s, top/bottom middle = full screen). `WindowManager.freeFrame`/`keepClear`: players and the
-music window never cover each other. Pure parts in `Sources/StreamSupport.swift` (tested). UX_SPEC's **Always works** list
+music window open beside each other, never on top (cascade only when the screen is full). Pure parts in `Sources/StreamSupport.swift` (tested). UX_SPEC's **Always works** list
 is checked by `Tests/panel.py` with an FFmpeg-made fixture video and fixture renditions.
 
 **Gotchas (see GOTCHAS.md):** never AppleScript an app by name unless it's running (uninstalled names pop a
