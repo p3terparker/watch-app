@@ -108,6 +108,13 @@ jobs:
         timeout-minutes: 10
         run: /usr/bin/python3 Tests/panel.py build/watch-panel-checks
 
+      # How YouTube links resolve right now with the bundled yt-dlp, exactly as the player asks (informational: YouTube
+      # can bot-check data-centre addresses).
+      - name: Live YouTube resolution (informational)
+        continue-on-error: true
+        timeout-minutes: 8
+        run: /usr/bin/python3 Tests/youtube_live.py build/universal/Watch.app/Contents/Helpers
+
       - name: Upload panel snapshots
         if: always()
         uses: actions/upload-artifact@v4
