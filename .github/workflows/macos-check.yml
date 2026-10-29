@@ -1,0 +1,49 @@
+# Compiles and tests Watch on a real Mac for every push: the regression checks (./check.sh), the whole app
+# (without the bundled media helpers, which ./build.sh downloads and builds), and the isolated AppKit panel
+# harness. Nothing here installs or launches the app, and no account data is used.
+name: macOS check
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcrun swiftc --version
+
+      - name: Regression checks (./check.sh)
+        run: ./check.sh
+
+      - name: Compile the whole app (no bundled helpers)
+        run: |
+          frameworks=$(python3 -c 'import json; print(" ".join("-framework " + f for f in json.load(open("scripts/app.json"))["frameworks"]))')
+          minimum=$(python3 -c 'import json; print(json.load(open("scripts/app.json"))["minimum_macos"])')
+          mkdir -p build/ci
+          xcrun swiftc -swift-version 5 -target "arm64-apple-macos$minimum" Sources/*.swift $frameworks -o build/ci/Watch
+
+      - name: Isolated panel harness (Tests/panel.py)
+        run: python3 Tests/panel.py build/ci-panel
+
+      - name: Upload panel snapshots
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: panel-snapshots
+          path: build/ci-panel
+          if-no-files-found: ignore
