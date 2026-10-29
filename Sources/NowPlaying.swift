@@ -18,6 +18,7 @@ struct NowPlayingInfo: Equatable {
     var elapsed: Double?
     var elapsedAt: Date?
     var rate: Double?
+    var mediaType: String?                          // what the app says it plays, when it says (e.g. "…Music")
 
     // Where playback is at `now`: the reported position plus the time since, at the playback rate (1 when an app
     // reports none while playing), never past the end. nil when the app reports no position.
@@ -33,6 +34,25 @@ struct NowPlayingInfo: Equatable {
         let t = Int(max(0, seconds.isFinite ? seconds : 0).rounded(.down)), h = t / 3600, m = (t % 3600) / 60, s = t % 60
         let text = h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
         return remaining ? "-" + text : text
+    }
+
+    // The music window follows music only: a known music/audio app, or any other app that says it's playing audio.
+    // Never a browser, a WebKit process (web pages, Watch's own web views) or Watch itself (`own`) — videos keep their
+    // own windows, so a YouTube video never replaces the song.
+    static let musicApps: Set<String> = [
+        "com.apple.Music", "com.apple.iTunes", "com.spotify.client", "com.apple.podcasts", "com.tidal.desktop", "com.deezer.deezer-desktop",
+        "com.amazon.music", "com.pandora.desktop", "tv.plex.plexamp", "com.cider.app", "sh.cider.electron", "com.swinsian.Swinsian",
+        "com.coppertino.Vox", "app.doppler.Doppler", "com.audirvana.Audirvana-Studio", "com.audirvana.Audirvana-Origin"]
+    static let browsers: Set<String> = [
+        "com.apple.Safari", "com.apple.SafariTechnologyPreview", "com.google.Chrome", "com.google.Chrome.canary", "org.chromium.Chromium",
+        "com.brave.Browser", "com.microsoft.edgemac", "company.thebrowser.Browser", "org.mozilla.firefox", "com.operasoftware.Opera",
+        "com.vivaldi.Vivaldi", "com.kagi.kagimacOS"]
+    func isMusicSource(ignoring own: Set<String>) -> Bool {
+        let ids = [bundleID, parentBundleID].compactMap { $0 }
+        if ids.contains(where: { own.contains($0) || Self.browsers.contains($0) || $0.hasPrefix("com.apple.WebKit") }) { return false }
+        if Self.musicApps.contains(appBundleID) { return true }
+        let type = mediaType?.lowercased() ?? ""
+        return type.contains("music") || type.contains("audio")
     }
 
     // A browser's media is reported by its web-content process; the parent is the app to name and bring forward.
@@ -118,7 +138,43 @@ extension NowPlayingInfo {
                                     duration: number("durationMicros").map { $0 / 1_000_000 }.flatMap { $0 > 0 ? $0 : nil },
                                     elapsed: number("elapsedTimeMicros").map { $0 / 1_000_000 },
                                     elapsedAt: number("timestampEpochMicros").map { Date(timeIntervalSince1970: $0 / 1_000_000) },
-                                    rate: number("playbackRate")))
+                                    rate: number("playbackRate"), mediaType: text("mediaType")))
+    }
+}
+
+// Music's and Spotify's own track-change broadcasts (`com.apple.Music.playerInfo`, `com.spotify.client.PlaybackStateChanged`,
+// no permission needed): they keep the music window right while something else — a video — holds macOS's single
+// "now playing" slot. They carry title, artist, album, state and length (Spotify also its position), never artwork.
+extension NowPlayingInfo {
+    static let broadcasts: [String: String] = ["com.apple.Music.playerInfo": "com.apple.Music",
+                                                "com.spotify.client.PlaybackStateChanged": "com.spotify.client"]
+    // nil for "Stopped" or a broadcast without a track name.
+    static func broadcast(_ userInfo: [AnyHashable: Any], app: String, at now: Date = Date()) -> NowPlayingInfo? {
+        func text(_ key: String) -> String? {
+            guard let s = userInfo[key] as? String else { return nil }
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : t
+        }
+        func number(_ key: String) -> Double? {
+            switch userInfo[key] { case let d as Double: return d; case let i as Int: return Double(i); case let n as NSNumber: return n.doubleValue; default: return nil }
+        }
+        let state = text("Player State") ?? ""
+        guard state != "Stopped", let title = text("Name") else { return nil }
+        let length = number("Total Time") ?? number("Duration")                  // milliseconds
+        let position = number("Playback Position")                                // seconds (Spotify)
+        return NowPlayingInfo(title: title, artist: text("Artist"), album: text("Album"), bundleID: app, isPlaying: state == "Playing",
+                              duration: length.map { $0 / 1000 }.flatMap { $0 > 0 ? $0 : nil },
+                              elapsed: position, elapsedAt: position == nil ? nil : now)
+    }
+    // A broadcast about the track already showing only updates its state (keeping the artwork and timing the richer
+    // Now Playing report gave); a different track replaces it.
+    static func merge(_ b: NowPlayingInfo, onto current: NowPlayingInfo?, at now: Date = Date()) -> NowPlayingInfo {
+        guard var m = current, m.itemKey == b.itemKey else { return b }
+        if b.elapsed != nil { m.elapsed = b.elapsed; m.elapsedAt = b.elapsedAt }
+        else if m.isPlaying != b.isPlaying { m.elapsed = m.position(at: now); m.elapsedAt = now }   // the clock stops or starts here
+        m.isPlaying = b.isPlaying
+        if let d = b.duration { m.duration = d }
+        return m
     }
 }
 
@@ -219,6 +275,28 @@ enum AppVolume {
     static func writeScript(_ bundleID: String, level: Double) -> String? {
         guard supported.contains(bundleID) else { return nil }
         return "tell application id \"\(bundleID)\" to set sound volume to \(percent(level))"
+    }
+    // Playback commands addressed to that app — so pausing the music window can't pause whatever else holds the
+    // "now playing" slot (a video, say).
+    static func commandScript(_ request: NowPlayingRequest, bundleID: String) -> String? {
+        guard supported.contains(bundleID) else { return nil }
+        let verb: String
+        switch request {
+        case .command(.play): verb = "play"
+        case .command(.pause): verb = "pause"
+        case .command(.next): verb = "next track"
+        case .command(.previous): verb = "previous track"
+        case .seek(let seconds): verb = "set player position to " + String(format: "%.2f", max(0, seconds.isFinite ? seconds : 0))
+        }
+        return "tell application id \"\(bundleID)\" to \(verb)"
+    }
+    // The current track's artwork: Music hands over the image itself, Spotify a URL to it.
+    static func artworkScript(_ bundleID: String) -> String? {
+        switch bundleID {
+        case "com.apple.Music": return "tell application id \"com.apple.Music\" to get raw data of artwork 1 of current track"
+        case "com.spotify.client": return "tell application id \"com.spotify.client\" to get artwork url of current track"
+        default: return nil
+        }
     }
     static func percent(_ level: Double) -> Int { Int((min(1, max(0, level.isFinite ? level : 0)) * 100).rounded()) }
     static func level(percent: Int) -> Double { min(1, max(0, Double(percent) / 100)) }

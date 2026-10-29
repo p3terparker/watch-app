@@ -195,6 +195,48 @@ func nowPlayingFixture(_ title: String, _ art: Data?, playing: Bool = true) -> N
                    artwork: art, artworkMIME: art == nil ? nil : "image/png")
 }
 func texts(_ view: NSView) -> [String] { ((view as? NSTextField).map { [$0.stringValue] } ?? []) + view.subviews.flatMap(texts) }
+// Music/Spotify without Apple Events: records what Watch would set or send, and hands over fixture artwork.
+final class FixtureMusicApp: MusicAppControl {
+    var sets: [Double] = []
+    var performed: [(request: NowPlayingRequest, app: String)] = []
+    var artworkAsked: [String] = []
+    var artworkReply: Data?
+    override func check(_ bundleID: String, completion: @escaping (AppVolumeAccess, Double?) -> Void) {
+        completion(AppVolume.supported.contains(bundleID) ? .granted : .unsupported, 0.4)
+    }
+    override func requestAccess(_ bundleID: String, completion: @escaping (AppVolumeAccess) -> Void) { completion(.granted) }
+    override func set(_ bundleID: String, _ level: Double) { sets.append(level) }
+    override func perform(_ request: NowPlayingRequest, bundleID: String, completion: @escaping (Bool) -> Void) {
+        performed.append((request, bundleID)); completion(true)
+    }
+    override func artwork(_ bundleID: String, completion: @escaping (Data?) -> Void) { artworkAsked.append(bundleID); completion(artworkReply) }
+}
+let fixtureMusic = FixtureMusicApp()
+panel.musicControl = fixtureMusic
+// Real events through PlayerSurfaceView: a single click is its mouseDown waiting on the event queue for the mouse-up
+// (click vs drag); the later clicks of a quick run arrive with their click count.
+func mouse(_ type: NSEvent.EventType, _ view: NSView, _ point: NSPoint, clicks: Int) -> NSEvent {
+    NSEvent.mouseEvent(with: type, location: view.convert(point, to: nil), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                       windowNumber: view.window!.windowNumber, context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
+}
+func click(_ view: PlayerSurfaceView, at point: NSPoint) {
+    testApp.postEvent(mouse(.leftMouseUp, view, point, clicks: 1), atStart: false)
+    guard testApp.nextEvent(matching: .leftMouseUp, until: Date().addingTimeInterval(1), inMode: .eventTracking, dequeue: false) != nil else {
+        check(false, "a posted mouse-up reaches the event queue"); return
+    }
+    view.mouseDown(with: mouse(.leftMouseDown, view, point, clicks: 1))
+}
+func multiClick(_ view: PlayerSurfaceView, at point: NSPoint, clicks: Int) { view.mouseDown(with: mouse(.leftMouseDown, view, point, clicks: clicks)) }
+func key(_ view: NSView, _ code: UInt16, _ characters: String) {
+    view.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                        windowNumber: view.window!.windowNumber, context: nil, characters: characters,
+                                        charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!)
+}
+func waitFor(_ seconds: TimeInterval, _ done: () -> Bool) -> Bool {
+    let end = Date().addingTimeInterval(seconds)
+    while !done() && Date() < end { pump(0.05) }
+    return done()
+}
 let square = artwork(600, 600), wide = artwork(640, 360)
 check(panel.nowPlayingRow.isHidden, "no Now Playing row while nothing plays")
 panel.nowPlayingChanged(nowPlayingFixture("Fixture Song", square)); layout()
@@ -217,6 +259,7 @@ Prefs.showNowPlaying = true; panel.nowPlayingSettingsChanged()
 check(!panel.nowPlayingRow.isHidden, "Preference on shows it again")
 panel.openArtwork(); pump(0.3)
 let viewer = panel.artworkWindow!
+check(viewer.musicApp === fixtureMusic, "the music window controls Music/Spotify through the app's own MusicAppControl")
 let opened = viewer.window.frame
 check(viewer.window.isVisible && opened.width == opened.height, "artwork window opens square for square art")
 check(opened.width >= ArtworkWindowController.minSide && opened.width <= ArtworkWindowController.maxSide, "opens at the artwork's own size, within limits")
@@ -250,18 +293,9 @@ check(viewer.pictureData == wide, "a track without artwork keeps the old picture
 pump(ArtworkWindowController.placeholderDelay + 0.3)
 check(viewer.pictureData == nil, "then the app's icon stands in")
 // Playback controls: revealed by resting on the caption; they send requests only when clicked (recorded here).
-final class FixtureVolume: AppVolumeControl {
-    var sets: [Double] = []
-    override func check(_ bundleID: String, completion: @escaping (AppVolumeAccess, Double?) -> Void) {
-        completion(AppVolume.supported.contains(bundleID) ? .granted : .unsupported, 0.4)
-    }
-    override func requestAccess(_ bundleID: String, completion: @escaping (AppVolumeAccess) -> Void) { completion(.granted) }
-    override func set(_ bundleID: String, _ level: Double) { sets.append(level) }
-}
+let appRouting = viewer.onCommand               // AppDelegate's: Music/Spotify addressed by AppleScript (fixtureMusic here)
 var sent: [NowPlayingRequest] = []
 viewer.onCommand = { sent.append($0) }
-let fixtureVolume = FixtureVolume()
-viewer.appVolume = fixtureVolume
 var timedSong = nowPlayingFixture("Timed Song", square)
 timedSong.duration = 200; timedSong.elapsed = 50; timedSong.elapsedAt = Date(); timedSong.rate = 1
 panel.nowPlayingChanged(timedSong); pump(0.5)
@@ -281,18 +315,90 @@ check(sent.suffix(2) == [.command(.next), .command(.previous)], "next and previo
 viewer.controls.timeline.onChange?(0.5, true)
 check(sent.last == .seek(100), "letting go of the timeline halfway seeks to half the length")
 viewer.controls.volume.onChange?(0.7, true)
-check(fixtureVolume.sets.last == 0.7, "the volume slider sets the app's own volume")
+check(fixtureMusic.sets.last == 0.7, "the volume slider sets the app's own volume")
 viewer.pointerMoved(at: NSPoint(x: area.midX, y: area.maxY - 20)); pump(0.8)
 check(!viewer.controlsRevealed, "moving off the caption tucks the controls away")
-var browserClip = nowPlayingFixture("Browser Clip", square)
-browserClip.bundleID = "com.google.Chrome"
-panel.nowPlayingChanged(browserClip); pump(0.5)
+// Videos never take over the music window: a browser tab, a page's WebKit media process or Watch's own player holding
+// macOS's single "now playing" slot leaves the song, its picture and its controls where they were.
+for (bundle, parent) in [("com.google.Chrome", nil), ("com.apple.WebKit.GPU", "com.apple.Safari"), ("com.apple.WebKit.GPU", nil),
+                         ("com.jacob.watch", nil)] as [(String, String?)] {
+    var clip = nowPlayingFixture("Video Clip", wide)
+    clip.bundleID = bundle; clip.parentBundleID = parent; clip.mediaType = "video"
+    panel.nowPlayingChanged(clip); pump(0.1)
+    check(viewer.info?.title == "Timed Song" && viewer.pictureData == square && panel.nowPlayingInfo?.title == "Timed Song",
+          "a video from \(parent ?? bundle) leaves the music window on the song")
+}
+check(texts(panel.nowPlayingRow).contains("Timed Song"), "and the panel's Now Playing row")
+check(!viewer.controls.playPause.dimmed, "Music stays controllable while a video holds the slot")
+// The centre click goes to Music itself (AppleScript to its bundle id), so it can never pause the video holding the slot.
+viewer.onCommand = appRouting
+let centre = NSPoint(x: viewer.surface.bounds.midX, y: viewer.surface.bounds.midY)
+click(viewer.surface, at: centre)
+check(fixtureMusic.performed.count == 1 && fixtureMusic.performed.last?.request == .command(.play) && fixtureMusic.performed.last?.app == "com.apple.Music",
+      "a centre click plays/pauses Music itself: \(fixtureMusic.performed)")
+viewer.onCommand = { sent.append($0) }
+// The player's click zones (PlayerZone) and keys, in the music window.
+sent = []
+click(viewer.surface, at: centre)
+check(sent == [.command(.pause)] && viewer.info?.isPlaying == false, "a centre click pauses: \(sent)")
+multiClick(viewer.surface, at: centre, clicks: 2)
+check(sent.count == 1, "the centre's double-click sends nothing more")
+pump(ArtworkWindowController.seekHold + 0.1)            // the timeline seek above no longer counts
+let side = viewer.surface.bounds.size
+let leftSide = NSPoint(x: side.width * 0.15, y: side.height * 0.4), rightSide = NSPoint(x: side.width * 0.85, y: side.height * 0.4)
+check(PlayerZone.at(leftSide, in: side) == .skipBack && PlayerZone.at(rightSide, in: side) == .skipForward, "fixture points sit in the side zones")
+let from = viewer.info?.position(at: Date()) ?? -100
+func seeked(_ expected: Double) -> Bool { if case .seek(let t)? = sent.last { return abs(t - expected) < 0.001 }; return false }
+multiClick(viewer.surface, at: rightSide, clicks: 2)
+check(seeked(from + 10), "double-click right: +10 s (\(from) → \(String(describing: sent.last)))")
+multiClick(viewer.surface, at: rightSide, clicks: 3)
+check(seeked(from + 20), "the next click of the run stacks: +10 s more")
+multiClick(viewer.surface, at: leftSide, clicks: 2)
+check(seeked(from + 10), "double-click left: back 10 s")
+key(viewer.surface, 124, "\u{F703}")
+check(seeked(from + 15), "→ +5 s")
+key(viewer.surface, 123, "\u{F702}")
+check(seeked(from + 10), "← -5 s")
+key(viewer.surface, 49, " ")
+check(sent.last == .command(.play) && viewer.info?.isPlaying == true, "space plays")
+// Another audio app takes over the window; its controls work only while it holds the slot (they'd reach the video otherwise).
+let episode = NowPlayingInfo(title: "Fixture Episode", artist: "Fixture Show", album: nil, bundleID: "com.apple.podcasts", isPlaying: true,
+                             artwork: square, artworkMIME: "image/png")
+panel.nowPlayingChanged(episode); pump(0.5)
+check(viewer.info?.title == "Fixture Episode", "Podcasts does take over the music window")
 area = viewer.window.contentView!.bounds
 viewer.pointerMoved(at: NSPoint(x: area.midX, y: 30)); pump(0.5)
 check(viewer.controlsRevealed && viewer.controls.volumeIcon.isHidden && viewer.controls.volume.isHidden, "no volume for an app Watch can't set")
 check(viewer.controls.timeline.isHidden, "no length: no timeline")
+check(!viewer.controls.playPause.dimmed, "controllable while it holds the slot")
+var tab = nowPlayingFixture("Video Clip", wide)
+tab.bundleID = "com.google.Chrome"
+panel.nowPlayingChanged(tab); pump(0.1)
+check(viewer.info?.title == "Fixture Episode" && viewer.controls.playPause.dimmed, "a video taking the slot leaves Podcasts showing, controls dimmed")
 viewer.pointerMoved(at: nil); pump(0.3)
-check(!viewer.controlsRevealed && sent.count == 4, "leaving the window hides them; nothing was sent without a click")
+check(!viewer.controlsRevealed && sent.count == 7, "leaving the window hides them; nothing was sent without a click")
+panel.nowPlayingChanged(nil)
+check(!panel.nowPlayingRow.isHidden && viewer.info?.title == "Fixture Episode", "the video stopping doesn't clear the music")
+panel.nowPlayingChanged(episode); panel.nowPlayingChanged(nil)
+check(panel.nowPlayingRow.isHidden, "the music app stopping clears it")
+// Music's own track-change broadcast, heard while a video holds the slot: the song changes, its artwork comes from Music.
+panel.nowPlayingChanged(tab)
+fixtureMusic.artworkReply = wide
+func musicBroadcast(_ info: [String: Any]) {
+    panel.musicBroadcast(Notification(name: Notification.Name("com.apple.Music.playerInfo"), object: nil, userInfo: info))
+}
+musicBroadcast(["Name": "Broadcast Song", "Artist": "Fixture Artist", "Album": "Fixture Album", "Player State": "Playing", "Total Time": 180_000])
+pump(0.3)
+check(viewer.info?.title == "Broadcast Song" && viewer.info?.appBundleID == "com.apple.Music" && viewer.info?.duration == 180 && !panel.nowPlayingRow.isHidden,
+      "Music's broadcast changes the song while a video holds the slot")
+check(fixtureMusic.artworkAsked == ["com.apple.Music"] && viewer.pictureData == wide, "its artwork comes from Music")
+check(!viewer.controls.playPause.dimmed, "and its controls work (addressed to Music)")
+musicBroadcast(["Name": "Broadcast Song", "Artist": "Fixture Artist", "Album": "Fixture Album", "Player State": "Paused", "Total Time": 180_000])
+check(viewer.info?.isPlaying == false && viewer.pictureData == wide && fixtureMusic.artworkAsked.count == 1, "pausing the same song keeps its artwork, asks nothing")
+musicBroadcast(["Player State": "Stopped"])
+check(panel.nowPlayingRow.isHidden, "Music stopping clears the row")
+panel.nowPlayingChanged(nil)
+panel.nowPlayingChanged(nowPlayingFixture("Fixture Song", square)); pump(0.3)
 // The player's volume: tucked away until the speaker is hovered, then a slider that sets the volume.
 let bar = PlayerControlBar(frame: NSRect(x: 0, y: 0, width: 408, height: 20))
 var volumes: [Double] = []
@@ -311,10 +417,76 @@ check(!bar.volumeOpen, "it tucks away after the pointer leaves")
 let narrowBar = PlayerControlBar(frame: NSRect(x: 0, y: 0, width: 150, height: 20))
 narrowBar.pointerMoved(at: NSPoint(x: 150 - 13, y: 10)); pump(0.3)
 check(!narrowBar.volumeOpen, "no slide-out in a narrow bar")
-let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: viewer.window.windowNumber,
-                              context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!
-viewer.window.contentView!.keyDown(with: escape)
+// Windows never cover each other: a new player's spot avoids the music window.
+let freeSpot = panel.windowManager.freeFrame(size: NSSize(width: 440, height: 275), anchor: nil)
+check(!freeSpot.intersects(viewer.window.frame), "a new player's spot avoids the music window (\(freeSpot) vs \(viewer.window.frame))")
+// The video player end to end on a local file made by the bundled FFmpeg (panel.py): it plays natively, and the click
+// zones, keys, volume and resizing act on it — the basics every release must keep.
+var fixturePlayer: PlayerWindowController?
+if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
+    Prefs.playerVolume = 0.5
+    let player = panel.windowManager.open(video, anchor: nil)
+    fixturePlayer = player
+    check(!player.window.frame.intersects(viewer.window.frame), "a new player opens beside the music window, not on it")
+    check(waitFor(20) { player.isPlayingNatively && player.isPlaying && player.playbackTime > 0.5 } && !player.showsFailure,
+          "the video plays in Watch's own player, not a web page")
+    let s = player.clickSurface
+    var b = s.bounds.size
+    let middle = NSPoint(x: b.width / 2, y: b.height / 2)
+    click(s, at: middle)
+    check(!player.isPlaying, "a centre click pauses")
+    click(s, at: middle)
+    check(player.isPlaying, "another plays")
+    click(s, at: middle); pump(0.3)
+    let t0 = player.playbackTime
+    let back = NSPoint(x: b.width * 0.15, y: b.height * 0.4), ahead = NSPoint(x: b.width * 0.85, y: b.height * 0.4)
+    func near(_ t: Double) -> Bool { abs(player.playbackTime - t) <= 0.6 }
+    multiClick(s, at: ahead, clicks: 2)
+    check(waitFor(3) { near(t0 + 10) }, "double-click right: +10 s (\(t0) → \(player.playbackTime))")
+    multiClick(s, at: ahead, clicks: 2); multiClick(s, at: ahead, clicks: 3)
+    check(waitFor(3) { near(t0 + 30) }, "a quick run of clicks stacks, +10 s each (→ \(player.playbackTime))")
+    multiClick(s, at: back, clicks: 2)
+    check(waitFor(3) { near(t0 + 20) }, "double-click left: -10 s (→ \(player.playbackTime))")
+    multiClick(s, at: middle, clicks: 2)
+    check(!player.isPlaying, "the centre's double-click doesn't toggle again")
+    key(s, 124, "\u{F703}")
+    check(waitFor(3) { near(t0 + 25) }, "→ +5 s (→ \(player.playbackTime))")
+    key(s, 123, "\u{F702}")
+    check(waitFor(3) { near(t0 + 20) }, "← -5 s (→ \(player.playbackTime))")
+    key(s, 49, " ")
+    check(player.isPlaying, "space plays")
+    key(s, 49, " ")
+    check(!player.isPlaying, "and pauses")
+    key(s, 126, "\u{F700}")
+    check(abs(player.playbackVolume - 0.6) < 0.001, "↑ raises the volume")
+    key(s, 125, "\u{F701}"); key(s, 125, "\u{F701}")
+    check(abs(player.playbackVolume - 0.4) < 0.001 && abs(Prefs.playerVolume - 0.4) < 0.001, "↓ lowers it, remembered for the next window")
+    let playerBar = player.window.contentView!.subviews.compactMap { $0 as? PlayerControlBar }.first
+    let playerVolume = playerBar?.subviews.compactMap { $0 as? ThinSlider }.first { $0.accessibilityLabel() == "Volume" }
+    playerVolume?.onChange?(0.25, true)
+    check(playerVolume != nil && abs(player.playbackVolume - 0.25) < 0.001, "the bar's volume slider sets it")
+    let cap = player.qualityLimit
+    check(cap.width > 0 && cap == StreamLadder.cap(points: player.window.contentView!.bounds.size, scale: player.window.backingScaleFactor),
+          "the quality cap follows the video area (\(cap))")
+    player.window.setContentSize(NSSize(width: 880, height: 495)); pump(0.2)
+    check(abs(player.videoArea.width - 880) < 2 && abs(player.videoArea.height - 495) < 2, "resizing resizes the video (\(player.videoArea.size))")
+    check(player.qualityLimit.width > cap.width * 1.9, "and raises the quality cap (\(cap) → \(player.qualityLimit))")
+    check(player.menuTitles.contains("Playing at 360p"), "the menu says which quality is playing: \(player.menuTitles)")
+    b = s.bounds.size
+    multiClick(s, at: NSPoint(x: b.width / 2, y: b.height * 0.9), clicks: 2); pump(0.6)
+    let restored = player.window.contentView!.bounds.size
+    check(abs(restored.width - PlayerWindowController.standardSize.width) < 2 && abs(player.qualityLimit.width - cap.width) < 2,
+          "double-clicking the top returns to the standard size, the cap with it (\(restored))")
+} else {
+    print("SKIP player checks: no fixture video")
+}
+key(viewer.surface, 53, "\u{1b}")
 check(!viewer.window.isVisible, "Esc closes the artwork window")
+if let player = fixturePlayer {
+    panel.openArtwork(); pump(0.3)
+    check(viewer.window.isVisible && !viewer.window.frame.intersects(player.window.frame), "the music window opens beside a player, never on it")
+    viewer.close(); player.window.close(); pump(0.2)
+}
 panel.nowPlayingChanged(nil)
 check(panel.nowPlayingRow.isHidden, "nothing playing hides the row")
 panel.dropdown.appearance = NSAppearance(named: .aqua)
@@ -322,6 +494,40 @@ snapshot("recent-light")
 panel.dropdown.setContentSize(NSSize(width: 260, height: 200)); layout()
 check(rows(panel.clipSection).count == 100, "manual small resize retains full list")
 snapshot("recent-small")
+// Quality follows the window: DashHLSBridge describes every rendition (fixture 720p + 360p H.264 and AAC, laid out like
+// YouTube's and served by range from panel.py's local server); AVPlayer keeps to the cap the player sets from its size.
+if let base = ProcessInfo.processInfo.environment["WATCH_FIXTURE_BASE"] {
+    func rendition(_ name: String, _ vcodec: String, _ acodec: String, _ size: (Int, Int)?, kbps: Double) -> StreamRef {
+        var f: [String: Any] = ["url": base + name, "protocol": "https", "ext": name.hasSuffix(".m4a") ? "m4a" : "mp4",
+                                "vcodec": vcodec, "acodec": acodec, "tbr": kbps]
+        if let size = size { f["width"] = size.0; f["height"] = size.1 }
+        return StreamRef(f)!
+    }
+    var made: (bridge: DashHLSBridge?, asset: AVURLAsset?)?
+    DashHLSBridge.make(videos: [rendition("v720.mp4", "avc1.64001f", "none", (1280, 720), kbps: 1500),
+                                rendition("v360.mp4", "avc1.64001e", "none", (640, 360), kbps: 500)],
+                       audio: rendition("a.m4a", "none", "mp4a.40.2", nil, kbps: 128)) { made = ($0, $1) }
+    _ = waitFor(15) { made != nil }
+    if let bridge = made?.bridge, let asset = made?.asset {
+        let item = AVPlayerItem(asset: asset)
+        item.preferredForwardBufferDuration = 4
+        item.preferredMaximumResolution = StreamLadder.cap(points: PlayerWindowController.standardSize, scale: 2)   // a standard window on Retina
+        let bridged = AVPlayer(playerItem: item)
+        bridged.isMuted = true
+        bridged.play()
+        check(waitFor(20) { item.status == .readyToPlay && item.presentationSize.height > 0 },
+              "the bridge's multi-rendition playlist plays (\(item.error?.localizedDescription ?? "no error"))")
+        check(item.presentationSize.height == 360, "a standard window gets 360p, not 720p (\(item.presentationSize))")
+        item.preferredMaximumResolution = StreamLadder.cap(points: NSSize(width: 880, height: 495), scale: 2)
+        check(waitFor(30) { item.presentationSize.height == 720 }, "a bigger window switches up to 720p (now \(item.presentationSize))")
+        bridged.pause()
+        withExtendedLifetime(bridge) {}
+    } else {
+        check(false, "the bridge reads the fixture renditions' indexes")
+    }
+} else {
+    print("SKIP bridge checks: no fixture renditions")
+}
 let guideTools = FileManager.default.temporaryDirectory.appendingPathComponent("Watch guide fixture \(UUID().uuidString)")
 try! FileManager.default.createDirectory(at: guideTools, withIntermediateDirectories: true)
 for name in MediaTools.names {

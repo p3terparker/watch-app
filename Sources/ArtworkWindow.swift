@@ -100,7 +100,8 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     var onClose: (() -> Void)?
     var onSearch: ((String) -> Void)?
     var onCommand: ((NowPlayingRequest) -> Void)?
-    var appVolume = AppVolumeControl()                 // replaceable in tests
+    var musicApp = MusicAppControl()                   // the app's volume and artwork (AppleScript); replaceable in tests
+    let surface = PlayerSurfaceView()                  // the player's own click surface: same zones, drag, keys
     private(set) var controlsRevealed = false
     private(set) var volumeAccess: AppVolumeAccess = .unsupported
     private(set) var info: NowPlayingInfo?
@@ -116,6 +117,7 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     private let detailLabel = NSTextField(labelWithString: "")
     private let dotButton = FadingButton(title: "", image: sym("ellipsis.circle.fill"), target: nil, action: nil)
     let controls = ArtworkControlsView()
+    private let flashView = CentreFlashView()
     private var chromeVisible = false
     private var revealWork: DispatchWorkItem?
     private var collapseWork: DispatchWorkItem?
@@ -156,14 +158,17 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         content.frame = NSRect(x: 0, y: 0, width: side, height: side)
         content.appearance = NSAppearance(named: .darkAqua)
         content.onLayout = { [weak self] in self?.layoutViews() }
-        content.onPointer = { [weak self] point in self?.pointerMoved(at: point) }
-        content.onMenu = { [weak self] in self?.makeMenu() }
-        content.onClose = { [weak self] in self?.close() }
-        content.onToggleFullScreen = { [weak self] in self?.toggleFullScreen() }
-        content.onEscape = { [weak self] in
+        // Clicks, drags, keys and hover go through the player's PlayerSurfaceView, so the music window answers like a
+        // video window (PlayerZone): click the middle = play/pause; double-click the left/right side = ∓10 s; double-click
+        // the top or bottom middle = full screen (a video window switches size there).
+        surface.onPointer = { [weak self] point in self?.pointerMoved(at: point) }
+        surface.onClick = { [weak self] down, _ in self?.clicked(down) }
+        surface.onMultiClick = { [weak self] point, clicks in self?.multiClicked(at: point, clicks: clicks) }
+        surface.onRightClick = { [weak self] e in
             guard let self = self else { return }
-            if self.inFullScreen { self.toggleFullScreen() } else { self.close() }
+            NSMenu.popUpContextMenu(self.makeMenu(), with: e, for: self.surface)
         }
+        surface.onKey = { [weak self] e in self?.handleKey(e) ?? false }
         window.contentView = content
 
         content.addSubview(background)
@@ -173,6 +178,7 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         artHolder.wantsLayer = true
         artHolder.addSubview(imageView)
         content.addSubview(artHolder)
+        content.addSubview(surface)
         // Caption — over a bottom gradient in the window, under the artwork in full screen — shown with "…" on hover.
         shade.alphaValue = 0
         content.addSubview(shade)
@@ -194,26 +200,27 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         controls.volume.onChange = { [weak self] value, finished in self?.volumeChanged(to: value, finished: finished) }
         controls.volumeIcon.onPress = { [weak self] in self?.toggleMute() }
         content.addSubview(controls)
+        content.addSubview(flashView)
         layoutViews()
     }
 
-    // First open (or bring back): shows `info`, sized to the artwork's own resolution and placed on the panel's spot
-    // (the panel then hides, as with the first video) or under the menu-bar icon.
-    func present(_ info: NowPlayingInfo, replacing panel: NSRect?, anchor: NSStatusItem?) {
+    // First open (or bring back): shows `info`, sized to the artwork's own resolution on `screen` and put where `frame`
+    // says (AppDelegate: the panel's spot when nothing's there, else beside the open windows — never on top of a video).
+    func present(_ info: NowPlayingInfo, screen: NSScreen?, frame: (NSSize) -> NSRect?) {
         let wasVisible = window.isVisible
         show(info)
         if !wasVisible {
-            let screen = panel.flatMap { WindowManager.screen(for: $0) } ?? anchor?.button?.window?.screen ?? NSScreen.main
-            let size = initialSize(on: screen)
+            let size = initialSize(on: screen ?? NSScreen.main)
             window.contentAspectRatio = size
-            if let frame = panel.map({ WindowManager.frame(replacing: $0, size: size) }) ?? anchor.flatMap({ WindowManager.frame(under: $0, size: size) }) {
-                window.setFrame(frame, display: true)
-            } else { window.setContentSize(size); window.center() }
+            if let f = frame(size) { window.setFrame(f, display: true) } else { window.setContentSize(size); window.center() }
         }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(content)
+        window.makeFirstResponder(surface)
     }
+    // Whether the shown app can be controlled right now (AppDelegate: Music/Spotify always; others while they hold the
+    // "now playing" slot). The buttons and timeline dim when it can't.
+    func setControllable(_ on: Bool) { controls.setControllable(on) }
     // Close — from full screen, after leaving it, so the window doesn't vanish mid-animation on its own Space.
     func close() {
         if inFullScreen { closeAfterFullScreen = true; window.toggleFullScreen(nil) } else { window.close() }
@@ -303,6 +310,7 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         let lift = controlsRevealed && !full ? ArtworkLayout.controlsHeight : 0
         let shadeFrame: NSRect, controlsFrame: NSRect
         background.frame = b
+        surface.frame = b
         if full {
             let spot = ArtworkLayout.fullScreen(artwork: imageView.image.map(Self.pixelSize) ?? NSSize(width: 1, height: 1), in: b.size)
             artHolder.frame = spot.art
@@ -315,6 +323,7 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
             dotButton.frame = NSRect(x: b.width - 20, y: b.height - 20, width: 16, height: 16)
         }
         imageView.frame = artHolder.bounds
+        flashView.frame = NSRect(x: (artHolder.frame.midX - 28).rounded(), y: (artHolder.frame.midY - 28).rounded(), width: 56, height: 56)
         imageView.layer?.cornerRadius = full ? 8 : 0
         artHolder.shadow = full ? artShadow : nil
         shade.showsGradient = !full
@@ -481,6 +490,49 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         }
         controls.setTime(position: position, duration: duration)
     }
+    // MARK: clicks and keys — the player's zones (PlayerZone) and keys, so music and video answer alike
+    private func clicked(_ down: NSEvent) {
+        let at = surface.convert(down.locationInWindow, from: nil)
+        guard PlayerZone.at(at, in: surface.bounds.size) == .playPause else { return }
+        playPause()
+        flashView.show(info?.isPlaying == true ? "play.fill" : "pause.fill")
+    }
+    private func multiClicked(at point: NSPoint, clicks: Int) {
+        switch PlayerZone.at(point, in: surface.bounds.size) {
+        case .skipBack:    skip(-10)
+        case .skipForward: skip(10)
+        case .resize:      if clicks == 2 { toggleFullScreen() }
+        case .playPause:   break
+        }
+    }
+    // Space plays/pauses and ←/→ skip 5 s, as in the player; F or ⌃⌘F full screen; Esc leaves it (else closes); ⌘W closes.
+    private func handleKey(_ e: NSEvent) -> Bool {
+        let mods = e.modifierFlags.intersection([.command, .control, .option, .shift])
+        let key = e.charactersIgnoringModifiers?.lowercased()
+        if e.keyCode == 53 { if inFullScreen { toggleFullScreen() } else { close() }; return true }
+        if mods == .command && key == "w" { close(); return true }
+        if key == "f" && (mods.isEmpty || mods == [.control, .command]) { toggleFullScreen(); return true }
+        guard mods.isEmpty else { return false }
+        switch e.keyCode {
+        case 49:  playPause(); flashView.show(info?.isPlaying == true ? "play.fill" : "pause.fill"); return true
+        case 123: skip(-5); return true
+        case 124: skip(5); return true
+        default:  return false
+        }
+    }
+    // ± seconds from where playback is — or from a skip still on its way, so rapid skips stack, as in the player.
+    private func skip(_ delta: Double) {
+        guard let shown = info, let duration = shown.duration, duration > 0 else { NSSound.beep(); return }
+        let now = Date()
+        var from = shown.position(at: now) ?? 0
+        if let t = seekTarget, now.timeIntervalSince(t.at) < Self.seekHold { from = t.seconds + (shown.isPlaying ? now.timeIntervalSince(t.at) : 0) }
+        let target = min(max(0, from + delta), duration)
+        seekTarget = (target, now)
+        onCommand?(.seek(target))
+        refreshControls()
+        flashView.show((delta < 0 ? "gobackward." : "goforward.") + String(Int(abs(delta))))
+    }
+
     // Sends play or pause from what's showing and shows the result straight away; the stream confirms it.
     private func playPause() {
         guard var shown = info else { return }
@@ -509,7 +561,7 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     private func refreshVolume() {
         guard let id = info?.appBundleID else { return }
         volumeApp = id
-        appVolume.check(id) { [weak self] access, level in
+        musicApp.check(id) { [weak self] access, level in
             guard let self = self, self.volumeApp == id else { return }
             self.volumeAccess = access
             if let level = level, !self.controls.volume.isTracking { self.controls.volume.value = level; if level > 0 { self.lastVolume = level } }
@@ -521,16 +573,16 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         controls.setVolume(access: volumeAccess, appName: ArtworkActions.appName(id))
         if value > 0 && finished { lastVolume = value }
         switch volumeAccess {
-        case .granted: appVolume.set(id, value)
+        case .granted: musicApp.set(id, value)
         case .undetermined where finished && !askingVolume:
             askingVolume = true
-            appVolume.requestAccess(id) { [weak self] access in
+            musicApp.requestAccess(id) { [weak self] access in
                 guard let self = self else { return }
                 self.askingVolume = false
                 guard self.volumeApp == id else { return }
                 self.volumeAccess = access
                 self.controls.setVolume(access: access, appName: ArtworkActions.appName(id))
-                if access == .granted { self.appVolume.set(id, self.controls.volume.value) }
+                if access == .granted { self.musicApp.set(id, self.controls.volume.value) }
             }
         default: break
         }
@@ -569,6 +621,7 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     @objc private func showMenu() {
         makeMenu().popUp(positioning: nil, at: NSPoint(x: dotButton.frame.minX - 150, y: dotButton.frame.minY - 4), in: content)
     }
+    func windowShouldZoom(_ window: NSWindow, toFrame newFrame: NSRect) -> Bool { false }   // the hidden title bar's double-click
     func windowWillClose(_ notification: Notification) {
         placeholderToken += 1
         idleWork?.cancel(); revealWork?.cancel(); collapseWork?.cancel(); revealWork = nil; collapseWork = nil
@@ -580,39 +633,41 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     }
 }
 
-// The window's content: hover reveals the caption, right-click shows the menu; Esc (leaves full screen, else closes),
-// ⌘W, ⌃⌘F / F and double-click (full screen). Dragging anywhere moves the window — the top edge too: like
-// PlayerSurfaceView it keeps title-bar-area clicks, so a double-click there doesn't zoom the window.
+// The window's content view: lays the window out on every size change. Clicks, drags, keys and hover are the surface's
+// (PlayerSurfaceView, above the artwork) — it keeps title-bar-area clicks too, so a double-click there doesn't zoom.
 final class ArtworkContentView: NSView {
-    var onPointer: ((NSPoint?) -> Void)?                // where the pointer is; nil once it leaves
-    var onMenu: (() -> NSMenu?)?
-    var onClose: (() -> Void)?
-    var onEscape: (() -> Void)?
-    var onToggleFullScreen: (() -> Void)?
     var onLayout: (() -> Void)?
+    override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); onLayout?() }
+}
+
+// The brief ⏸ / ▶ / ⟲10 a click or key in the music window shows over the artwork — the acknowledgement a video gives by
+// stopping or jumping. Never takes clicks.
+final class CentreFlashView: NSView {
+    private let image = NSImageView()
+    private var token = 0
     override init(frame: NSRect) {
         super.init(frame: frame)
-        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.45).cgColor
+        alphaValue = 0
+        image.imageScaling = .scaleNone; image.contentTintColor = NSColor.white.withAlphaComponent(0.95)
+        addSubview(image)
     }
     required init?(coder: NSCoder) { fatalError() }
-    override var mouseDownCanMoveWindow: Bool { false }
-    override var acceptsFirstResponder: Bool { true }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); onLayout?() }
-    override func mouseEntered(with e: NSEvent) { onPointer?(convert(e.locationInWindow, from: nil)) }
-    override func mouseMoved(with e: NSEvent) { onPointer?(convert(e.locationInWindow, from: nil)) }
-    override func mouseExited(with e: NSEvent) { onPointer?(nil) }
-    override func mouseDown(with e: NSEvent) {
-        if e.clickCount == 2 { onToggleFullScreen?() } else if e.clickCount == 1 { window?.performDrag(with: e) }
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        image.frame = bounds; layer?.cornerRadius = min(newSize.width, newSize.height) / 2
     }
-    override func menu(for event: NSEvent) -> NSMenu? { onMenu?() }
-    override func keyDown(with e: NSEvent) {
-        let mods = e.modifierFlags.intersection([.command, .control, .option, .shift])
-        let key = e.charactersIgnoringModifiers?.lowercased()
-        if e.keyCode == 53 { onEscape?() }
-        else if mods == .command && key == "w" { onClose?() }
-        else if key == "f" && (mods.isEmpty || mods == [.control, .command]) { onToggleFullScreen?() }
-        else { super.keyDown(with: e) }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    func show(_ symbol: String) {
+        image.image = sym(symbol).withSymbolConfiguration(.init(pointSize: 22, weight: .semibold))
+        token += 1
+        let mine = token
+        NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.1; animator().alphaValue = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self = self, mine == self.token else { return }
+            NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.3; self.animator().alphaValue = 0 }
+        }
     }
 }
 
@@ -697,6 +752,10 @@ final class ArtworkControlsView: NSView {
         return hit === self ? nil : hit
     }
 
+    func setControllable(_ on: Bool) {
+        for b in [previous, playPause, next] { b.dimmed = !on }
+        timeline.alphaValue = on ? 1 : 0.4
+    }
     func setPlaying(_ playing: Bool) {
         playPause.setSymbol(playing ? "pause.fill" : "play.fill")
         playPause.toolTip = playing ? "Pause" : "Play"
@@ -755,10 +814,11 @@ final class ArtworkControlsView: NSView {
 
 enum AppVolumeAccess { case unsupported, granted, undetermined, denied }
 
-// Runs AppVolume's scripts off the main thread (an app can take a moment to answer Apple Events), only for a running,
-// supported app. `check` never asks macOS; only `requestAccess` (the first drag, on release) can show its prompt.
-// Drags send through a CoalescingSender, so the app only ever gets the newest level.
-class AppVolumeControl {
+// Music's / Spotify's own volume, artwork and playback commands through AppVolume's scripts — off the main thread (an
+// app can take a moment to answer Apple Events), only for a running, supported app. `check` and `artwork` never ask
+// macOS; only the user's own actions can show its one-time prompt (`requestAccess` on a volume drag's release,
+// `perform` on a click). Volume drags go through a CoalescingSender, so the app only ever gets the newest level.
+class MusicAppControl {
     private let queue = DispatchQueue(label: "watch.appvolume")
     private lazy var sender = CoalescingSender<(String, Double)>(queue: queue) { request in
         if let script = AppVolume.writeScript(request.0, level: request.1) { _ = Self.run(script) }
@@ -779,6 +839,32 @@ class AppVolumeControl {
         }
     }
     func set(_ bundleID: String, _ level: Double) { sender.send((bundleID, level)) }
+    // A playback command addressed to that app — so it can't land on whatever else holds the "now playing" slot.
+    // false when it couldn't be sent (not running, not allowed); the caller may then try the adapter.
+    func perform(_ request: NowPlayingRequest, bundleID: String, completion: @escaping (Bool) -> Void) {
+        guard let script = AppVolume.commandScript(request, bundleID: bundleID), Self.isRunning(bundleID) else { completion(false); return }
+        queue.async {
+            var access = Self.access(automationPermission(bundleID, ask: false))
+            if access == .undetermined { access = Self.access(automationPermission(bundleID, ask: true)) }   // the user's own click
+            let sent = access == .granted && Self.run(script) != nil
+            DispatchQueue.main.async { completion(sent) }
+        }
+    }
+    // The current track's artwork, only if Watch is already allowed: Music's image bytes, or the image at Spotify's URL.
+    func artwork(_ bundleID: String, completion: @escaping (Data?) -> Void) {
+        guard let script = AppVolume.artworkScript(bundleID), Self.isRunning(bundleID) else { completion(nil); return }
+        queue.async {
+            guard Self.access(automationPermission(bundleID, ask: false)) == .granted, let result = Self.run(script) else {
+                DispatchQueue.main.async { completion(nil) }; return
+            }
+            if let s = result.stringValue, let url = URL(string: s), url.scheme?.hasPrefix("http") == true {
+                URLSession.shared.dataTask(with: url) { data, _, _ in DispatchQueue.main.async { completion(data) } }.resume()
+            } else {
+                let data = result.data
+                DispatchQueue.main.async { completion(data.isEmpty ? nil : data) }
+            }
+        }
+    }
 
     static func access(_ status: OSStatus) -> AppVolumeAccess {
         switch status {

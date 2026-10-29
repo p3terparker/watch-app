@@ -1,6 +1,6 @@
 # Watch — where everything lives
 
-A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift`, `ArtworkWindow.swift` and `ArtworkStyle.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.19** — native AVKit playback for YouTube (HD + live), in-app
+A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift`, `ArtworkWindow.swift`, `ArtworkStyle.swift` and `StreamSupport.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.19** — native AVKit playback for YouTube (HD + live), in-app
 downloads, YouTube search / History / Playlists in the panel (absorbed from the retired Tube app), an
 **Up Next** list per player window (Next/Previous · Autoplay · Repeat All/One · Shuffle), and a small library:
 watched marks, Favourites and playlist progress — plus a **Now Playing** row showing what other apps play, whose artwork
@@ -31,7 +31,11 @@ opens in a window that follows the music. See `docs/FEATURES.md` for the feature
 - `Sources/ArtworkStyle.swift` — full-screen look: `ArtworkPalette.gradient` (the artwork's two main colours from a small RGBA
   sample, toned for white text) and `ArtworkLayout.fullScreen` (artwork + caption rects). Foundation (+ CoreGraphics);
   `test.sh` covers it.
-- `UX_SPEC.md` — 3.16 interaction contract, 3.17 self-contained distribution acceptance, 3.19 Now Playing.
+- `Sources/StreamSupport.swift` — `StreamLadder` (the lower H.264 renditions to offer beside yt-dlp's pick; the resolution cap
+  for a video area; the "720p" label), `PlaybackFailure` (does yt-dlp's error want a signed-in viewer; the reason worth
+  showing) and `PlaybackLog` (`~/Library/Logs/Watch/playback.log`, 256 KB, whole lines). Foundation (+ CoreGraphics); `test.sh` covers it.
+- `UX_SPEC.md` — 3.16 interaction contract, 3.17 self-contained distribution acceptance, 3.19 Now Playing, and the
+  **always works** checklist every change is checked against.
 - `Tests/panel.py` / `Tests/PanelMain.swift` — isolated real-AppKit harness; scratch source copies redirect all app defaults to a throwaway suite, replace the entry point, and override search/playback. Run separately in a macOS GUI session; snapshots in `build/watch-panel-checks/`.
 - `Info.plist` — bundle metadata. `LSUIElement` = menu-bar-only. Bundle id `com.jacob.watch`.
 - `build.sh` — delegates to the shared build-only tool; output `build/native/Watch.app`. Add `--install` only for an explicit install.
@@ -77,20 +81,24 @@ anywhere, which is what a **new** window starts with.
   live, `isList`) for a Recent Links row; nil when yt-dlp finds nothing. `-I 1` keeps a channel page from making
   yt-dlp walk every video on it. 40 s timeout.
 
-### Stream resolution — `StreamRef` / `StreamPlan` / `ResolvedStream` / `resolveStream(_:completion:)`
-One `yt-dlp -j` call → title, `is_live`, thumbnail + duration (for the link's Recent Links row, via
-`WindowManager.onInfo`), and an **ordered list of plans** (primary + fallbacks):
+### Stream resolution — `StreamRef` / `StreamPlan` / `ResolvedStream` / `resolveStream(_:cookies:completion:)`
+One `yt-dlp -j` call (`captureWithError`, 60 s; `cookies` only for the signed-in retry) → title, `is_live`, thumbnail +
+duration (for the link's Recent Links row, via `WindowManager.onInfo`), and an **ordered list of plans** (primary +
+fallbacks); the completion's second value is yt-dlp's last ERROR line ("" on success):
 - live → `.single` master HLS manifest (`manifest_url`), so AVPlayer adapts quality itself;
-- `requested_formats` pair → `.split(video:audio:)` (YouTube: H.264 ≤1080p https + m4a);
+- `requested_formats` pair → `.split(videos: ladder, audio:)` with `StreamLadder.renditions` (yt-dlp's H.264 ≤1080p pick,
+  then the best https H.264 MP4 at each lower 720/480/360p), then `.split(videos: [pick], audio:)`;
 - otherwise the selected format → `.single`;
 - safety net → best muxed format AVPlayer can open alone (`avPlayableMuxed`, e.g. YouTube "18").
 `StreamRef.assetOptions` forwards yt-dlp's User-Agent/Referer/Origin to `AVURLAsset`.
 
 ### Split video+audio → `DashHLSBridge` (AVAssetResourceLoaderDelegate)
-- `make(video:audio:completion:)` — for fMP4 pairs, `fetchIndex` reads the first 64 KB of each file
-  (more if the `sidx` is longer), `parse` walks `ftyp/moov/sidx` into init length + segment byte ranges,
-  `mediaPlaylist` emits a VOD HLS playlist with `EXT-X-MAP`/`EXT-X-BYTERANGE` pointing at the real https URL,
-  and a master playlist ties video + audio group together. Split HLS pairs just get a master pointing at both.
+- `make(videos:audio:completion:)` — for fMP4, `fetchIndex` reads the first 64 KB of every rendition and the audio in
+  parallel (more if the `sidx` is longer), `parse` walks `ftyp/moov/sidx` into init length + segment byte ranges,
+  `mediaPlaylist` emits a VOD HLS playlist per file (`/video<i>.m3u8`, `/audio.m3u8`) with `EXT-X-MAP`/`EXT-X-BYTERANGE`
+  pointing at the real https URL, and one master lists every video rendition (BANDWIDTH, CODECS, RESOLUTION) sharing audio
+  group "a" — AVPlayer picks among them by bandwidth and the item's `preferredMaximumResolution`. A rendition whose index
+  can't be read is left out. Split HLS pairs just get a master pointing at both.
 - Playlists are served from memory under the `glasskit-hls://` scheme (`resourceLoader(_:shouldWaitFor…)`);
   segments go straight to the CDN as bounded range requests. Why: AVFoundation otherwise walks the whole remote
   fMP4 before playing (see GOTCHAS).
@@ -245,15 +253,28 @@ run only from a click on the artwork window's controls (`NowPlayingRemote`); `te
   (only with artwork). Click → `openArtwork` (no artwork → `ArtworkActions.showApp`); right-click → `ArtworkActions.menuItems`
   (Open Artwork · **Open Full Screen** → `openArtwork(fullScreen: true)` · Copy · Save… · Open in Preview · Search YouTube · Show ‹App›).
   `startPanelMonitors` / `stopPanelMonitors` replace the bare `mediaMonitor.start/stop` at every panel show/hide.
+- **Music only** (build 51) — `nowPlayingChanged` records `electedApp` (whoever holds macOS's single "now playing" slot, often a
+  video) but only `NowPlayingInfo.isMusicSource` reports reach `setMusic` (row, image, window): music apps by bundle id, else a
+  non-browser app reporting a music/audio media type; never a browser, a `com.apple.WebKit…` process or Watch. Nothing playing
+  clears the music only if the music app was the elected one. `musicBroadcast` (Music's `com.apple.Music.playerInfo`, Spotify's
+  `com.spotify.client.PlaybackStateChanged`, distributed notifications, no permission) keeps the song right while a video holds
+  the slot (`NowPlayingInfo.broadcast` / `merge`); a new track seen only that way gets its artwork from `MusicAppControl.artwork`
+  when Automation is already allowed. Commands: `send(_:to:)` — Music/Spotify via `MusicAppControl.perform` (AppleScript to that
+  bundle id; Automation asked on the click), falling back to `NowPlayingRemote` only if that app holds the slot; other apps only
+  while they hold it (`canControl` → `setControllable` dims the buttons otherwise).
 - `openArtwork` — `nowPlaying.want(.viewer, true)` first, then `ArtworkWindowController.present` on the panel's spot
-  (`WindowManager.frame(replacing:size:)`; else `frame(under:size:)`, else centred) and the panel hides. The controller is reused;
-  `onClose` releases `.viewer`, `onSearch` → `searchYouTube(for:)` (opens the panel and searches).
+  (`WindowManager.frame(replacing:size:)`) unless a player is there, else `WindowManager.freeFrame` (beside the players), and the
+  panel hides. The controller is reused (`makeArtworkWindow` also sets `WindowManager.keepClear` to its frame, so players avoid
+  it); `onClose` releases `.viewer`, `onSearch` → `searchYouTube(for:)` (opens the panel and searches).
 - `ArtworkWindowController` — borderless/black/floating like the players. `present` sizes to the artwork's pixels at the screen's
   scale (240 pt … min(600 pt, 70% of the screen height)). `show(_:)` (every update while visible): new artwork cross-fades
   (0.25 s); a new track without artwork keeps the old picture `placeholderDelay` (1.5 s) then shows the app icon; nothing
   playing keeps the picture and says "Not playing"; `fitAspect` keeps the top-left corner when the ratio changes. Hover fades
-  in the caption (`GradientView`) and "…"; `ArtworkContentView` handles right-click, Esc, ⌘W, ⌃⌘F / F and double-click, and lays
-  everything out on every size change (`setFrameSize` → `layoutViews`); `ArtworkImageView` never takes clicks. `close()` leaves
+  in the caption (`GradientView`) and "…". Input goes through the player's own `PlayerSurfaceView` (`surface`) and `PlayerZone`:
+  `clicked` (centre → `playPause` + `CentreFlashView` ▶/⏸), `multiClicked` (left/right → `skip(∓10)`, stacking on `seekTarget`;
+  top / bottom middle double-click → `toggleFullScreen`), `handleKey` (Space, ←/→ ±5 s, F / ⌃⌘F, Esc, ⌘W), right-click → menu,
+  `onPointer` → `pointerMoved(at:)`. `ArtworkContentView` only lays everything out on every size change (`setFrameSize` →
+  `layoutViews`); `ArtworkImageView` never takes clicks; `windowShouldZoom` is false. `close()` leaves
   full screen first. Menu (`makeMenu`): Close · Enter/Exit Full Screen · Full-Screen Background ▸ Artwork Colours / Black · actions.
 - **Full screen** (`toggleFullScreen`) — macOS full screen on its own Space. Before entering it sets aside what would fight it: the
   aspect lock (`contentResizeIncrements` clears it; `savedAspect`), the floating level and `.fullScreenAuxiliary` (→ `.fullScreenPrimary`);
@@ -262,14 +283,14 @@ run only from a click on the artwork window's controls (`NowPlayingRemote`); `te
   caption centred under it (larger, no gradient), "…" clear of the menu bar. `ArtworkBackgroundView` shows
   `ArtworkWindowController.palette` (16×16 sRGB sample → `ArtworkPalette`) as a diagonal gradient, or black (placeholder / Black),
   cross-fading on changes. Idle: caption, "…" and the pointer hide after `idleDelay` (2.5 s) of no movement.
-- **Playback controls** (`ArtworkControlsView`, build 50) — `pointerMoved(at:)` (from `ArtworkContentView.onPointer`) reveals them after
+- **Playback controls** (`ArtworkControlsView`, build 50) — `pointerMoved(at:)` (from `surface.onPointer`) reveals them after
   `revealDelay` (0.15 s) while the pointer is on the caption band (`controlsZone`: the band, grown while revealed; in full screen
   the caption + the reserved controls row) and collapses them `collapseDelay` (0.4 s) after it leaves (at once when it leaves
   the window), never mid-drag. Revealing grows the window's band by `ArtworkLayout.controlsHeight` and lifts the text
   (`layoutViews(animated:)`). Timeline: `refreshControls` every 0.5 s while shown, from `NowPlayingInfo.position(at:)`; a drag
   previews the time and its release sends `.seek` and shows the target until the app reports it (`seekHold`, 2 s). ⏯ sends play
   or pause from the shown state and updates the shown info at once; ⏮ ⏭ send previous/next. Everything goes through `onCommand`
-  (AppDelegate → `NowPlayingRemote`). Volume: `AppVolumeControl.check` (off-main, never prompts) when revealed → `.granted`
+  (AppDelegate `send(_:to:)`). Volume: `MusicAppControl.check` (off-main, never prompts) when revealed → `.granted`
   (slider at the app's level; drags coalesce through `CoalescingSender`), `.undetermined` (slider; the first drag's release
   calls `requestAccess` — macOS asks once), `.denied` (dimmed icon whose tooltip names the Automation setting), `.unsupported`
   (not Music/Spotify, or not running: nothing). The icon toggles mute (0 ↔ last level). Layout: timeline row (times hide under
@@ -293,10 +314,17 @@ Z-order: video/web view → loading → `surface` → `controls` → "…".
   list, not the recommendations an unreadable list falls back to). `loadPlaylist` → `startPlaylist(name:items:)` starts
   at `PlaylistProgress.startIndex` and sets `playlistStart` (index, count, load token) for the start chip.
 - `startLoad(_:title:)` — the actual load, and where stepping through Up Next re-enters (it keeps `queue`).
-  Local file → AVPlayer. Link → spinner, `resolveStream`, then `tryNextPlan`; 25s watchdog → web fallback.
+  Local file → AVPlayer. Link → spinner, `resolve(_:signedIn:)` (`resolveStream`, then `tryNextPlan`; after 25 s the label says
+  "Still loading…", yt-dlp's own limit is 60 s). A YouTube failure that `PlaybackFailure.wantsSignIn` with a connected YouTube
+  Account retries once with `YouTube.cookieArgs`; otherwise `couldNotPlay`.
   `loadToken` drops stale callbacks. Sets `resumeAt` from `PlaybackPositions` unless the link has `t=`. It only raises the window when it isn't on screen yet, so autoplay can't
   yank a player in front of what you're doing.
-- `tryNextPlan(_:)` — `.single` → `playAsset`; `.split` → `DashHLSBridge.make` → `playAsset`; failure → next plan.
+- `tryNextPlan(_:)` — `.single` → `playAsset`; `.split` → `DashHLSBridge.make` → `playAsset`; failure → next plan; none left
+  → `couldNotPlay`. `playAsset` sets `preferredMaximumResolution = qualityCap()` (`StreamLadder.cap` of the content size ×
+  backing scale), and `windowDidResize` updates it, so the rendition follows the window; `playerMenu` shows "Playing at Np".
+- `couldNotPlay(_:error:signedIn:)` — logs to `PlaybackLog`; other sites → their page in the web view; YouTube → never a web
+  page: `PlayerFailureView` (reason from `PlaybackFailure.reason`; Sign In… when a sign-in would help and no account is
+  connected → `openYouTubeSignIn`; Try Again → `startLoad`; Open in Browser; Copy Details with version, macOS, URL, error).
 - `playAsset(_:bridge:token:)` — `PlayerVideoView` (AVPlayerLayer), a 0.25s
   periodic time observer → `prefetchUpNext` + `refreshControls`, an `AVPlayerItemDidPlayToEndTime` observer
   (`endObserver`) → `itemDidEnd`; KVO on item status: ready → hide spinner + seek to `t=` or `resumeAt` (its completion sets `positionReady`);
@@ -326,16 +354,12 @@ Z-order: video/web view → loading → `surface` → `controls` → "…".
 - **Resume:** `positionKey` is set in `playAsset` (nil for live) and belongs to the player actually playing, so
   `startLoad` of the next video doesn't disturb it. `savePosition()` runs every 5 s from the time observer, on
   pause, in `teardownAVPlayer` (replace, web fallback, close) and from `applicationWillTerminate`; nothing is
-  saved before `positionReady`. The embed/watch-page fallbacks start at `startSeconds` (`t=` or `resumeAt`).
+  saved before `positionReady`.
 - **Watched:** `savePosition` also calls `WatchedVideos.noteProgress`; `itemDidEnd` marks `positionKey` (`markWatched`);
-  both post `.watchLibraryChanged`. The IFrame embed reports `time:<id>:<seconds>:<duration>` every 5 s while playing
-  and on pause, and `ended:<id>` — `userContentController` saves/marks under that id, so a late message from a
-  replaced embed can't land on the next video. (The full watch-page fallback saves nothing.)
+  both post `.watchLibraryChanged`. (A site's page in the web view saves nothing.)
 - `toggleSavedSize()` — double-click (top third / bottom middle) returns to `previousSize`, the size before the latest resize. `windowWillStartLiveResize` /
   `windowDidEndLiveResize` update it on every manual resize, and the double-click sets it to the size it's leaving, so repeated
   double-clicks toggle between the two sizes. Before any resize, it goes to the standard 440×247.
-- `fallbackToWeb(_:)` — yt-dlp couldn't resolve: YouTube → `loadYouTubeEmbed` (IFrame Player API, desktop-Safari
-  UA; `error`/8s `timeout` → `loadWatchPageFallback`), other sites → load the page in the web view.
 - `ensureWebView()` / `teardownWebView()` / `teardownAVPlayer()` — swap WebKit ⇄ AVKit. The web view
   unregisters drag types so drops fall through to `PlayerDropView`. In web mode, `surface` forwards plain
   clicks and scrolls to the web view.
@@ -356,7 +380,8 @@ Z-order: video/web view → loading → `surface` → `controls` → "…".
   constraints.
 - `PlayerSurfaceView` — transparent overlay. `mouseDown`: clickCount ≥ 2 → `onMultiClick(point, count)`. A click that moves
   more than 3pt drags the window manually (`setFrameOrigin`); otherwise `onClick(down, up)`. A
-  tracking area drives `onHover`; `rightMouseDown` → `onRightClick`. `mouseDownCanMoveWindow = false` keeps
+  tracking area drives `onHover` and `onPointer` (the point, nil on exit); `rightMouseDown` → `onRightClick`. Shared with the
+  music window. `mouseDownCanMoveWindow = false` keeps
   title-bar-area clicks here.
 - `FadingButton` — an `NSButton` whose `hitTest` ignores clicks while faded out.
 - `PlayerControlBar` — 20pt bar, inset `barInset` (16pt) from the sides and 6pt from the bottom so it stays off the
@@ -375,7 +400,10 @@ Z-order: video/web view → loading → `surface` → `controls` → "…".
 
 ### Window layout/lifecycle — `WindowManager`
 `open(_:anchor:queue:replacing:)` creates a player, `place`s it (or, with `replacing`, `take`s the panel's spot — the usual
-player size centred on the panel's top edge), and calls `load`. The placement math is shared with the artwork window as statics:
+player size centred on the panel's top edge, `takeFrame(replacing:)`; AppDelegate only does that when the spot doesn't cover
+the music window), and calls `load`. `freeFrame(size:anchor:remembered:excluding:)` is the shared placement: with no players,
+the remembered spot unless `keepClear` (the music window) is there, else under the status item / centred; otherwise
+right/left/below/above a player or the music window without overlapping any, else a cascade. The placement math is shared with the artwork window as statics:
 `frame(replacing:size:)`, `frame(under:size:)`, `screen(for:)`, `clamp(_:to:)`. `onInfo` (resolved `LinkInfo` → the link's Recent Links row) and
 `onDownload` (→ `AppDelegate.startDownload`) callbacks. `place(_:anchor:)` — first window opens at the remembered
 frame (`rememberedFrame`, UserDefaults `lastPlayerFrame`; under the status item the very first time); further

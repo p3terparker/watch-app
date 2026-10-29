@@ -59,6 +59,7 @@
 > `loadHTMLString(…, baseURL: https://www.youtube.com/)`, built with the **IFrame Player API** under a
 > desktop-Safari UA. Some videos/networks still throw 15x (YouTube flagging the session — reproducible in
 > plain Safari, not a Watch bug); Watch **auto-falls back to a yt-dlp-resolved direct stream in AVPlayer**.
+> *(3.19 build 51: Watch no longer loads the embed or the watch page for YouTube at all — see the bot-check entry below.)*
 
 > **Unfocused player window stutters during playback** *(Watch · 2026-06-22)*
 > **Cause:** macOS **App Nap** throttles a background/unfocused app.
@@ -209,3 +210,13 @@
 Never run yt-dlp `-U` or Homebrew updates against a bundled executable: mutating it invalidates the app signature. Watch updates helpers through whole-app replacement. Testing with a developer PATH can hide missing FFmpeg/Deno; use `MediaTools` and the clean-HOME relocated fixture in `Tests/bundled.py`. Pin helper/source hashes, reject non-system dylibs, sign child executables before the app, and validate the mounted DMG. Deno 2.9.8 has no `--license` option; extract supplied notice files from the pinned source archive instead.
 
 The resizable first-run guide must update each wrapping label's `preferredMaxLayoutWidth` to the stack's current width. Keeping the initial fixed width makes short labels silently lose their second line at smaller sizes. `GuideStackView.layout` and the small-guide/last-action fixture cover this.
+
+## Watch 3.19 (51) — YouTube's bot check, and macOS's single "now playing" slot
+
+**A YouTube web page is never a fallback.** When yt-dlp failed, 3.18–3.19 (50) loaded the IFrame embed and then the signed-out youtube.com watch page in the player. That looked like Watch "lost" its controls, click zones and quality switching, showed ads and YouTube's UI, and its media session took over macOS Now Playing (the music window showed the video's thumbnail). The usual failure was YouTube's "Sign in to confirm you're not a bot" (also age and members checks), not a stale yt-dlp: the same bundled yt-dlp resolved public videos fine from GitHub's Mac. Now a YouTube failure shows `PlayerFailureView` with yt-dlp's reason and logs it (`~/Library/Logs/Watch/playback.log`). With a connected YouTube Account it first retries once with that browser's cookies (`PlaybackFailure.wantsSignIn` → `YouTube.cookieArgs`). Without one, the card offers Sign In…. Never send cookies on a first attempt, and never test with personal cookies. Other sites still fall back to their page, which is the only way to show them.
+
+**Window-size quality needs more than one rendition.** One fixed H.264 stream can't follow the window. `StreamLadder.renditions` adds YouTube's lower H.264 MP4s to the bridge's master playlist, and the player sets `AVPlayerItem.preferredMaximumResolution` from the video area on every resize. Live HLS adapts by itself. `Tests/panel.py` checks the switch with local fixture renditions (360p at a standard Retina window, 720p when larger).
+
+**MediaRemote reports one app: whatever macOS elected as "now playing".** A browser tab or a Watch player playing a video takes that slot from Music. Only music sources may reach the music window (`NowPlayingInfo.isMusicSource`: never a browser, a `com.apple.WebKit…` process or Watch). Music and Spotify are followed through their own distributed notifications even while they don't hold the slot. The adapter's `send` goes to whoever holds the slot, so Music and Spotify are commanded by AppleScript addressed to their bundle id (Automation asked only on the user's click). Other apps' buttons dim when they don't hold it.
+
+**Don't remove basics silently.** UX_SPEC's "Always works" list (click zones, keys, resize, native YouTube, separate windows) is checked by `Tests/PanelMain.swift` on a real fixture video. Run it (CI does) before shipping a preview.

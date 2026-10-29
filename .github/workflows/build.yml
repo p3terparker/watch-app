@@ -75,6 +75,13 @@ jobs:
       - name: Verify the installer
         run: /usr/bin/python3 scripts/verify_watch_package.py --canonical
 
+      # The real panel, player and music window on the runner's screen, with an FFmpeg-made fixture video and fixture
+      # renditions: UX_SPEC's "Always works" list (click zones, keys, volume, resize + quality, music-only, placement).
+      # A preview is only published when these pass.
+      - name: Player, panel and music window (GUI)
+        timeout-minutes: 15
+        run: /usr/bin/python3 Tests/panel.py build/watch-panel-checks
+
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
@@ -101,12 +108,6 @@ jobs:
           gh release create "$tag" dist/Watch.dmg --prerelease --latest=false --target "$GITHUB_SHA" \
             --title "Watch ${version} preview (${build})" --notes-file "$notes"
           echo "Published https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag} (sha256 ${sha})"
-
-      # The real panel and artwork window on the runner's screen. Informational: a CI session may lack a usable GUI.
-      - name: Panel and artwork window (GUI)
-        continue-on-error: true
-        timeout-minutes: 10
-        run: /usr/bin/python3 Tests/panel.py build/watch-panel-checks
 
       # How YouTube links resolve right now with the bundled yt-dlp, exactly as the player asks (informational: YouTube
       # can bot-check data-centre addresses).

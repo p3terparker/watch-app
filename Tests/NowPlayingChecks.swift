@@ -271,3 +271,53 @@ func checkPlaybackControls() {
     expect(pumpUntil { !launched[0].isRunning } && launched[0].terminationReason == .uncaughtSignal, "a hung adapter run is stopped")
     expect(NowPlayingRemote { _ in nil }.send(.command(.play)) == nil, "no adapter: nothing sent")
 }
+
+// The music window follows music only; Music/Spotify broadcasts; commands addressed to the app.
+func checkMusicSources() {
+    let own: Set<String> = ["com.jacob.watch"]
+    func source(_ bundle: String, parent: String? = nil, type: String? = nil) -> NowPlayingInfo {
+        NowPlayingInfo(title: "T", bundleID: bundle, parentBundleID: parent, isPlaying: true, mediaType: type)
+    }
+    expect(source("com.apple.Music").isMusicSource(ignoring: own) && source("com.spotify.client").isMusicSource(ignoring: own), "Music and Spotify are music")
+    expect(source("com.apple.podcasts").isMusicSource(ignoring: own), "Podcasts counts (audio)")
+    expect(!source("com.google.Chrome").isMusicSource(ignoring: own) && !source("com.apple.Safari").isMusicSource(ignoring: own), "browsers never")
+    expect(!source("com.apple.WebKit.GPU").isMusicSource(ignoring: own), "a web page's media process never")
+    expect(!source("com.apple.WebKit.GPU", parent: "com.jacob.watch").isMusicSource(ignoring: own) && !source("com.jacob.watch").isMusicSource(ignoring: own), "Watch's own playback never")
+    expect(!source("com.apple.WebKit.GPU", parent: "com.apple.Safari", type: "MRMediaRemoteMediaTypeMusic").isMusicSource(ignoring: own), "a browser stays out even when it says music")
+    expect(source("com.example.player", type: "MRMediaRemoteMediaTypeMusic").isMusicSource(ignoring: own), "an unknown app that says it plays music counts")
+    expect(!source("com.example.player").isMusicSource(ignoring: own) && !source("com.apple.TV", type: "video").isMusicSource(ignoring: own), "an unknown or video app doesn't")
+    var withType = song("Typed", bundle: "com.example.player"); withType["mediaType"] = "MRMediaRemoteMediaTypeMusic"
+    expect(info(NowPlayingInfo.parse(line: adapterLine(withType), ignoring: [])).map { $0.isMusicSource(ignoring: own) } == true, "media type read from the stream")
+    expect(info(NowPlayingInfo.parse(line: adapterLine(song("Own", bundle: "com.jacob.watch")), ignoring: []))?.isMusicSource(ignoring: own) == false,
+           "with nothing ignored, Watch's own report arrives — and is not music")
+
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let music: [AnyHashable: Any] = ["Name": "Song", "Artist": "Artist", "Album": "Album", "Player State": "Playing", "Total Time": 241_000]
+    let heard = NowPlayingInfo.broadcast(music, app: "com.apple.Music", at: now)
+    expect(heard?.title == "Song" && heard?.isPlaying == true && heard?.duration == 241 && heard?.elapsed == nil && heard?.bundleID == "com.apple.Music", "Music broadcast")
+    let spotify: [AnyHashable: Any] = ["Name": "Track", "Artist": "A", "Player State": "Paused", "Duration": 180_000, "Playback Position": 42.5]
+    let paused = NowPlayingInfo.broadcast(spotify, app: "com.spotify.client", at: now)
+    expect(paused?.isPlaying == false && paused?.duration == 180 && paused?.elapsed == 42.5 && paused?.elapsedAt == now, "Spotify broadcast with its position")
+    expect(NowPlayingInfo.broadcast(["Name": "x", "Player State": "Stopped"], app: "com.apple.Music") == nil, "stopped: nothing")
+    expect(NowPlayingInfo.broadcast(["Player State": "Playing"], app: "com.apple.Music") == nil, "no name: nothing")
+    expect(NowPlayingInfo.broadcasts["com.apple.Music.playerInfo"] == "com.apple.Music" && NowPlayingInfo.broadcasts["com.spotify.client.PlaybackStateChanged"] == "com.spotify.client", "broadcast names")
+
+    var rich = info(NowPlayingInfo.parse(line: adapterLine(song("Song")), ignoring: []))!
+    rich.duration = 241; rich.elapsed = 60; rich.elapsedAt = now; rich.rate = 1
+    let pausedSame = NowPlayingInfo.broadcast(["Name": "Song", "Artist": "Artist", "Album": "Album", "Player State": "Paused", "Total Time": 241_000], app: "com.apple.Music")!
+    let merged = NowPlayingInfo.merge(pausedSame, onto: rich, at: now.addingTimeInterval(10))
+    expect(merged.artwork == rich.artwork && merged.isPlaying == false && merged.elapsed == 70 && merged.position(at: now.addingTimeInterval(100)) == 70,
+           "same track: artwork kept, the clock stops where it was")
+    let next = NowPlayingInfo.broadcast(["Name": "Next", "Artist": "Artist", "Album": "Album", "Player State": "Playing"], app: "com.apple.Music")!
+    expect(NowPlayingInfo.merge(next, onto: rich).title == "Next" && NowPlayingInfo.merge(next, onto: rich).artwork == nil, "a new track replaces it")
+
+    expect(AppVolume.commandScript(.command(.pause), bundleID: "com.apple.Music") == #"tell application id "com.apple.Music" to pause"#, "pause Music itself")
+    expect(AppVolume.commandScript(.command(.play), bundleID: "com.spotify.client") == #"tell application id "com.spotify.client" to play"#, "play Spotify itself")
+    expect(AppVolume.commandScript(.command(.next), bundleID: "com.apple.Music")?.hasSuffix("to next track") == true
+           && AppVolume.commandScript(.command(.previous), bundleID: "com.apple.Music")?.hasSuffix("to previous track") == true, "next / previous track")
+    expect(AppVolume.commandScript(.seek(83.256), bundleID: "com.apple.Music")?.hasSuffix("to set player position to 83.26") == true
+           && AppVolume.commandScript(.seek(-4), bundleID: "com.apple.Music")?.hasSuffix("position to 0.00") == true, "seek in seconds, never negative")
+    expect(AppVolume.commandScript(.command(.play), bundleID: "com.google.Chrome") == nil, "no script for other apps")
+    expect(AppVolume.artworkScript("com.apple.Music")?.contains("raw data of artwork 1 of current track") == true
+           && AppVolume.artworkScript("com.spotify.client")?.contains("artwork url of current track") == true && AppVolume.artworkScript("x") == nil, "artwork scripts")
+}

@@ -31,3 +31,23 @@ Requested 2026-10-28. Show what's playing anywhere on the Mac and open its artwo
 - Video player volume (requested 2026-10-28): the speaker icon shows the level and still mutes on click; hovering it slides a short slider out to its left (the icon stays put), shortening the timeline; it tucks away shortly after the pointer leaves. ↑/↓ change it by 10%. New windows start at the last volume. The player's scrubber uses the same thin line.
 
 Acceptance: deterministic parsing (full/empty/paused/no-artwork/own-app/browser-parent/bad lines), line reassembly, file naming, environment scrubbing and the monitor's start/stop/de-duplication/debounce/back-off with a stand-in process; colour picking and full-screen layout; timing, clock text, command/seek arguments (never `test`), app-volume scripts, value coalescing and the command timeout; isolated AppKit checks for the controls (reveal/collapse, each button's request, seek, app volume shown/hidden) and the player's volume slide-out; isolated AppKit checks for the row (placement, filtering, Preference, menu) and the window (size, ratio, following, placeholder, Esc, full-screen menu and background choice); manual full screen on a real Mac (entering/leaving, following, idle hiding, both backgrounds, multiple displays); the real built adapter loading under system perl from a relocated path; manual: Music, Spotify and a browser video on a real Mac with playback never interrupted and no prompts, and no adapter process while the panel and window are closed.
+
+## Always works (checked before every preview)
+
+Requested 2026-10-29 after build 50 seemed to lose basics. Every change keeps these; `Tests/PanelMain.swift` checks the starred ones on GitHub's Mac with a fixture video.
+
+- ★ A pasted YouTube link plays in Watch's own player (AVPlayer, thin bar, "…"), never YouTube's web page. If it can't, the window says why (Sign In… / Try Again / Open in Browser / Copy Details).
+- ★ Player click zones: click the middle = play/pause; double-click the left/right side = ∓10 s, more clicks skip further; double-click the top third or bottom middle = back to the previous size. Drag anywhere moves the window.
+- ★ Player keys: Space, ←/→ ±5 s, ↑/↓ volume; ⌘←/⌘→ Up Next. ★ The volume slider slides out of the speaker.
+- ★ Resizing resizes the video, and the quality follows the window (the "…" menu shows "Playing at …p").
+- ★ Videos and the music window are separate windows that never cover each other. A video never replaces the song in the music window.
+- ★ Music window: click the middle = play/pause; double-click the sides = ∓10 s; Space, ←/→, F, Esc. Commands reach the music app, never the video.
+- Resume where left off, Up Next, downloads, drop-to-replace and the panel's search all keep working (their own checks above).
+
+## Build 51 (requested 2026-10-29)
+
+- YouTube: no automatic embed/watch-page fallback; failure card with the reason; one signed-in retry for bot/age/members checks when an account is connected; "Still loading…" after 25 s, give up at 60 s; failures logged.
+- Quality follows the window: H.264 ladder (yt-dlp's pick + lower 720/480/360p) in the bridge's master playlist; `preferredMaximumResolution` = video area × scale × 1.25, updated on resize; "Playing at 720p" in the "…" menu.
+- Music window: music sources only (allowlist of music apps, or a non-browser app reporting audio); Music/Spotify broadcasts keep it current; Music/Spotify commands by AppleScript to that app (Automation asked on the click), other apps only while they hold the slot (else dimmed).
+- Music window input = the player's `PlayerSurfaceView`/`PlayerZone`: centre click play/pause with a brief ▶/⏸, side double-clicks ∓10 s stacking, top/bottom-middle double-click full screen, Space, ←/→ ±5 s, F, Esc.
+- Placement: a new player avoids the music window; the music window opens beside players; neither replaces the other.

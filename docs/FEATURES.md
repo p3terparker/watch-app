@@ -9,22 +9,28 @@
   ("Matching Links", favourites first, until the automatic search starts). Editing cancels the old request; late results cannot replace the current query. Links and paths still require Return; typing never auto-plays. **↑/↓ + Return** pick a row (Recent Links or results); **Esc** clears
   the field, then goes back, then hides the panel. The field is focused whenever the panel opens. The magnifier's
   menu lists **explicitly submitted recent searches** (never links or each typing pause) with **Clear Recent Searches**.
-- **Now Playing — see the artwork of what's playing anywhere:** while Music, Spotify, Podcasts, a browser video or any
-  other app is playing (or paused), the list starts with a **Now Playing** row — its artwork, the title and *artist ·
+- **Now Playing — see the artwork of the music that's playing:** while Music, Spotify, Podcasts or another music/audio
+  app is playing (or paused), the list starts with a **Now Playing** row — its artwork, the title and *artist ·
   app* (· **Paused**). Click it (or **⤢**) to **open the artwork** in a floating window like the players: it takes the
   panel's spot, starts at the artwork's own sharp size, drags and resizes freely, and **follows the music** — the next
-  track's artwork cross‑fades in without ever taking focus. Hover for the caption and "…"; right‑click or "…" →
+  track's artwork cross‑fades in without ever taking focus. **Only music changes it:** a video — in a browser tab or a
+  Watch player — never replaces the song (videos keep their own windows), and Music/Spotify's own track‑change
+  broadcasts keep it right even while a video holds macOS's single "now playing" slot. It answers clicks like a video
+  window: **click the middle** to play/pause (a brief ⏸/▶ shows), **double‑click the left/right side** to go back/forward
+  10 s (keep clicking to go further), **double‑click the top or bottom middle** for full screen; Space, ←/→ (±5 s), F.
+  Hover for the caption and "…"; right‑click or "…" →
   **Copy · Save…** (the original image, named *Artist – Album*) **· Open in Preview · Search YouTube for this song ·
   Show ‹App›**; Esc closes. A row without artwork brings that app forward instead. **Full screen:** double‑click the
-  artwork (or ⌃⌘F / F, the "…" menu, or the row's **Open Full Screen**): the artwork fills the middle of the screen over a
+  top or bottom middle (or ⌃⌘F / F, the "…" menu, or the row's **Open Full Screen**): the artwork fills the middle of the screen over a
   **gradient of its own colours** — or **black** (… ▸ Full‑Screen Background, remembered) — with the title and artist
   under it; they, the "…" and the pointer fade after a couple of idle seconds. It still follows the music; Esc leaves full screen.
   **Playback controls:** rest the pointer on the title at the bottom and quiet controls slide in under it — a thin
   timeline with elapsed / remaining time (drag to seek), **⏮ ⏯ ⏭**, and for Music and Spotify a small **volume** slider
-  that sets that app's own volume (macOS asks once, the first time you drag it). They tuck away when you move off. Watch
-  only acts on the other app when you click one of these. **It never touches playback** — Watch
-  only reads macOS's Now Playing information (no play/pause/skip, no permission prompts) and only while the panel or the
-  artwork window is open. Hidden while you type, when nothing is playing, or with Preferences ▸ *Show what's playing in
+  that sets that app's own volume (macOS asks once, the first time you drag it). They tuck away when you move off.
+  Music and Spotify are controlled directly (addressed to that app, so a click can never pause a video instead; macOS
+  asks once, on the first click); other music apps only while they hold the "now playing" slot (otherwise the buttons
+  dim). Watch only acts on another app when you click — it reads macOS's Now Playing information only while the panel
+  or the artwork window is open. Hidden while you type, when nothing is playing, or with Preferences ▸ *Show what's playing in
   other apps* off.
 - **Recent Links** — video links you copy or play, newest first: a **small thumbnail**, the title, and *site ·
   duration · how long ago*; a video you stopped part‑way shows where you left off (**12:34 / 45:10**) and a red
@@ -63,13 +69,20 @@
 - **YouTube sign‑in is in Preferences ▸ YouTube Account:** a status line plus **Sign In… / Sign Out / Check**. Sign In…
   opens a step‑by‑step assistant (pick browser → sign in there → allow access → Connect). Also here: the browser
   (Auto / Safari / Chrome), an optional account email, and the Chrome profile.
-- **Native playback, no embed errors:** a player window opens instantly with a spinner, yt‑dlp resolves the
+- **Native playback, never YouTube's web page:** a player window opens instantly with a spinner, yt‑dlp resolves the
   stream, and everything plays in **AVKit** (tiny hover controls, seeking):
   - **YouTube up to 1080p60** — YouTube's separate H.264 video + AAC audio files are bridged into an in‑memory
     **HLS playlist** (byte ranges from each file's `sidx` index), so playback starts in ~2 s and seeks instantly.
   - **Live streams** (YouTube Live, Twitch, …) play from their **HLS manifest** with adaptive quality.
   - Other yt‑dlp sites use their best HLS/MP4 stream; local files (path or drag‑drop) play directly.
-  - Fallback chain: next stream plan (e.g. 360p muxed) → YouTube IFrame embed → the page itself.
+  - **Quality follows the window:** YouTube's lower H.264 renditions (360/480/720p) go into the same playlist, and the
+    player caps the picture at the window's pixels (×1.25), so a small window plays 480p and a big one switches up to
+    1080p as you resize; the "…" menu says **Playing at 720p**.
+  - Fallback chain: next stream plan (e.g. one rendition, then 360p muxed). A YouTube video that still can't play
+    shows **why** in the window — never YouTube's own page — with **Sign In… / Try Again / Open in Browser / Copy
+    Details**. When YouTube asks to confirm you're not a bot (or for an age/members check) and a YouTube Account is
+    connected, Watch retries once with that browser's sign‑in first. Slow answers show "Still loading…" up to 60 s.
+    Each failure is logged to `~/Library/Logs/Watch/playback.log`. Other sites still fall back to their page.
 - **Downloads, in‑app:** ⬇ on any player window (or its "…" menu), next to the paste field, or on any search/
   History/playlist row. The menu is split into **Video** and **Audio**: **Original** video (the source file type
   and codecs, untouched — e.g. WebM/VP9/Opus), **MP4 (Highest Quality)** (top resolution, e.g. 4K; kept as‑is when
@@ -101,13 +114,13 @@
 - **Videos resume where you left off** — YouTube (by video, whatever the link looks like), other sites and local
   files — and a **"Resumed at 12:34 · Start Over"** chip says so for a few seconds (click it to play from the
   beginning). Resuming lands on the exact spot (within half a second). A link with `t=` starts there instead; a video
-  you watched to the end (or barely started) starts over. The YouTube embed fallback saves its place too.
+  you watched to the end (or barely started) starts over.
 - **Playlists carry on where you were:** opening a playlist link again (pasted, from Recent Links or Favourites, or
   via the URL scheme) starts at the video you were on — or the next one, if you'd finished it — with a
   **"Playlist: 8 of 20 · Start from the Top"** chip to go back to the beginning.
 - **The control panel always opens under the menu‑bar icon.** Dragging it off keeps it open until you hide it.
 - **Player windows remember the last one's position and size** (across launches). The first window reopens
-  where the last one was; more windows open **beside** the existing ones at that size, never overlapping, and
+  where the last one was; more windows open **beside** the existing ones (and the music window) at that size, never overlapping, and
   existing windows stay put. **Tile Windows** (in a player's menu and the panel's ••• menu, whenever 2+ players are
   open) sorts them all into a grid that fills that screen — each as large as fits at 16:9, keeping their
   top‑to‑bottom, left‑to‑right order; double‑click a tiled window to get its old size back. App Nap is disabled
@@ -146,7 +159,10 @@
 - **3.19** — **Now Playing artwork:** a Now Playing row for whatever another app is playing, opening its artwork in a
   floating window that follows the music (Copy · Save · Open in Preview · Search YouTube · Show ‹App›), with a full-screen
   mode over a gradient of the artwork's colours or black, and quiet playback controls under the caption (timeline,
-  ⏮ ⏯ ⏭, Music/Spotify volume) that act only when clicked. macOS Now Playing through the bundled, pinned
+  ⏮ ⏯ ⏭, Music/Spotify volume) that act only when clicked; music apps only (videos never replace the song), the
+  video window's click zones, Music/Spotify addressed directly. **YouTube plays natively again** — no automatic
+  YouTube web page: a failure card with the reason, a signed‑in retry for bot checks, a playback log — and **quality
+  follows the window size** (H.264 ladder + AVPlayer resolution cap). Windows never cover each other. macOS Now Playing through the bundled, pinned
   mediaremote-adapter; runs only while the panel or artwork window shows. Preferences toggle. **Video player:** the
   speaker icon slides out a volume slider on hover (↑/↓ too; new windows start at your last volume), and both
   sliders are a thinner, quieter line.

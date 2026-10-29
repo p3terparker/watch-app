@@ -9,7 +9,8 @@ progress, videos open in browser tabs (Safari + Chromium via AppleScript + in-pa
 link history. **Playback pipeline:** a player window opens instantly, `resolveStream` runs one `yt-dlp -j`
 and builds ordered plans, and everything plays in **AVPlayer** — YouTube HD (≤1080p60) through
 `DashHLSBridge` (split fMP4 → in-memory HLS with byte ranges), live streams via their HLS manifest, other
-sites via best HLS/MP4. Fallbacks: next plan → YouTube IFrame embed → the page. **Downloads** run yt-dlp
+sites via best HLS/MP4. Fallbacks: next plan → (YouTube) a failure card with the reason, never YouTube's web page;
+(other sites) the page. **Downloads** run yt-dlp
 in-app (`DownloadManager`: Video = Original / MP4 highest quality, Audio = Original / MP3 at source bit rate, plus presets, live recording; optional ask-where-to-save per download). **Player windows** are tiled by
 `WindowManager`; drop a link/file on a player to replace it, or on the menu-bar icon to open a new one.
 **YouTube browsing (3.6, from the retired Tube app):** search results / History / Playlists are in-panel pages (History +
@@ -43,18 +44,18 @@ once and unpinned — panel tabs Recent Links | ★ Favourites, `Prefs.showFavou
 favourites play with the list as Up Next), and **playlist progress** (`PlaylistProgress`, key `playlistProgress`: a
 playlist link reopens at the video it was on, or the next if that was finished). Resume made visible: a
 "Resumed at 12:34 · Start Over" / "Playlist: 8 of 20 · Start from the Top" chip (6 s, top-left); resume seeks within
-±0.5 s; the YouTube embed fallback now saves its position and marks watched (`time:<id>:<t>:<d>` / `ended:<id>`).
+±0.5 s.
 
 **3.16:** all Recent Links and Favourites are listed in the existing 320×250 scrolling panel; no All/Less button or automatic window growth. Typing searches after a 350 ms pause (`LiveSearch`), with immediate cancellation on edits, no auto-play for links/paths, and Return still searching immediately. See `UX_SPEC.md`. `Tests/panel.py` exercises the real UI with isolated preferences and delayed fixture responses.
 
 **3.17:** self-contained universal helpers in `Contents/Helpers`: yt-dlp/Python/EJS, FFmpeg, ffprobe and Deno. `MediaTools.swift` owns paths, environment and readiness checks; `Welcome.swift` provides the no-Terminal guide. Helpers update only with app replacement. `scripts/watch_helpers.py` verifies pinned inputs and builds FFmpeg/LAME without Homebrew dynamic dependencies. `Tests/bundled.py` exercises real helpers in a clean temporary home.
 
-**3.19 — Now Playing artwork:** while another app plays something (Music, Spotify, Podcasts, a browser video…) the panel's
+**3.19 — Now Playing artwork:** while a music app plays something (Music, Spotify, Podcasts…) the panel's
 list starts with a **Now Playing** row (24×24 artwork · title · "Artist · App · Paused"; hidden while filtering, when
 nothing plays, or with Preferences ▸ "Show what's playing in other apps" off). Click (or ⤢) opens the artwork in a
 floating `ArtworkWindowController` window that takes the panel's spot and **follows the music** (cross-fade, never takes
 focus); right-click / "…": Copy · Save… (original bytes, "Artist – Album.jpg") · Open in Preview · Search YouTube · Show
-‹App›. **Full screen** (double-click, ⌃⌘F/F, menu, or the row's Open Full Screen; Esc leaves): macOS full screen with the
+‹App›. **Full screen** (double-click the top/bottom middle, ⌃⌘F/F, menu, or the row's Open Full Screen; Esc leaves): macOS full screen with the
 artwork centred over a gradient of its own two main colours or black (Full-Screen Background ▸,
 `Prefs.artworkColourBackground`), caption under it, chrome + pointer hidden when idle; colour picking and layout are pure
 in `Sources/ArtworkStyle.swift` (tested). Source: macOS Now Playing via the bundled **mediaremote-adapter** (BSD-3, pinned commit in `Dependencies.json`
@@ -67,14 +68,25 @@ timeline (elapsed / -remaining), ⏮ ⏯ ⏭ and — for Music/Spotify — the a
 one short adapter `send`/`seek` run each). Thin white sliders (`ThinSlider`, `Sources/ThinSlider.swift`) are shared with the
 video player, whose speaker icon now slides out a volume slider on hover (↑/↓ keys too; `Prefs.playerVolume`). Pure logic +
 monitor in `Sources/NowPlaying.swift` (tested by `test.sh`); window, controls and actions in `Sources/ArtworkWindow.swift`.
+**Build 51:** YouTube never falls back to its web page (that page caused the ads, the missing click zones and the video
+thumbnail in the music window): `PlayerFailureView` with yt-dlp's reason, one signed-in retry for bot/age checks when a
+YouTube Account is connected, `PlaybackLog`. **Quality follows the window** (`StreamLadder` H.264 ladder in the bridge's
+master + `preferredMaximumResolution` on resize; "Playing at 720p" in the menu). The music window is **music only**
+(`NowPlayingInfo.isMusicSource`; Music/Spotify distributed notifications keep it current while a video holds the slot;
+Music/Spotify commands by AppleScript to that app, `MusicAppControl`) and uses the player's `PlayerSurfaceView`/`PlayerZone`
+(centre = play/pause, sides ∓10 s, top/bottom middle = full screen). `WindowManager.freeFrame`/`keepClear`: players and the
+music window never cover each other. Pure parts in `Sources/StreamSupport.swift` (tested). UX_SPEC's **Always works** list
+is checked by `Tests/panel.py` with an FFmpeg-made fixture video and fixture renditions.
 
 **Gotchas (see GOTCHAS.md):** never AppleScript an app by name unless it's running (uninstalled names pop a
 "Where is …?" chooser) and never send Apple Events without checking `AEDeterminePermissionToAutomateTarget`
 with ask=false first — no unrequested popups. Remote fMP4 in AVFoundation is unusably slow → the HLS bridge.
 A stale yt-dlp can cause YouTube failures — replace Watch with a newer build. Media tools are included. Browser-tab detection needs "Allow JavaScript from Apple Events" in the browser. App Nap is disabled while playing.
 Now Playing: never run the adapter's `test` (it registers a fake player); `send`/`seek` only from a click on the artwork
-window's controls, never automatically. AppleScript to Music/Spotify only for their volume, only when running, addressed by
-bundle id, and asking Automation only on the user's own drag (3.3 removed the automatic probes for their prompts).
+window (controls, click zones, keys), never automatically. Never auto-load YouTube's embed or watch page; never send cookies
+except the one retry after YouTube asked for a signed-in viewer with an account connected. AppleScript to Music/Spotify only for their volume, playback commands
+and artwork, only when running, addressed by bundle id, asking Automation only on the user's own drag or click (artwork only
+when already allowed; 3.3 removed the automatic probes for their prompts).
 
 **Build:** `./build.sh` (build only → `build/native/Watch.app`; add `--install` for an explicit install after quitting the app).
 
