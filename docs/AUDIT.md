@@ -1,6 +1,6 @@
 # Watch verification
 
-## 3.19 (49) — Now Playing artwork, 2026-10-28 (preview; hands-on acceptance pending)
+## 3.19 (49–51) — Now Playing artwork, 2026-10-28/29 (preview; hands-on acceptance pending)
 
 Adds the panel's Now Playing row and a floating artwork window that follows the music, with a full-screen mode over a gradient of the artwork's colours or black (`Sources/NowPlaying.swift`, `Sources/ArtworkWindow.swift`, `Sources/ArtworkStyle.swift`). macOS Now Playing is read through the bundled mediaremote-adapter (BSD-3, commit `0e82bf1c44ec39554fbfc402ec88a48c6ae2a0fd`, fetched by git and verified by commit hash), built universal for macOS 13 into `Contents/Frameworks/MediaRemoteAdapter.framework`. Only the adapter's read-only `stream` command is used, and only while the panel or the artwork window is showing. The bundle ID, preference keys (new: `showNowPlaying`, `artworkColourBackground`), hotkey and URL handler are unchanged. The prepared FFmpeg payload's fingerprint is unchanged, so existing helper caches stay valid.
 
@@ -35,8 +35,44 @@ Adds the panel's Now Playing row and a floating artwork window that follows the 
   - Player bar: the volume is tucked away at rest, slides out on hover and sets the volume, shows 0 when muted, tucks away afterwards, and never slides out in a narrow bar.
 - The workflow replaced the [v3.19-preview pre-release](https://github.com/p3terparker/watch-app/releases/tag/v3.19-preview) with "Watch 3.19 preview (50)". "Latest" still resolves to v3.18.
 
+### Build 51: native YouTube, quality follows the window, music-only music window (GitHub Actions, macos-15)
+
+What changed:
+- **YouTube:** no automatic embed or watch-page fallback. Instead there's a failure card, a playback log, and one signed-in retry for bot or age checks.
+- **Quality:** an H.264 rendition ladder in DashHLSBridge, with `preferredMaximumResolution` set from the video area.
+- **Music window:** takes music sources only, follows Music/Spotify broadcasts and addresses commands to them, and uses the player's click zones.
+- **Placement:** players and the music window are placed beside each other.
+
+Results:
+- **Linux first** (Swift 6.1, warnings as errors): 146 Foundation-only checks pass. They cover the rendition ladder, the resolution cap, failure reasons, the playback log, the music-source rule, broadcast parsing and the command scripts.
+- **[Run 40956720504](https://github.com/p3terparker/watch-app/actions/runs/40956720504), commit `a12ab87`:** everything passed except 4 of 153 GUI checks, so nothing was published.
+  - Three placement checks failed because the harness centred the music window on CI's 1024×768 screen, leaving no room beside it. The code then cascades, as designed.
+  - The quality switch-up failed because the test's AVPlayer had no video layer. AVFoundation weighs the displaying layer's size, so it stayed on the lowest rendition.
+- **[Run 40961215467](https://github.com/p3terparker/watch-app/actions/runs/40961215467), commit `b4b479e`:** the music window sits at its real top-right spot, and the bridge plays in a real `PlayerVideoView`. 562 Swift checks, 18 tooling tests, 12 real-helper checks and the installer verification pass. The GUI step passes **153 checks with 0 failures**:
+  - **Player:** the fixture video plays natively, with no web view.
+    - A centre click pauses and plays. Double-clicking the sides gives ∓10 s, and a quick run stacks.
+    - Space, ←/→ and ↑/↓ work, and so does the bar's volume slider.
+    - Resizing resizes the video and doubles the cap. The menu shows "Playing at 360p", and double-clicking the top restores the size.
+  - **Bridge:** the two-rendition playlist plays 180p in a 240×135 pt window and switches up to 360p at 880×495 pt.
+  - **Music window:**
+    - Videos from Chrome, WebKit (with a Safari parent or none) and Watch never replace the song.
+    - A centre click reaches Music itself (AppleScript fixture), not the app holding the slot.
+    - The click zones send play/pause and stacked ∓10 s seeks; Space and ←/→ work.
+    - Podcasts takes over, with no volume or timeline. Its controls dim once a video takes the slot.
+    - Music's broadcast changes the song and fetches its artwork; stopping clears it.
+  - **Placement:** a new player's spot avoids the music window, and so does the new player. The reopened music window avoids the player.
+- **Live YouTube** (informational; bundled yt-dlp 2026.10.26 from GitHub's data centre): 1 of 3 public videos resolved natively (1080p, about 4 s). The other two got "Sign in to confirm you're not a bot", the case build 51 handles with the signed-in retry and the failure card.
+- **[Run 40965040032](https://github.com/p3terparker/watch-app/actions/runs/40965040032), commit `beeca02`** (release notes only, same executable hash `30e1d88f…5e45`): all green again (GUI 153/0). It published "Watch 3.19 preview (51)": 230,315,957 bytes, SHA-256 `15dcd2183a5687fe5807021318b396299b3ead8a2c9105dd7488414a70e445fc`. "Latest" still resolves to v3.18.
+
 ### Pending (hands-on acceptance)
 
+- Build 51, by hand:
+  - Pasted YouTube links play in Watch's player, signed in and signed out.
+  - The failure card and its Sign In… on a bot-checked video.
+  - Quality switches up and down with real YouTube renditions as the window is resized.
+  - With Music playing, opening a video leaves the music window alone and opens beside it.
+  - The music window's clicks and keys on real Music/Spotify; the Automation prompt appears once, on the first click.
+  - The full-screen double-click, which isn't automated.
 - Build 50, by hand:
   - The controls act on the real Music/Spotify.
   - The one-time Automation prompt appears on the first volume release, then Music's own volume moves while the Mac's stays put.
