@@ -12,6 +12,7 @@ enum MediaSource: String, Codable, Equatable {
     case audio      // a local audio file or a direct link to one (Watch's own player, shown in the music window)
     case spotify    // a Spotify song or episode, played by the Spotify app
     case music      // a song in the Music app, played by Music
+    case podcast    // a podcast episode: its audio, played by Watch in the music window, resuming where it was left (3.22)
 
     static let audioExtensions: Set<String> = ["mp3", "m4a", "m4b", "aac", "wav", "aif", "aiff", "aifc", "caf", "flac"]
 
@@ -19,6 +20,7 @@ enum MediaSource: String, Codable, Equatable {
         let s = url.trimmingCharacters(in: .whitespacesAndNewlines)
         if SpotifyLink.isSpotify(s) { return .spotify }
         if s.hasPrefix(QueueItem.musicPrefix) { return .music }
+        if PodcastLinks.isEpisode(s) { return .podcast }       // an Apple Podcasts episode link: its audio is looked up
         if s.hasPrefix("/") || s.hasPrefix("file://") {
             let path = s.hasPrefix("file://") ? (URL(string: s)?.path ?? s) : s
             return audioExtensions.contains((path as NSString).pathExtension.lowercased()) ? .audio : .file
@@ -72,11 +74,14 @@ struct QueueItem: Codable, Equatable, Identifiable {
     var duration: Double?
     var source: MediaSource
     var added = false                     // put here with Play Next / Play Later, not by the list it came from
+    var page: String?                     // where it lives when that isn't `url`: a podcast episode's Apple Podcasts page
+    // Its resume position and ✓: a podcast episode's by its Apple Podcasts page when known (any link to it), else the link.
+    var resumeKey: String { VideoLinks.key(source == .podcast ? page ?? url : url) }
 
     init(url: String, title: String? = nil, subtitle: String? = nil, artwork: String? = nil, duration: Double? = nil,
-         source: MediaSource? = nil, added: Bool = false) {
+         source: MediaSource? = nil, added: Bool = false, page: String? = nil) {
         self.url = url; self.title = title; self.subtitle = subtitle; self.artwork = artwork; self.duration = duration
-        self.source = source ?? .of(url); self.added = added
+        self.source = source ?? .of(url); self.added = added; self.page = page
     }
 }
 enum RepeatMode: String { case off, all, one }

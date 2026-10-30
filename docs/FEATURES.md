@@ -1,4 +1,4 @@
-# Watch — v3.21 · Beta *(reworked)*
+# Watch — v3.22 · Beta *(reworked)*
 **Plays almost any video, from anywhere — and downloads it.** Hotkey **⌥⌘Y**.
 
 **Features**
@@ -52,6 +52,12 @@
   double‑click/Return plays a row, **Clear** removes your additions. Picking something else in Music/Spotify yourself
   makes Watch let go (**Resume** in the list); a media‑key Next while the app is in the background moves on through Up
   Next. Closing the music window ends the queue (a queued video keeps playing in its window).
+- **Podcasts (3.22):** search results have **YouTube | Podcasts** tabs — Podcasts searches Apple's podcast directory (no
+  account). Pick a show (or paste an Apple Podcasts show link or a feed) to see its episodes, newest first, with date,
+  length, a resume bar and ✓. Click an episode to play it in the **music window**; **+** adds it to Up Next (⌥ = Play
+  Next), **↗** opens it in Apple Podcasts, **⬇** downloads it; right‑click to Mark as Played. Episodes **resume where you
+  left off** and get their ✓ when finished. Pasting an Apple Podcasts **episode** link plays it the same way, and copied
+  episode links appear in Recent Links. Double‑click the music window to open the episode in Apple Podcasts.
 - **Recent Links** — video links you copy or play, newest first: a **small thumbnail**, the title, and *site ·
   duration · how long ago*; a video you stopped part‑way shows where you left off (**12:34 / 45:10**) and a red
   **resume bar** on its thumbnail, a live stream shows LIVE. Each video appears **once**, whatever link shape it was copied as
@@ -170,12 +176,18 @@
 - Now Playing relies on a workaround (system perl loading the bundled MediaRemote adapter) for macOS 15.4+'s
   restriction on reading Now Playing information. If a future macOS closes it, the row simply stops appearing.
 - Some sites block yt‑dlp from certain networks (e.g. Vimeo 403) — those fall back to loading the page.
+- Podcasts: paid (Apple Podcasts Subscriptions) and private feeds aren't playable; a show page lists the newest 200
+  episodes from Apple's directory (its feed when the directory has none). Apple Podcasts' own library and listening
+  history aren't read.
 - In‑window YouTube quality caps at 1080p (H.264); 1440p/4K are VP9/AV1 only.
 - Up Next's **recommendations aren't personalized** — they're read from the public watch page, not your signed‑in
   account (playlists and History still use your sign‑in). If YouTube reshapes that page, Next simply has nothing
   to go to until it's taught the new shape; lists you played from keep working.
 
 **Changelog**
+- **3.22** — **Podcasts:** YouTube | Podcasts tabs on search results, show pages with episodes, Apple Podcasts show/episode
+  links and feeds in the field, episodes played in the music window with resume and ✓. The Up Next list never covers the
+  music window on small screens (the window moves up for it).
 - **3.21** — **Up Next:** one queue under the music window for videos, audio files/links and Spotify songs, with Play Next
   / Play Later everywhere, ⌥Return, drops, a `queue` URL, editing (drag, ⌫, Clear), History, and slotting into Music or
   Spotify at a song's end, then handing back. Spotify links are played by the Spotify app and kept in Recent Links.

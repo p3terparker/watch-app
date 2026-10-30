@@ -361,13 +361,13 @@ final class QueueTableView: NSTableView {
 final class QueueRowView: NSTableCellView {
     init(item: QueueItem, playing: Bool, played: Bool) {
         super.init(frame: .zero)
-        let music = item.source == .audio || item.source.isExternal
+        let music = item.source == .audio || item.source == .podcast || item.source.isExternal
         let thumb = ThumbView()
         thumb.imageScaling = .scaleProportionallyUpOrDown
         thumb.wantsLayer = true; thumb.layer?.cornerRadius = 3; thumb.layer?.masksToBounds = true
         thumb.contentTintColor = .tertiaryLabelColor
         if let art = item.artwork ?? VideoLinks.thumbnail(item.url) { thumb.load(art) }
-        else { thumb.show(sym(item.source == .spotify ? "music.note.list" : music ? "music.note" : "play.rectangle")) }
+        else { thumb.show(sym(item.source == .spotify ? "music.note.list" : item.source == .podcast ? "antenna.radiowaves.left.and.right" : music ? "music.note" : "play.rectangle")) }
         let title = NSTextField(labelWithString: item.title ?? QueueRowView.fallbackTitle(item))
         title.font = .systemFont(ofSize: 12, weight: playing ? .semibold : .medium)
         title.lineBreakMode = .byTruncatingTail
@@ -400,6 +400,7 @@ final class QueueRowView: NSTableCellView {
         switch item.source {
         case .spotify: return "Spotify"
         case .music:   return "Music"
+        case .podcast: return "Podcast"
         case .file:    return "File"
         case .audio:   return item.url.hasPrefix("/") || item.url.hasPrefix("file://") ? "File" : VideoLinks.site(item.url)
         case .web:     return VideoLinks.site(item.url)

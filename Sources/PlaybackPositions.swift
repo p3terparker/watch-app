@@ -2,7 +2,8 @@ import Foundation
 
 // Where each video was left off, so reopening it resumes there. One UserDefaults dictionary
 // (`playbackPositions`): key → [seconds, last-saved time]. Keys: `yt:<id>` for YouTube (any link shape
-// to the same video resumes), the path for local files, the URL for everything else.
+// to the same video resumes), `podcast:<episode id>` for Apple Podcasts episodes, the path for local files, the URL
+// for everything else.
 struct PlaybackPositions {
     static let shared = PlaybackPositions(defaults: .standard)
     static let limit = 300          // newest entries kept
@@ -13,6 +14,7 @@ struct PlaybackPositions {
 
     static func key(source: String, youtubeID: String?) -> String {
         if let id = youtubeID { return "yt:" + id }
+        if let episode = PodcastLinks.parse(source)?.episode { return "podcast:" + episode }   // any Apple Podcasts link to it
         if source.hasPrefix("file://"), let u = URL(string: source) { return u.standardizedFileURL.path }
         if source.hasPrefix("/") { return URL(fileURLWithPath: source).standardizedFileURL.path }
         return source

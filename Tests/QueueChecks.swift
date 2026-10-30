@@ -71,7 +71,7 @@ func checkQueue() {
     var provisional = PlayQueue(kind: .list, name: "Up Next", items: [QueueItem(url: "https://youtu.be/lone", title: "lone")])
     provisional.insert([QueueItem(url: "/tmp/p1.mp3", title: "p1"), QueueItem(url: "https://youtu.be/p2", title: "p2")], .later)
     let context = PlayQueue(kind: .recommended, name: "YouTube Recommended",
-                            items: ["lone", "r1", "r2"].map { QueueItem(url: "https://youtu.be/\($0)", title: $0) })
+                            items: ["lone", "r1", "r2"].map { (t: String) in QueueItem(url: "https://youtu.be/\(t)", title: t) })
     let merged = provisional.merged(into: context)
     expect(titles(merged) == ["lone", "p1", "p2", "r1", "r2"] && merged.kind == .recommended && merged.current?.title == "lone",
            "additions go between the video and the list that arrived later: \(titles(merged))")

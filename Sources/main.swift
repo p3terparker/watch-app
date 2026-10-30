@@ -2648,17 +2648,23 @@ enum BrowsePage {
     case results(String, SearchPage)                  // a YouTube search: (query, results)
     case playlists([YTPlaylist])
     case message(String, String, action: MessageAction)
+    case shows(String, [PodcastShow])                 // a podcast search: (query, shows) (3.22)
+    case episodes(PodcastShow, [PodcastEpisode])      // a show's episodes, newest first
     var title: String {
         switch self {
         case .loading(let t, _), .videos(let t, _), .message(let t, _, _): return t
-        case .results(let q, _): return "“\(q)”"
+        case .results(let q, _), .shows(let q, _): return "“\(q)”"
         case .playlists: return "Playlists"
+        case .episodes(let show, _): return show.title
         }
     }
 }
-// A page plus how to load it again (Try Again). The fetch returns the yt-dlp task when it can be cancelled.
+// What the field's searches look in: YouTube, or podcasts (the tabs above search results). Kept until Watch quits.
+enum SearchService { case youtube, podcasts }
+// A page plus how to load it again (Try Again). The fetch returns the yt-dlp task when it can be cancelled. `search` is
+// the query of a search page (its YouTube | Podcasts tabs).
 typealias BrowseFetch = (@escaping (BrowsePage) -> Void) -> YtDlpTask?
-struct BrowseEntry { var page: BrowsePage; let fetch: BrowseFetch? }
+struct BrowseEntry { var page: BrowsePage; let fetch: BrowseFetch?; var search: String? = nil }
 
 // A menu item that runs a closure (row context menus).
 final class ClosureMenuItem: NSMenuItem {
@@ -2748,6 +2754,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     var browseToken = 0
     var browseTask: YtDlpTask?                  // the page's running yt-dlp call; a newer page or Back cancels it
     var searchCache = SearchCache<SearchPage>()
+    var podcastCache = SearchCache<[PodcastShow]>()
+    var searchService = SearchService.youtube
     let liveSearch = LiveSearch()
     var activeSearchQuery: String?
     var downloadsHeader: NSView!
@@ -3278,6 +3286,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         q.control = musicControl
         q.onChange = { [weak self] in self?.queueDrawer?.reload(); self?.refreshControllable() }
         q.show = { [weak self] info in self?.showQueueItem(info) }
+        q.resolveEpisode = { [weak self] link, done in
+            guard let self = self else { done(nil); return }
+            self.resolveEpisode(link) { e in
+                // A looked-up episode link names its Recent Links row.
+                if let e = e, self.links.link(for: link) != nil, self.links.link(for: link)?.title == nil {
+                    self.links.update(link, with: LinkInfo(title: e.title, thumbnail: e.artwork, duration: e.duration)); self.rebuildClipSection()
+                }
+                done(e)
+            }
+        }
         q.openVideo = { [weak self] link, _ in
             guard let self = self else { return nil }
             let pc = self.windowManager.open(link, anchor: self.statusItem)
@@ -3349,7 +3367,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     // A queue row's own menu: where it lives, Copy Link, Favourites.
     private func queueItemMenu(_ item: QueueItem) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
-        if item.url.hasPrefix("/") || item.url.hasPrefix("file://") {
+        if item.source == .podcast, let page = (item.page ?? (PodcastLinks.isEpisode(item.url) ? item.url : nil)).flatMap(URL.init(string:)) {
+            items.append(ClosureMenuItem("Open in Apple Podcasts") { NSWorkspace.shared.open(page) })
+        } else if item.url.hasPrefix("/") || item.url.hasPrefix("file://") {
             let path = item.url.hasPrefix("file://") ? (URL(string: item.url)?.path ?? item.url) : item.url
             items.append(ClosureMenuItem("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) })
         } else if SpotifyLink.uri(item.url) != nil {
@@ -3358,7 +3378,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             items.append(ClosureMenuItem("Open in Browser") { NSWorkspace.shared.open(page) })
         }
         if !item.url.isEmpty, !item.url.hasSuffix(":") {
-            let link = SpotifyLink.isSpotify(item.url) ? SpotifyLink.webURL(item.url) : item.url
+            let link = SpotifyLink.isSpotify(item.url) ? SpotifyLink.webURL(item.url) : item.page ?? item.url
             items.append(ClosureMenuItem("Copy Link") { [weak self] in
                 let pb = NSPasteboard.general
                 pb.clearContents(); pb.setString(link, forType: .string)
@@ -3423,6 +3443,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             }
             if item.source == .spotify {
                 SpotifyOEmbed.info(item.url) { [weak self] info in self?.upNext.update(item.id, title: info?.title, artwork: info?.thumbnail) }
+            } else if item.source == .podcast, PodcastLinks.isEpisode(item.url) {
+                resolveEpisode(item.url) { [weak self] e in self?.upNext.update(item.id, title: e?.title, artwork: e?.artwork) }
             } else if item.source == .web {
                 probeLink(item.url) { [weak self] info in self?.upNext.update(item.id, title: info?.title, artwork: VideoLinks.thumbnail(item.url) ?? info?.thumbnail) }
             }
@@ -3463,7 +3485,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         switch OmniboxInput.parse(query) {
         case .play:            text = "Return plays this link · ⌥Return adds it to Up Next."
         case .playlist:        text = "Return lists this playlist · ⌥Return adds its videos to Up Next."
-        case .search(let q):   text = "Searching YouTube for “\(q)”… Return searches now."
+        case .podcast:         text = "Return lists this podcast's episodes."
+        case .search(let q):   text = "Searching \(searchService == .podcasts ? "podcasts" : "YouTube") for “\(q)”… Return searches now."
         case .empty:           text = ""
         }
         let l = hint(text); l.font = .systemFont(ofSize: 11); l.textColor = .tertiaryLabelColor
@@ -3731,6 +3754,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         case .empty:            playClipboard()
         case .play(let s):      searchField.stringValue = ""; rebuildClipSection(); play(s)
         case .playlist(let s):  openPlaylist(s, title: "Playlist", root: true)
+        case .podcast(let s):   openPodcast(s, root: true)
         case .search(let q):    search(q)
         }
     }
@@ -3836,13 +3860,166 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         if remember { RecentSearches.shared.add(q); rebuildSearchMenu() }
         if activeSearchQuery == q, let page = browseStack.last?.page {
             switch page {
-            case .loading, .results: return   // Return during live search must not restart it.
-            default: break                   // Explicit Return retries a failed search.
+            case .loading, .results, .shows: return   // Return during live search must not restart it.
+            default: break                           // Explicit Return retries a failed search.
             }
         }
-        let cached = searchCache.value(for: q).map { BrowsePage.results(q, $0) }
-        openPage("“\(q)”", root: true, initial: cached, note: "Searching YouTube…", searchFetch(q, limit: YouTube.searchLimit))
+        if searchService == .podcasts {
+            let cached = podcastCache.value(for: q).map { BrowsePage.shows(q, $0) }
+            openPage("“\(q)”", root: true, initial: cached, note: "Searching podcasts…", search: q, podcastSearchFetch(q))
+        } else {
+            let cached = searchCache.value(for: q).map { BrowsePage.results(q, $0) }
+            openPage("“\(q)”", root: true, initial: cached, note: "Searching YouTube…", search: q, searchFetch(q, limit: YouTube.searchLimit))
+        }
         activeSearchQuery = q
+    }
+    // The YouTube | Podcasts tabs above a search's results: the same query, looked up in the other place.
+    @objc func searchServiceChosen(_ sender: NSSegmentedControl) {
+        let service: SearchService = sender.selectedSegment == 1 ? .podcasts : .youtube
+        guard service != searchService, let q = browseStack.last?.search else { return }
+        searchService = service
+        activeSearchQuery = nil
+        search(q, remember: false)
+    }
+    private func searchTabs() -> NSView {
+        let tabs = NSSegmentedControl(labels: ["YouTube", "Podcasts"], trackingMode: .selectOne, target: self, action: #selector(searchServiceChosen(_:)))
+        tabs.selectedSegment = searchService == .podcasts ? 1 : 0
+        tabs.controlSize = .small
+        tabs.refusesFirstResponder = true                    // typing stays in the field
+        tabs.setAccessibilityLabel("Search in")
+        let wrap = NSStackView(views: [tabs]); wrap.edgeInsets = NSEdgeInsets(top: 2, left: 4, bottom: 4, right: 0)
+        return wrap
+    }
+
+    // MARK: podcasts (3.22) — iTunes Search / Lookup and feeds (Podcasts.swift); episodes play in the music window
+    // Boundaries for live service calls; the isolated UI harness substitutes fixture answers.
+    func performPodcastSearch(_ query: String, completion: @escaping ([PodcastShow]?, String) -> Void) {
+        PodcastDirectory.search(query, completion: completion)
+    }
+    func fetchEpisodes(_ link: String, completion: @escaping (PodcastShow?, [PodcastEpisode], String) -> Void) {
+        PodcastDirectory.episodes(link, completion: completion)
+    }
+    // An Apple Podcasts episode link → the episode: its show's lookup, else yt-dlp (which reads older episodes' pages).
+    func resolveEpisode(_ link: String, completion: @escaping (PodcastEpisode?) -> Void) {
+        PodcastDirectory.episode(link) { found in
+            if let e = found { completion(e); return }
+            YtDlp.captureWithError(["-J", "--no-playlist", "--no-warnings", link], timeout: 40) { data, _ in
+                let j = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                guard let j = j, let audio = j["url"] as? String, let title = j["title"] as? String else { completion(nil); return }
+                let ids = PodcastLinks.parse(link)
+                completion(PodcastEpisode(title: title, audioURL: audio, duration: (j["duration"] as? Double) ?? (j["duration"] as? Int).map(Double.init),
+                                          artwork: j["thumbnail"] as? String, show: (j["series"] as? String) ?? (j["uploader"] as? String),
+                                          appleID: ids?.episode, showID: ids?.show))
+            }
+        }
+    }
+    private func podcastSearchFetch(_ q: String) -> BrowseFetch {
+        return { [weak self] done in
+            guard let self = self else { return nil }
+            let token = self.browseToken
+            self.performPodcastSearch(q) { [weak self] shows, e in
+                guard let self = self, token == self.browseToken else { return }
+                guard let shows = shows else {
+                    done(.message("“\(q)”", "Couldn't search podcasts. Check your connection, then try again.\n\n\(e)", action: .retry)); return
+                }
+                self.podcastCache.store(shows, for: q)
+                done(.shows(q, shows))
+            }
+            return nil
+        }
+    }
+    // A show's episodes: an Apple Podcasts show link or a feed.
+    func openPodcast(_ link: String, title: String = "Podcast", root: Bool) {
+        openPage(title, root: root, note: "Loading episodes…") { [weak self] done in
+            self?.fetchEpisodes(link) { show, episodes, e in
+                guard let show = show else {
+                    done(.message(title, "Couldn't read this podcast. Check your connection, then try again.\n\n\(e)", action: .retry)); return
+                }
+                done(.episodes(show, episodes))
+            }
+            return nil
+        }
+    }
+    static func showLink(_ show: PodcastShow) -> String? {
+        show.appleID.map { "https://podcasts.apple.com/podcast/id\($0)" } ?? show.feedURL
+    }
+    // Play an episode now, in the music window, with Up Next carrying on after it.
+    func playEpisode(_ episode: PodcastEpisode) {
+        liveSearch.cancel()
+        upNext.playNow([episode.queueItem()])
+        showQueue()
+    }
+    // An Apple Podcasts episode link (the field, Recent Links, the URL scheme): Up Next looks it up and plays it.
+    func playEpisodeLink(_ link: String) {
+        recordLink(link, probe: false)                        // its title and picture arrive with the lookup (makeUpNext)
+        upNext.playNow([QueueItem(url: link, source: .podcast)])
+        showQueue()
+    }
+    private func showRow(_ show: PodcastShow) -> BrowseRowView {
+        let row = BrowseRowView(thumb: show.artwork, title: show.title, meta: show.author ?? "Podcast", accessory: nil, square: true)
+        let link = Self.showLink(show)
+        row.toolTip = link
+        row.onClick = { [weak self] in if let l = link { self?.openPodcast(l, title: show.title, root: false) } }
+        row.onMenu = { [weak self] in
+            let m = NSMenu()
+            m.addItem(ClosureMenuItem("Show Episodes") { if let l = link { self?.openPodcast(l, title: show.title, root: false) } })
+            if let id = show.appleID, let u = URL(string: "https://podcasts.apple.com/podcast/id\(id)") {
+                m.addItem(ClosureMenuItem("Open in Apple Podcasts") { NSWorkspace.shared.open(u) })
+            }
+            if let l = link { m.addItem(ClosureMenuItem("Copy Link") { self?.copyLink(l) }) }
+            return m
+        }
+        return row
+    }
+    private static let episodeDate: DateFormatter = {
+        let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .none; f.doesRelativeDateFormatting = true; return f
+    }()
+    private func episodeRow(_ e: PodcastEpisode, _ marks: LibraryMarks) -> BrowseRowView {
+        let item = e.queueItem(), key = item.resumeKey
+        let meta = [e.published.map { Self.episodeDate.string(from: $0) } ?? "", formatDuration(e.duration)].filter { !$0.isEmpty }.joined(separator: " · ")
+        var progress: Double?
+        if let p = PlaybackPositions.shared.position(for: key), let d = e.duration, d > 0 { progress = p / d }
+        let later = ClosureButton(symbol: "text.badge.plus", tip: "Play Later — ⌥-click: Play Next") { [weak self] _ in
+            self?.enqueue([e.queueItem()], NSEvent.modifierFlags.contains(.option) ? .next : .later)
+        }
+        var buttons: [NSView] = [later]
+        if let page = e.page.flatMap(URL.init(string:)) {
+            buttons.append(ClosureButton(symbol: "arrow.up.right.square", tip: "Open in Apple Podcasts") { _ in NSWorkspace.shared.open(page) })
+        }
+        buttons.append(ClosureButton(symbol: "arrow.down.circle", tip: "Download") { [weak self] b in
+            self?.popDownloadMenu(for: e.audioURL, title: e.title, from: b)
+        })
+        let accessory = NSStackView(views: buttons); accessory.spacing = 4
+        let row = BrowseRowView(thumb: e.artwork, title: e.title, meta: meta, accessory: accessory, watched: marks.watched.contains(key),
+                                progress: progress, square: true)
+        row.toolTip = e.page ?? e.audioURL
+        row.onClick = { [weak self] in self?.playEpisode(e) }
+        row.onMenu = { [weak self] in self?.episodeMenu(e) }
+        return row
+    }
+    func episodeMenu(_ e: PodcastEpisode) -> NSMenu {
+        let m = NSMenu(), key = e.queueItem().resumeKey
+        m.addItem(ClosureMenuItem("Play") { [weak self] in self?.playEpisode(e) })
+        m.addItem(ClosureMenuItem("Play Next") { [weak self] in self?.enqueue([e.queueItem()], .next) })
+        m.addItem(ClosureMenuItem("Play Later") { [weak self] in self?.enqueue([e.queueItem()], .later) })
+        let dl = NSMenuItem(title: "Download", action: nil, keyEquivalent: "")
+        dl.submenu = downloadMenu(for: e.audioURL, title: e.title); m.addItem(dl)
+        m.addItem(.separator())
+        m.addItem(ClosureMenuItem("Copy Link") { [weak self] in self?.copyLink(e.page ?? e.audioURL) })
+        if let page = e.page.flatMap(URL.init(string:)) { m.addItem(ClosureMenuItem("Open in Apple Podcasts") { NSWorkspace.shared.open(page) }) }
+        m.addItem(.separator())
+        let played = WatchedVideos.shared.isWatched(key)
+        m.addItem(ClosureMenuItem(played ? "Mark as Unplayed" : "Mark as Played") { [weak self] in
+            if played { WatchedVideos.shared.unmark(key) } else { WatchedVideos.shared.mark(key) }
+            PlaybackPositions.shared.clear(key)
+            self?.libraryChanged()
+        })
+        return m
+    }
+    func copyLink(_ link: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents(); pb.setString(link, forType: .string)
+        lastClipboardChangeCount = pb.changeCount            // copying from Watch isn't a newly copied link
     }
     // One boundary for live service calls; the isolated UI harness substitutes delayed fixture results.
     func performSearch(_ query: String, limit: Int, completion: @escaping ([YTVideo]?, String) -> Void) -> YtDlpTask {
@@ -3934,12 +4111,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     func presentPanel() { if !(dropdown.isVisible && dropdown.isOnActiveSpace) { togglePanel() } }
     // Push a page that shows a spinner until `fetch` delivers its content (`initial`, e.g. cached results, shows
     // at once instead). A newer page or Back cancels the running fetch and drops its late result.
-    private func openPage(_ title: String, root: Bool, initial: BrowsePage? = nil, note: String = "Loading…", _ fetch: @escaping BrowseFetch) {
+    private func openPage(_ title: String, root: Bool, initial: BrowsePage? = nil, note: String = "Loading…", search: String? = nil,
+                          _ fetch: @escaping BrowseFetch) {
         liveSearch.cancel()
         activeSearchQuery = nil
         browseTask?.cancel(); browseTask = nil
         if root { browseStack = [] }
-        browseStack.append(BrowseEntry(page: initial ?? .loading(title, note: note), fetch: fetch))
+        browseStack.append(BrowseEntry(page: initial ?? .loading(title, note: note), fetch: fetch, search: search))
         browseToken += 1
         renderBrowse()
         if initial == nil { runFetch(fetch) }
@@ -4007,6 +4185,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
                 add(row)
             }
         }
+        if browseStack.last?.search != nil { add(searchTabs(), fill: false) }
         switch page {
         case .loading(_, let note):
             let sp = NSProgressIndicator(); sp.style = .spinning; sp.controlSize = .small; sp.startAnimation(nil)
@@ -4038,6 +4217,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
                 let wrap = NSStackView(views: [more]); wrap.edgeInsets = NSEdgeInsets(top: 6, left: 4, bottom: 4, right: 0)
                 add(wrap, fill: false)
             }
+        case .shows(let q, let shows):
+            if shows.isEmpty { add(hint("No podcasts found for “\(q)”."), fill: false) }
+            shows.forEach { add(showRow($0)) }
+        case .episodes(_, let episodes):
+            if episodes.isEmpty { add(hint("This podcast has no episodes Watch can play."), fill: false) }
+            episodes.forEach { add(episodeRow($0, marks)) }
         case .playlists(let ps):
             browseAction.isHidden = ps.isEmpty
             if ps.isEmpty { add(hint("No playlists found."), fill: false) }
@@ -4135,6 +4320,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         let input = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }
         if SpotifyLink.isSpotify(input) { playSpotify(input); return }       // the Spotify app plays it, as Up Next's item
+        if PodcastLinks.isEpisode(input) { playEpisodeLink(input); return }  // Watch plays the episode's audio in the music window
         let local = isLocalMedia(input)
         guard local || looksLikeURL(input) else { flash("Not a recognizable video link"); return }
         // The first video turns the panel into the player: it opens on the panel's spot and the panel hides

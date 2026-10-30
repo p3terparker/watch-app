@@ -1,6 +1,6 @@
 # Watch — where everything lives
 
-A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift`, `ArtworkWindow.swift`, `ArtworkStyle.swift` and `StreamSupport.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.21** — native AVKit playback for YouTube (HD + live), in-app
+A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift`, `ArtworkWindow.swift`, `ArtworkStyle.swift`, `StreamSupport.swift`, `Queue.swift`, `Handoff.swift`, `UpNext.swift`, `QueueDrawer.swift` and `Podcasts.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.22** — native AVKit playback for YouTube (HD + live), in-app
 downloads, YouTube search / History / Playlists in the panel (absorbed from the retired Tube app), an
 **Up Next** list per player window (Next/Previous · Autoplay · Repeat All/One · Shuffle), and a small library:
 watched marks, Favourites and playlist progress — plus a **Now Playing** row showing what other apps play, whose artwork
@@ -33,15 +33,19 @@ opens in a window that follows the music. See `docs/FEATURES.md` for the feature
   sample, toned for white text), `ArtworkLayout.fullScreen` (artwork + caption rects) and `ArtworkLayout.controlRow` (the music
   window's one row of controls, 3.20). Foundation (+ CoreGraphics);
   `test.sh` covers it.
-- `Sources/Queue.swift` (3.21) — `MediaSource` (`web`/`file`/`audio`/`spotify`/`music`, `of(_:)`), `SpotifyLink` (song/episode URIs,
-  `webURL`), `QueueItem` (id, url, title, subtitle, artwork, duration, source, `added`; Codable), `RepeatMode`, `QueueSections`
+- `Sources/Queue.swift` (3.21) — `MediaSource` (`web`/`file`/`audio`/`spotify`/`music`/`podcast`, `of(_:)`), `SpotifyLink` (song/episode URIs,
+  `webURL`), `QueueItem` (id, url, title, subtitle, artwork, duration, source, `added`, `page`, `resumeKey`; Codable), `RepeatMode`, `QueueSections`
   and `PlayQueue` (see "Up Next"). Foundation only; `test.sh` covers it (`Tests/QueueChecks.swift`).
 - `Sources/Handoff.swift` (3.21) — `Handoff.judge` (what a music app's next report means while one of its songs is the
   queue's current item), `Handoff.spotifyPlayScript`, `QueueRoute.pick`. Foundation only; `test.sh` covers it.
 - `Sources/UpNext.swift` (3.21) — `UniversalQueue` (the app-wide queue under the music window and where its item plays),
   `OwnPlaybackControl` (the music window's volume/commands for Watch's own item), `SpotifyOEmbed`.
 - `Sources/QueueDrawer.swift` (3.21) — `QueueDrawer` (the drop-down list: child window, `NSTableView`, drag/drop),
-  `QueueTableView`, `QueueRowView`.
+  `QueueTableView`, `QueueRowView`. Its placement is `DrawerLayout` in `Sources/Tiling.swift` (3.22, tested).
+- `Sources/Podcasts.swift` (3.22) — `PodcastEpisode` (+ `page`, `queueItem()`), `PodcastShow`, `PodcastLinks` (Apple Podcasts
+  show/episode ids, feed-looking links, the Search/Lookup URLs), `ITunesPodcasts` (Search/Lookup JSON), `PodcastFeed` (RSS via
+  `XMLParser`, durations, RFC 822 dates) — Foundation only, `test.sh` covers it (`Tests/PodcastChecks.swift`) — and
+  `PodcastDirectory` (the network calls: search, a show's episodes via its lookup or feed, one episode by its link).
 - `Sources/StreamSupport.swift` — `StreamLadder` (the lower H.264 renditions to offer beside yt-dlp's pick; the resolution cap
   for a video area; the "720p" label), `PlaybackFailure` (does yt-dlp's error want a signed-in viewer; the reason worth
   showing) and `PlaybackLog` (`~/Library/Logs/Watch/playback.log`, 256 KB, whole lines). Foundation (+ CoreGraphics); `test.sh` covers it.
@@ -163,7 +167,8 @@ queue under the music window (`UniversalQueue`, below).
   folder cover as fallback. `.video`: `openVideo` (WindowManager, beside the music window), `onEnded`/`onStep`/`onClosed`
   hooks, a 1 s refresh and the thumbnail. `command`, `setVolume`, `openSource` serve the music window for its own item;
   `musicWindowClosed` ends the queue.
-- `QueueDrawer` — child window of the music window (`show(under:)`, `place()`: under it, flipping above; follows
+- `QueueDrawer` — child window of the music window (`show(under:)`, `place()` → `DrawerLayout.place`: under it, else above,
+  else the window moves up just enough — never while it's dragged or resized — shrinking the list on a short screen; follows
   resize/move; hides on full screen and close). `reload()` builds `rows` (`.header`, `.historyToggle`, `.item(item, section)`,
   `.note`) and `dropTargets` (the play-order position a drop above each row means). Drag rows (private pasteboard type with
   the ids) → `onMove`; external drops (`items(from:)`: files, folders' media, links/Spotify, one per line) → `onInsert`; ⌫ →
@@ -173,6 +178,23 @@ queue under the music window (`UniversalQueue`, below).
   `toggleQueueDrawer`, `makeQueueDrawer`, `queueItemMenu`, `playSpotify`, `showQueueItem`, `presentMusicWindow`,
   `refreshControllable`. `send(_:to:)` routes Watch's own id to the queue. Row menus have Play Next / Play Later, `rowButtons`
   a + (⌥ = next), the field ⌥Return, `DragReceiverView.onDropMany`, `handleURLEvent` the `queue` host.
+
+### Podcasts — `Podcasts.swift` + the panel (3.22)
+- Search: `searchService` (`.youtube`/`.podcasts`, kept until quit) picks what `search(_:)` opens; search pages carry their
+  query (`BrowseEntry.search`) and render `searchTabs()` (YouTube | Podcasts, `searchServiceChosen` re-runs the query).
+  `podcastSearchFetch` → `performPodcastSearch` (boundary; `PodcastDirectory.search`) → `.shows(q, shows)`, cached 10 min in
+  `podcastCache`. `showRow` → `openPodcast(link)` (`Self.showLink`: the Apple Podcasts id, else the feed) → `fetchEpisodes`
+  (boundary; the lookup's newest 200, else the feed) → `.episodes(show, episodes)` → `episodeRow` (square art, date ·
+  length, resume bar, ✓, + / ↗ Apple Podcasts / ⬇) and `episodeMenu` (Play / Next / Later, Download, Copy Link, Open in Apple
+  Podcasts, Mark as Played).
+- Playing: `playEpisode` (a row) → `upNext.playNow([episode.queueItem()])`; `playEpisodeLink` (`play()` of an Apple Podcasts
+  episode link, Recent Links, the URL scheme) queues the bare link. `UniversalQueue.playPodcast` looks a bare link up
+  (`resolveEpisode`: the show's lookup, else `yt-dlp -J`; AppDelegate names the Recent Links row), then `playNative`: for
+  `.podcast` items the episode's picture, the resume seek once the item is ready (±0.5 s), `savePosition` every 5 s / on
+  pause / on stop (`PlaybackPositions` + `WatchedVideos.noteProgress`), ✓ and a cleared position at the end.
+  `openSource` opens the episode's Apple Podcasts page.
+- Keys: `QueueItem.resumeKey` — `PlaybackPositions.key` gives every Apple Podcasts link to one episode `podcast:<id>`, so a
+  pasted link, Recent Links and the episodes page share one resume point and ✓.
 
 ### Downloads — `DownloadKind` / `DownloadJob` / `DownloadManager`
 - `DownloadKind` — `.originalVideo` (`bv*+ba/b`, source container) · `.mp4Best` · `.originalAudio` (`-x`, no

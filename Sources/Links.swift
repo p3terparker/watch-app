@@ -64,6 +64,7 @@ enum VideoLinks {
         if parseYouTube(text) != nil || isYouTubePlaylist(text) { return .video }
         if host.contains("youtube.com") || host.contains("youtu.be") { return .other }   // channel, home, feed pages
         if host == "open.spotify.com" { return spotifyInstalled && SpotifyLink.uri(text) != nil ? .video : .other }   // songs/episodes
+        if PodcastLinks.parse(text) != nil { return PodcastLinks.isEpisode(text) ? .video : .other }   // Apple Podcasts episodes
         if mediaExtensions.contains(u.pathExtension.lowercased()) { return .video }
         return isVideoSite(host) ? .maybe : .other
     }
@@ -95,6 +96,7 @@ enum VideoLinks {
         guard let host = URL(string: url)?.host?.lowercased() else { return "" }
         if host.contains("youtube.com") || host.contains("youtu.be") { return "YouTube" }
         if host == "open.spotify.com" { return "Spotify" }
+        if host == "podcasts.apple.com" { return "Apple Podcasts" }
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 }

@@ -2,11 +2,12 @@ import AppKit
 import AVFoundation
 
 // The universal queue under the music window (3.21): one app-wide Up Next mixing YouTube and other sites, local and
-// direct audio, and Spotify songs, and where its current item plays —
+// direct audio, podcast episodes (3.22) and Spotify songs, and where its current item plays —
 //   · Music/Spotify themselves (`.external`): the music window follows the app as always. Watch can't see or edit their
 //     own queues, so it waits for the song to end (Handoff.judge), pauses the app — which has already moved on to its
 //     own next song — and rewinds it, then plays the next item. When the list runs out it hands back (`handBack`).
-//   · Watch's own audio player (`.native`), shown in the music window through the NowPlayingInfo it already renders.
+//   · Watch's own audio player (`.native`), shown in the music window through the NowPlayingInfo it already renders;
+//     podcast episodes resume where they were left and get their ✓ like videos (PlaybackPositions, WatchedVideos).
 //   · a video window beside the music window (`.video`), run queue-driven: its end and its Next/Previous come here.
 // Items you add go in with Play Next / Play Later (PlayQueue). Nothing is ever sent to Music/Spotify without a user's
 // action behind it: adding to the queue, a click, or the queue moving on from one of their songs.
@@ -30,13 +31,17 @@ final class UniversalQueue: NSObject {
     var control = MusicAppControl()                    // Music/Spotify commands and Spotify's play-by-URI
     var frontmostApp: () -> String? = { NSWorkspace.shared.frontmostApplication?.bundleIdentifier }
     var appIsRunning: (String) -> Bool = { !NSRunningApplication.runningApplications(withBundleIdentifier: $0).isEmpty }
+    var resolveEpisode: (String, @escaping (PodcastEpisode?) -> Void) -> Void = { PodcastDirectory.episode($0, completion: $1) }
 
     private var token = 0                              // every start bumps it; late callbacks from a replaced item are dropped
     // Native audio.
     private var player: AVPlayer?
     private var endObserver: NSObjectProtocol?
     private var timeObserver: Any?
+    private var statusObservation: NSKeyValueObservation?
     private var nativeInfo: NowPlayingInfo?
+    private var positionKey: String?                   // a podcast episode's resume key, once it's at its start position
+    private var lastSave = Date.distantPast
     // Video.
     private weak var video: PlayerWindowController?
     private var videoTimer: Timer?
@@ -116,6 +121,7 @@ final class UniversalQueue: NSObject {
         leave(for: item)
         switch item.source {
         case .audio:          playNative(item)
+        case .podcast:        playPodcast(item)
         case .spotify, .music: playExternal(item)
         case .web, .file:     playVideo(item)
         }
@@ -227,6 +233,26 @@ final class UniversalQueue: NSObject {
 
     // MARK: Watch's own audio
 
+    // A podcast episode. An Apple Podcasts link is looked up first (its audio, title and picture; the item keeps the link
+    // as its page); the music window says so meanwhile.
+    private func playPodcast(_ item: QueueItem) {
+        guard PodcastLinks.isEpisode(item.url) else { playNative(item); return }
+        engine = .native
+        nativeInfo = NowPlayingInfo(title: item.title ?? "Loading episode…", artist: item.subtitle, album: nil, bundleID: Self.ownID, isPlaying: false)
+        show?(nativeInfo)
+        let mine = token
+        resolveEpisode(item.url) { [weak self] episode in
+            guard let self = self, self.token == mine else { return }
+            guard let found = episode else { NSSound.beep(); self.advance(); return }
+            var resolved = found.queueItem()
+            resolved.added = item.added
+            if resolved.page == nil { resolved.page = item.url }
+            self.queue?.update(item.id) { $0 = resolved }
+            resolved.id = item.id
+            self.playNative(resolved)
+            self.onChange?()
+        }
+    }
     private func playNative(_ item: QueueItem) {
         let url: URL? = item.url.hasPrefix("/") ? URL(fileURLWithPath: item.url) : URL(string: item.url)
         guard let u = url else { advance(); return }
@@ -240,9 +266,34 @@ final class UniversalQueue: NSObject {
                                     bundleID: Self.ownID, isPlaying: true, artwork: Self.folderArtwork(u), artworkMIME: nil,
                                     duration: item.duration, elapsed: 0, elapsedAt: Date(), rate: 1)
         show?(nativeInfo)
+        if item.source == .podcast, let art = item.artwork { loadArtwork(art, token: mine) }
         endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: p.currentItem, queue: .main) { [weak self] _ in
             guard let self = self, self.token == mine else { return }
+            if let key = self.positionKey {                  // an episode heard to the end: ✓, and next time from the top
+                self.positionKey = nil
+                PlaybackPositions.shared.clear(key)
+                if !WatchedVideos.shared.isWatched(key) { WatchedVideos.shared.mark(key); Self.libraryChanged() }
+            }
             self.advance()
+        }
+        // An episode resumes where it was left (within ±0.5 s, as videos do), once the item can seek.
+        if item.source == .podcast, let current = p.currentItem {
+            let key = item.resumeKey, start = PlaybackPositions.shared.position(for: key) ?? 0
+            statusObservation = current.observe(\.status, options: [.initial, .new]) { [weak self] observed, _ in
+                DispatchQueue.main.async {
+                    guard let self = self, self.token == mine, observed.status == .readyToPlay, self.statusObservation != nil else { return }
+                    self.statusObservation = nil
+                    guard start > 0 else { self.positionKey = key; return }
+                    let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
+                    p.seek(to: CMTime(seconds: start, preferredTimescale: 600), toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak self] _ in
+                        DispatchQueue.main.async {
+                            guard let self = self, self.token == mine else { return }
+                            self.positionKey = key
+                            self.refreshNative()
+                        }
+                    }
+                }
+            }
         }
         timeObserver = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 600), queue: .main) { [weak self] _ in
             guard let self = self, self.token == mine else { return }
@@ -265,6 +316,30 @@ final class UniversalQueue: NSObject {
         if let d = p.currentItem?.duration, d.isNumeric, d.seconds > 0 { info.duration = d.seconds }
         nativeInfo = info
         show?(info)
+        if info.isPlaying, Date().timeIntervalSince(lastSave) >= 5 { savePosition() }
+    }
+    // Where an episode is (every 5 s while playing, when paused, and when it stops); its ✓ at 90% or the last 15 s.
+    private func savePosition() {
+        guard let key = positionKey, let p = player else { return }
+        let t = p.currentTime().seconds, d = p.currentItem?.duration
+        let duration = d.flatMap { $0.isNumeric && $0.seconds > 0 ? $0.seconds : nil } ?? nativeInfo?.duration
+        PlaybackPositions.shared.save(t, duration: duration, for: key)
+        if WatchedVideos.shared.noteProgress(t, duration: duration, for: key) { Self.libraryChanged() }
+        lastSave = Date()
+    }
+    private static func libraryChanged() { NotificationCenter.default.post(name: .watchLibraryChanged, object: nil) }
+    // An episode's picture (the file's own tags, read below, win when there are any).
+    private func loadArtwork(_ link: String, token mine: Int) {
+        guard let url = URL(string: link) else { return }
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            guard let data = data, !data.isEmpty else { return }
+            DispatchQueue.main.async {
+                guard let self = self, self.token == mine, self.engine == .native, var info = self.nativeInfo, info.artwork == nil else { return }
+                info.artwork = data
+                self.nativeInfo = info
+                self.show?(info)
+            }
+        }.resume()
     }
     // Title, artist, album and artwork from the file's own tags.
     private func applyMetadata(_ asset: AVAsset, to id: UUID) {
@@ -294,6 +369,7 @@ final class UniversalQueue: NSObject {
         return nil
     }
     private func stopNative() {
+        savePosition(); positionKey = nil; statusObservation = nil
         if let o = endObserver { NotificationCenter.default.removeObserver(o); endObserver = nil }
         if let t = timeObserver { player?.removeTimeObserver(t); timeObserver = nil }
         player?.pause(); player = nil; nativeInfo = nil
@@ -372,7 +448,7 @@ final class UniversalQueue: NSObject {
         case .command(.next):     advance(); return
         case .command(.previous): previous(); return
         case .command(.play):     player?.play(); video?.setPaused(false)
-        case .command(.pause):    player?.pause(); video?.setPaused(true)
+        case .command(.pause):    player?.pause(); video?.setPaused(true); savePosition()
         case .seek(let t):
             player?.seek(to: CMTime(seconds: max(0, t), preferredTimescale: 600),
                          toleranceBefore: CMTime(seconds: 0.5, preferredTimescale: 600), toleranceAfter: CMTime(seconds: 0.5, preferredTimescale: 600))
@@ -388,7 +464,9 @@ final class UniversalQueue: NSObject {
     // Double-click: the item in its own place — a file in Finder, a page in the browser (where you are in it), Spotify.
     func openSource() {
         guard let item = queue?.current else { return }
-        if item.url.hasPrefix("/") || item.url.hasPrefix("file://") {
+        if item.source == .podcast {
+            if let page = item.page.flatMap(URL.init(string:)) { NSWorkspace.shared.open(page) } else { NSSound.beep() }
+        } else if item.url.hasPrefix("/") || item.url.hasPrefix("file://") {
             let path = item.url.hasPrefix("file://") ? (URL(string: item.url)?.path ?? item.url) : item.url
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
         } else if let uri = SpotifyLink.uri(item.url), let u = URL(string: uri) {

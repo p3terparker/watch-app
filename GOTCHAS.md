@@ -224,3 +224,13 @@ The resizable first-run guide must update each wrapping label's `preferredMaxLay
 ## Watch 3.20 — one click, two meanings
 
 **A view where a click and a double-click do different things must wait before acting on the click.** `PlayerSurfaceView` reports a click as soon as the button comes up, and the second click of a double-click arrives later with `clickCount` 2. In the music window a click plays/pauses and a double-click opens the app, so acting at once would pause the music on the first click of every double-click. `clicked()` schedules play/pause after `NSEvent.doubleClickInterval` (+0.05 s) and `multiClicked` cancels it. Space stays instant. The video player doesn't need this: its double-clicks act where a single click does nothing (sides, top) or harmlessly repeat it.
+
+## Watch 3.22 — podcasts: one episode, many links; a directory that forgets
+
+Apple Podcasts links to the same episode come in many shapes (with or without the country, the slug, `itunes.apple.com`),
+so resume positions and ✓ for podcasts are keyed by the episode id (`podcast:<id>` in `PlaybackPositions.key`), never by the
+link text. The iTunes Lookup API lists only a show's newest 200 episodes: an older episode's link is resolved through
+yt-dlp instead (`AppDelegate.resolveEpisode`). Build the Search URL's term by hand (`PodcastLinks.searchURL`), so "&" or "+"
+in a search can't change the query. The GUI harness on GitHub's Mac runs on a 1024×768 screen: placement checks must
+leave the windows room (a full screen makes windows cascade by design).
+

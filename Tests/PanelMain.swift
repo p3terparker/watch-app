@@ -14,6 +14,20 @@ final class FixturePanel: AppDelegate {
         return task
     }
     override func play(_ raw: String, queue: PlayQueue? = nil) { liveSearch.cancel(); plays.append(raw) }
+    // Podcasts (3.22): fixture answers in place of the podcast directory and feeds.
+    var podcastSearches: [(query: String, done: ([PodcastShow]?, String) -> Void)] = []
+    var episodeFetches: [(link: String, done: (PodcastShow?, [PodcastEpisode], String) -> Void)] = []
+    var episodeLookups: [String] = []
+    var episodeAnswer: PodcastEpisode?
+    override func performPodcastSearch(_ query: String, completion: @escaping ([PodcastShow]?, String) -> Void) {
+        podcastSearches.append((query, completion))
+    }
+    override func fetchEpisodes(_ link: String, completion: @escaping (PodcastShow?, [PodcastEpisode], String) -> Void) {
+        episodeFetches.append((link, completion))
+    }
+    override func resolveEpisode(_ link: String, completion: @escaping (PodcastEpisode?) -> Void) {
+        episodeLookups.append(link); completion(episodeAnswer)
+    }
 }
 let testApp = NSApplication.shared
 // Do not assign an application delegate or run applicationDidFinishLaunching.
@@ -639,6 +653,74 @@ if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
 } else {
     print("SKIP queue playback checks: no fixture media")
 }
+// Podcasts (3.22): the Podcasts tab above search results searches the podcast directory (fixture answers here), a show
+// lists its episodes, and an episode plays in the music window, resuming where it was left and getting its ✓ at the end.
+func serviceTabs() -> NSSegmentedControl? {
+    panel.browseList.arrangedSubviews.lazy.compactMap { ($0 as? NSStackView)?.arrangedSubviews.first as? NSSegmentedControl }.first
+}
+panel.searchService = .youtube
+type("fixture talk"); pump(0.42)
+let youtubeAsked = panel.requests.last
+check(youtubeAsked?.query == "fixture talk" && serviceTabs()?.selectedSegment == 0, "a search starts on YouTube, with the YouTube | Podcasts tabs")
+if let tabs = serviceTabs() {
+    tabs.selectedSegment = 1
+    panel.searchServiceChosen(tabs)
+}
+check(panel.podcastSearches.map { $0.query } == ["fixture talk"] && youtubeAsked?.task.isCancelled == true, "Podcasts searches the same words; YouTube's search stops")
+panel.podcastSearches.last?.done([PodcastShow(title: "Fixture Talk", author: "Fixture FM", feedURL: "https://feeds.fixture.invalid/talk", artwork: nil,
+                                              appleID: "1234567890"),
+                                  PodcastShow(title: "Fixture Feed Only", author: nil, feedURL: "https://feeds.fixture.invalid/only", artwork: nil, appleID: nil)], "")
+check(rows(panel.browseList).count == 2 && serviceTabs()?.selectedSegment == 1, "the shows found, under the Podcasts tab")
+check(serviceTabs()?.refusesFirstResponder == true, "the tabs never take the field's typing focus")
+snapshot("podcast-results")
+let youtubeCount = panel.requests.count
+type("fixture news"); pump(0.42)
+check(panel.podcastSearches.last?.query == "fixture news" && panel.requests.count == youtubeCount, "typing again searches podcasts until the tab changes")
+panel.podcastSearches.last?.done([PodcastShow(title: "Fixture Talk", author: "Fixture FM", feedURL: nil, artwork: nil, appleID: "1234567890")], "")
+rows(panel.browseList).first?.onClick?()
+check(panel.episodeFetches.last?.link == "https://podcasts.apple.com/podcast/id1234567890", "a show opens its episodes (by its Apple Podcasts id)")
+if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
+    let tone = URL(fileURLWithPath: video).deletingLastPathComponent().appendingPathComponent("a.m4a").path
+    let show = PodcastShow(title: "Fixture Talk", author: "Fixture FM", feedURL: nil, artwork: nil, appleID: "1234567890")
+    let first = PodcastEpisode(title: "Fixture Episode", audioURL: tone, published: Date(timeIntervalSinceNow: -86400), duration: 60,
+                               show: "Fixture Talk", appleID: "1000000000001", showID: "1234567890")
+    let older = PodcastEpisode(title: "Older Episode", audioURL: "https://cdn.fixture.invalid/older.mp3", duration: 1800, show: "Fixture Talk")
+    PlaybackPositions.shared.save(20, duration: 60, for: "podcast:1000000000001")
+    panel.episodeFetches.last?.done(show, [first, older], "")
+    check(panel.browseTitle.stringValue == "Fixture Talk" && rows(panel.browseList).count == 2 && serviceTabs() == nil, "the show's episodes, newest first")
+    snapshot("podcast-episodes")
+    let up = panel.upNext
+    rows(panel.browseList).first?.onClick?(); pump(0.3)
+    let musicWindow = panel.artworkWindow
+    check(up.engine == .native && up.queue?.current?.source == .podcast && musicWindow?.window.isVisible == true,
+          "an episode plays in Watch, in the music window")
+    check(waitFor(6) { (musicWindow?.info?.position(at: Date()) ?? 0) >= 19.5 } && (musicWindow?.info?.position(at: Date()) ?? 99) < 30,
+          "it resumes where it was left (\(musicWindow?.info?.position(at: Date()) ?? -1))")
+    musicWindow?.pointerMoved(at: NSPoint(x: 20, y: 20)); pump(0.3)
+    musicWindow?.controls.playPause.performClick(nil); pump(0.3)
+    check(musicWindow?.info?.isPlaying == false && (PlaybackPositions.shared.position(for: "podcast:1000000000001") ?? 0) >= 20,
+          "⏯ pauses it and remembers where it is")
+    viewerSnapshot("music-window-podcast")
+    up.command(.seek(57)); up.command(.command(.play))
+    check(waitFor(8) { up.queue == nil }, "it plays to the end, and Up Next ends with it")
+    check(WatchedVideos.shared.isWatched("podcast:1000000000001") && PlaybackPositions.shared.position(for: "podcast:1000000000001") == nil,
+          "an episode heard to the end gets its ✓ and starts from the top next time")
+    // An Apple Podcasts episode link (pasted, or from Recent Links): looked up, then played; its Recent Links row is named.
+    let link = "https://podcasts.apple.com/gb/podcast/fixture-talk/id1234567890?i=1000000000002"
+    panel.episodeAnswer = PodcastEpisode(title: "Looked Up Episode", audioURL: tone, duration: 60, show: "Fixture Talk",
+                                         appleID: "1000000000002", showID: "1234567890")
+    panel.playEpisodeLink(link); pump(0.3)
+    check(panel.episodeLookups.last == link && up.queue?.current?.title == "Looked Up Episode" && up.queue?.current?.page != nil
+          && up.engine == .native, "an episode link is looked up and played")
+    check(panel.links.link(for: link)?.title == "Looked Up Episode", "and its Recent Links row is named")
+    check(up.queue?.current?.resumeKey == "podcast:1000000000002", "resume by episode, whatever the link looks like")
+    panel.artworkWindow?.close(); pump(0.3)
+    check(up.queue == nil, "closing the music window stops it")
+} else {
+    print("SKIP podcast playback checks: no fixture media")
+}
+panel.searchService = .youtube
+type(""); pump(0.1)
 panel.dropdown.appearance = NSAppearance(named: .aqua)
 snapshot("recent-light")
 panel.dropdown.setContentSize(NSSize(width: 260, height: 200)); layout()

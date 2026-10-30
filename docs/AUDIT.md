@@ -1,5 +1,22 @@
 # Watch verification
 
+## 3.22 (54) — Podcasts, 2026-10-30 (preview; hands-on acceptance pending)
+
+Podcasts in the panel and the music window: YouTube | Podcasts tabs on search results (iTunes Search, no account), show
+pages from the iTunes Lookup or the show's feed, Apple Podcasts show/episode links and feeds in the field, episodes played
+by Watch in the music window with resume positions and ✓ (`Sources/Podcasts.swift`, `UniversalQueue.playPodcast`). Up Next
+placement moved to the tested `DrawerLayout`. No preference keys added (positions and ✓ reuse `playbackPositions` and
+`watchedVideos` with `podcast:<id>` keys); bundle ID, hotkey and URL handlers unchanged. Network: itunes.apple.com and the
+shows' feeds, only after a search, opening a show or playing an episode.
+
+### Verification
+
+- Authored without a local Swift toolchain; GitHub Actions on macOS compiles and tests it. Results are recorded here once the
+  run finishes.
+- Manual (pending, needs a real Mac): real podcast searches and show pages (artwork, dates, lengths), a feed link, an Apple
+  Podcasts episode link (recent and older than 200 episodes), resuming and ✓ across relaunches, downloads of an episode, and
+  the Up Next list's placement under small and large music windows near the screen's bottom.
+
 ## 3.21 (53) — Up Next under the music window, 2026-10-30 (preview; hands-on acceptance pending)
 
 One app-wide queue that drops down under the music window: Play Next / Play Later everywhere, audio files and links played
@@ -18,7 +35,13 @@ Music/Spotify for the queue.
   477 pt music window and was clamped over it, and a queued video then found no free spot beside them and cascaded.
   Fix: `DrawerLayout` (`Sources/Tiling.swift`, unit-tested) — below, else above, else the window moves up just enough (never
   while you drag or resize it), shrinking the list on a screen too short for both; the harness's video check now uses a
-  smaller music window so a free spot exists. Results of the next run are recorded with 3.22.
+  smaller music window so a free spot exists.
+- Second run, [40984727731](https://github.com/p3terparker/watch-app/actions/runs/40984727731) (`d16d4e7`): every step green —
+  type-check, `./check.sh` (700 unit checks, 18 tooling tests), universal build and package, bundled tools + Now Playing
+  adapter (12 checks), installer verification, GUI harness 193 checks / 0 failures. Published
+  [v3.21-preview](https://github.com/p3terparker/watch-app/releases/tag/v3.21-preview), "Watch 3.21 preview (53)", DMG
+  230,643,163 bytes, SHA-256 `b5f5ba8f315b83cb310f54c092ce88d246e494cb341d4478cd168de545d9b2f0`. The informational live
+  YouTube step resolved 2 of 3 public videos natively; the third hit YouTube's bot check from GitHub's address.
 - Manual (pending, needs a real Mac): slot-in with real Music and Spotify (the boundary pause and rewind, how much of the next
   song is heard, the hand-back), the one-time Automation prompts, Spotify launching in the background, media-key Next
   during a Spotify song, drag-and-drop from Finder/Spotify into the list, and the list's look under small and large windows.

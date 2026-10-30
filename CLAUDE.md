@@ -1,6 +1,6 @@
 # Watch App
 
-A "plays almost any video" menu-bar player. **Current: v3.21.**
+A "plays almost any video" menu-bar player. **Current: v3.22.**
 Binary `Watch` · bundle `com.jacob.watch` · hotkey **⌥⌘Y** ·
 frameworks: Cocoa, WebKit, Carbon, ServiceManagement, **AVKit, AVFoundation**.
 
@@ -92,6 +92,14 @@ Music/Spotify (`.external`, waiting for the song to end, pausing + rewinding the
 (`.native`, shown in the music window via `NowPlayingInfo` with `OwnPlaybackControl`) or a queue-driven video window
 (`PlayerWindowController.onEnded/onStep/onClosed`). `QueueDrawer` (`Sources/QueueDrawer.swift`) is the drop-down list.
 AppDelegate: `enqueue`, `enqueueLink`, `showQueue`, `playSpotify`; `setMusic` feeds `upNext.externalChanged`.
+**3.22 — Podcasts:** `Sources/Podcasts.swift` (tested): Apple Podcasts links (`PodcastLinks`), iTunes Search/Lookup JSON
+(`ITunesPodcasts`), RSS (`PodcastFeed`), `PodcastEpisode.queueItem()` (source `.podcast`, `page` = its Apple Podcasts link);
+`PodcastDirectory` does the network calls (no account). Search results have **YouTube | Podcasts** tabs (`searchService`,
+`BrowseEntry.search`); `.shows`/`.episodes` pages; a show link or feed in the field opens its episodes (`OmniboxInput.podcast`),
+an episode link plays (`playEpisodeLink`; older episodes via yt-dlp in `resolveEpisode`). Episodes play in the music window
+(`UniversalQueue.playPodcast` → `playNative`), resume (`QueueItem.resumeKey`, `podcast:<episode id>` in `PlaybackPositions`)
+and get ✓ like videos. The harness overrides `performPodcastSearch`/`fetchEpisodes`/`resolveEpisode`. The Up Next list never
+sits on the music window (`DrawerLayout`, `Sources/Tiling.swift`: the window moves up for it when needed).
 
 **Gotchas (see GOTCHAS.md):** never AppleScript an app by name unless it's running (uninstalled names pop a
 "Where is …?" chooser) and never send Apple Events without checking `AEDeterminePermissionToAutomateTarget`
