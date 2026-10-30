@@ -1,6 +1,6 @@
 # Watch App
 
-A "plays almost any video" menu-bar player. **Current: v3.25.**
+A "plays almost any video" menu-bar player. **Current: v3.26.**
 Binary `Watch` · bundle `com.jacob.watch` · hotkey **⌥⌘Y** ·
 frameworks: Cocoa, WebKit, Carbon, ServiceManagement, **AVKit, AVFoundation, MediaPlayer**.
 
@@ -66,7 +66,7 @@ back-off then give up). **Playback controls** (build 50): resting the pointer on
 timeline (elapsed / -remaining), ⏮ ⏯ ⏭ and — for Music/Spotify — the app's own volume (`AppVolume` via AppleScript
 `sound volume`, Automation asked once on the first drag's release). Commands go out only on a click (`NowPlayingRemote`:
 one short adapter `send`/`seek` run each). Thin white sliders (`ThinSlider`, `Sources/ThinSlider.swift`) are shared with the
-video player, whose speaker icon now slides out a volume slider on hover (↑/↓ keys too; `Prefs.playerVolume`). Pure logic +
+video player, whose speaker icon pops up a volume slider on hover (3.26: vertical, above the speaker; ↑/↓ keys too; `Prefs.playerVolume`). Pure logic +
 monitor in `Sources/NowPlaying.swift` (tested by `test.sh`); window, controls and actions in `Sources/ArtworkWindow.swift`.
 **Build 51:** YouTube never falls back to its web page (that page caused the ads, the missing click zones and the video
 thumbnail in the music window): `PlayerFailureView` with yt-dlp's reason, one signed-in retry for bot/age checks when a
@@ -91,7 +91,7 @@ that phase keeps the number; bump it only when a new phase starts or the user sa
 holds the stable `vX.Y` release(s) and at most one pre-release, **Current build** (tag `current-build`), which each passing
 push replaces; there are no per-version previews. A stable release is made by running the **Promote to stable** workflow
 (`promote.yml`, see docs/RELEASE.md) once `docs/releases/vX.Y.md` is on `main`. The installer is named with the release
-number: `package.sh` makes `dist/Watch-<version>.dmg` (e.g. `Watch-3.25.dmg`).
+number: `package.sh` makes `dist/Watch-<version>.dmg` (e.g. `Watch-3.26.dmg`).
 **3.21 — Up Next under the music window:** `PlayQueue`/`QueueItem` (+ `MediaSource`, `SpotifyLink`) moved to
 `Sources/Queue.swift` with Play Next/Later insertion, edits, sections and `handBack` (tested); `Sources/Handoff.swift` has the
 pure song-boundary reducer and `QueueRoute` (tested). `UniversalQueue` (`Sources/UpNext.swift`) plays the current item in
@@ -135,6 +135,42 @@ mid-drag). Full screen is unchanged. Clicks are timed by Watch, not AppKit's `cl
 tested) joins a click to a run only within `MusicZone.doubleClickWindow` (`min(system interval, 0.3 s)`) of the previous one, so a
 single click plays/pauses after ≈ 0.32 s (was ≈ 0.55 s), a double-click opens the app only if quick, and a slow second click is a
 fresh single click. Video windows keep the 3.14 zones and timings.
+
+**3.26 — star, menu-bar ticker, volume, full-screen resize:** (1) the music window's controls row has a **★** left of shuffle for
+Apple Music only (`AppVolume.favouriteReadScript/WriteScript` — `favorited` of the current track, `loved` as the fallback;
+`MusicAppControl.favourite/setFavourite`; `ArtworkWindowController.refreshFavourite/toggleFavourite`, `isFavourite`): read when the
+controls come up and on a new song (only when Watch is already allowed), a click sets it in the background (Music is never brought
+forward; may ask Automation once) — separate from Watch's own Favourites. **Spotify has no star**: its scripting has no like
+command (Web API deliberately not used). (2) Preferences ▸ "Show the playing song and artist in the menu bar" (`Prefs.showTicker`,
+off by default): `MenuBarTicker` (`Sources/MenuBarTicker.swift`) is a second status item holding one 11 pt line "Song – Artist" that
+scrolls like iTunes's display when wider than 150 pt (`Marquee`/`TickerText`, `Sources/Marquee.swift`, tested; one
+CAKeyframeAnimation, no timer; still when paused or with Reduce Motion); it exists only while a song is known; the Now Playing
+reader runs for it all the time (`NowPlayingMonitor.Client.ticker`); `AppDelegate.refreshTicker`. (3) Volume: the slider is **always
+hidden** and pops **up** (vertical, `ThinSlider.vertical`) in a small panel above the speaker only while the pointer is on the speaker
+or the panel (`VolumePopupView`, a sibling of the controls in their parent, added by `viewDidMoveToSuperview`; `VolumePopup.frame`
+fits it above the speaker at **any window size**, `VolumeHover.zone` joins speaker and panel) — music window `ArtworkControlsView
+.volumeOpen`, video bar `PlayerControlBar`; the row no longer holds a slider (`ArtworkLayout.controlRow(volume: .icon)`). A click on
+the speaker mutes; press-and-drag **up/down** (`DragButton.dragAxis = .vertical`, `VolumeGesture`, `VolumeHover`, `VolumePopup` in
+`PlayerZones.swift`, tested) moves the level **from where it is** by 1/80 per point (no jump), and `ThinSlider.relative` makes the
+slider itself drag the same way. The 3.21 queue is **on hold**: the ≡ button is gone from the music window; Up Next is only in the
+right-click / "…" menu (⌥⌘U) and the Play Next / Play Later row menus. (4) Full screen: dragging resizes the picture
+(`PlayerSurfaceView.dragIsResize/onResizeDrag` → `ArtworkWindowController.resizeArtwork`, `ArtworkLayout.resizedScale`, factor
+`fullScreenScale`, `Prefs.artworkFullScreenScale`; a quarter of the usual size up to filling the screen); past the point where it and
+the caption stack fit together it stays on the top edge and grows downward, caption and controls slide down with it and fade
+(`ArtworkLayout.fullScreen(...).chrome`) — gone when it fills the height.
+
+**Working routine (the owner's standing rules, 2026-10-30):** for each batch of changes asked for: make them, push to the session's
+`claude/` branch (that publishes the **Current build** pre-release once the tests pass), and when the build is finalized and
+ready to test, **update the owner's Mac with it**: run `curl -fsSL https://raw.githubusercontent.com/p3terparker/watch-app/<branch>/scripts/watch-update.sh | bash`
+there (`scripts/watch-update.sh`; needs a Remote Control session — `list_computer_folders`, then `request_computer_folder`; if the
+Mac isn't reachable, say so and give the owner the same command). Only after a finished wave of changes, or when asked — **never
+on a schedule or per small push**; the owner decided against background polling. A finished build session ends with that.
+**Never publish the official release until the owner says so:** no Promote to stable workflow, no `vX.Y` release or tag, no
+merge to `main`, no `docs/releases/vX.Y.md` push meant for promotion. Use `[no preview]` in a commit message for pushes that
+must not replace the Current build (docs-only, work in progress); remember a new push cancels a build still running on the branch.
+**Updating a Mac:** `scripts/watch-update.sh` downloads the Current build with curl (no quarantine mark, so no "unidentified
+developer" dialog), checks its SHA-256 from the release notes, quits Watch, replaces it where it lives and reopens it.
+`--stable` follows the Latest release, `--dry-run` only reports, `--force` reinstalls.
 
 **Gotchas (see GOTCHAS.md):** never AppleScript an app by name unless it's running (uninstalled names pop a
 "Where is …?" chooser) and never send Apple Events without checking `AEDeterminePermissionToAutomateTarget`

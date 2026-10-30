@@ -205,37 +205,102 @@ func checkArtworkStyle() {
     let small = ArtworkLayout.fullScreen(artwork: CGSize(width: 100, height: 100), in: screen)
     expect(small.caption.size.width == 558 && small.art.size.width == 558, "small art is scaled up to the same spot")
     expect(ArtworkLayout.fullScreen(artwork: .zero, in: screen).art.size == CGSize(width: 558, height: 558), "unknown shape: square")
+    checkFullScreenResize(screen)
     checkControlRow()
     checkRevealZone()
+    checkFavouriteScripts()
+}
+
+// 3.26: the full-screen picture can be resized by dragging; once it nearly fills the screen the caption and controls slide down
+// with its bottom edge and fade, and they're gone when it fills the height.
+func checkFullScreenResize(_ screen: CGSize) {
+    let square = CGSize(width: 600, height: 600)
+    let range = ArtworkLayout.fullScreenScaleRange(artwork: square, in: screen)
+    expect(range.lowerBound == 0.25 && abs(range.upperBound - 1.5 / 0.93) < 1e-9, "from a quarter of the usual size up to filling the screen's height (\(range))")
+    let usual = ArtworkLayout.fullScreen(artwork: square, in: screen)
+    expect(usual.chrome == 1 && ArtworkLayout.fullScreen(artwork: square, in: screen, scale: 1) == usual, "scale 1 is the usual layout, caption and controls in full")
+    let stack = ArtworkLayout.gap + ArtworkLayout.captionHeight + ArtworkLayout.controlsHeight
+    let big = ArtworkLayout.fullScreen(artwork: square, in: screen, scale: 790.0 / 558.0)
+    expect(big.art.height == 790 && big.art.maxY == screen.height && big.art.minY == stack && big.chrome == 1 && big.controls.minY == 0,
+           "790 pt: the picture and the stack under it just fit, top to bottom (\(big))")
+    let slide = ArtworkLayout.fullScreen(artwork: square, in: screen, scale: 800.0 / 558.0)
+    expect(slide.art.height == 800 && slide.art.maxY == screen.height && slide.art.minY == 100, "800 pt: the picture stays at the top and grows downward")
+    expect(slide.caption.minY == 16 && slide.controls.minY == -10 && slide.caption.maxY == slide.art.minY - ArtworkLayout.gap,
+           "…the caption and controls slide down with its bottom edge, partly off the screen (\(slide.caption), \(slide.controls))")
+    expect(abs(slide.chrome - 100.0 / 110.0) < 1e-9 && slide.chrome < 1 && slide.chrome > 0, "…and fade as they go")
+    let full = ArtworkLayout.fullScreen(artwork: square, in: screen, scale: range.upperBound)
+    expect(full.art == CGRect(x: 270, y: 0, width: 900, height: 900) && full.chrome == 0, "filling the height: top to bottom, the caption and controls gone")
+    expect(full.caption.maxY <= 0 && full.controls.maxY <= 0, "…off the bottom of the screen, not just invisible")
+    expect(ArtworkLayout.fullScreen(artwork: square, in: screen, scale: 99) == full, "no bigger than the screen")
+    let tiny = ArtworkLayout.fullScreen(artwork: square, in: screen, scale: 0)
+    expect(tiny.art.height >= 139 && tiny.art.height <= 140 && tiny.chrome == 1 && abs(tiny.art.midX - 720) <= 1, "no smaller than a quarter, still centred")
+    expect(ArtworkLayout.fullScreen(artwork: square, in: screen, scale: .nan) == usual, "a nonsense scale is the usual size")
+    let wide = ArtworkLayout.fullScreen(artwork: CGSize(width: 640, height: 360), in: screen, scale: 99)
+    expect(wide.art.width == 1440 && wide.art.height == 810 && wide.art.minY == 90 && wide.chrome > 0.8 && wide.chrome < 0.9,
+           "art wider than the screen stops at its sides, so the caption is only partly pushed down (\(wide))")
+    expect(ArtworkLayout.fullScreenScaleRange(artwork: square, in: .zero) == 1...1, "no screen, no range")
+    // Dragging: the picture is grabbed where the pointer was pressed and scales with its distance from the centre.
+    let art = CGRect(x: 441, y: 226, width: 558, height: 558)     // centre (720, 505)
+    let r: ClosedRange<CGFloat> = 0.25...2.0
+    func resized(_ start: CGFloat, press: CGPoint, to p: CGPoint) -> CGFloat { ArtworkLayout.resizedScale(from: start, art: art, press: press, to: p, range: r) }
+    let corner = CGPoint(x: 1020, y: 905)                          // 500 pt from the centre, direction (0.6, 0.8)
+    expect(abs(resized(1, press: corner, to: CGPoint(x: 1080, y: 985)) - 1.2) < 1e-9, "100 pt further out (500 → 600): 1.2 times as big")
+    expect(abs(resized(1, press: corner, to: CGPoint(x: 960, y: 825)) - 0.8) < 1e-9, "100 pt in: 0.8 times")
+    expect(abs(resized(1, press: corner, to: CGPoint(x: 1100, y: 845)) - 1) < 1e-9, "sideways to the direction from the centre: unchanged")
+    expect(abs(resized(1.5, press: corner, to: CGPoint(x: 1080, y: 985)) - 1.8) < 1e-9, "from a bigger start, in proportion")
+    expect(resized(1.5, press: corner, to: CGPoint(x: 3000, y: 3000)) == 2 && resized(1.5, press: corner, to: CGPoint(x: 720, y: 505)) == 0.25, "clamped to the range")
+    expect(resized(1.5, press: corner, to: corner) == 1.5, "no movement, no change")
+    let middle = CGPoint(x: 720, y: 505)
+    expect(abs(resized(1, press: middle, to: CGPoint(x: 750, y: 505)) - 1.5) < 1e-9 && abs(resized(1, press: middle, to: CGPoint(x: 690, y: 505)) - 0.5) < 1e-9,
+           "pressed at the centre, dragging right grows it and left shrinks it")
+    expect(resized(1, press: middle, to: CGPoint(x: 720, y: 600)) == 1 && abs(resized(1, press: CGPoint(x: 724, y: 508), to: CGPoint(x: 754, y: 508)) - 1.5) < 1e-9,
+           "…up and down do nothing, and a press within 12 pt of the centre counts as the centre")
+    expect(abs(resized(1, press: CGPoint(x: 720, y: 535), to: CGPoint(x: 720, y: 565)) - 1.5) < 1e-9, "close in (30 pt), distances count as at least 60 pt, so it isn't jumpy")
+}
+
+// 3.26: the ★ is Apple Music's favourite flag on the current song — read and set by fixed AppleScript addressed by bundle id.
+func checkFavouriteScripts() {
+    let music = "com.apple.Music"
+    expect(AppVolume.favouriteApps == [music], "only Apple Music has a favourite Watch can set (Spotify's scripting has no like)")
+    let read = AppVolume.favouriteReadScript(music)!, on = AppVolume.favouriteWriteScript(music, on: true)!, off = AppVolume.favouriteWriteScript(music, on: false)!
+    expect(read.contains("get favorited of current track") && read.contains("com.apple.Music"), "reads the current song's `favorited`")
+    expect(on.contains("set favorited of current track to true") && off.contains("set favorited of current track to false"), "sets or clears it")
+    expect(read.contains("get loved of current track") && on.contains("set loved of current track to true"), "older versions of Music call it `loved`: the fallback")
+    expect([read, on, off].allSatisfy { $0.hasPrefix("try\n") && $0.hasSuffix("end try") && $0.contains("on error") }, "tried the new name, then the old")
+    expect([read, on, off].allSatisfy { !$0.contains("application \"Music\"") && $0.contains("application id \\\"com.apple.Music\\\"") }, "addressed by bundle id, never by name")
+    expect(AppVolume.favouriteReadScript("com.spotify.client") == nil && AppVolume.favouriteWriteScript("com.spotify.client", on: true) == nil, "Spotify: no scripts")
+    expect(AppVolume.favouriteReadScript("com.apple.podcasts") == nil && AppVolume.favouriteWriteScript("x", on: false) == nil, "nor any other app")
 }
 
 // The music window's one row of controls: ⏮ ⏯ ⏭ from the left, elapsed · timeline · remaining, shuffle · repeat, volume at
 // the right; what doesn't fit drops out in a fixed order and the timeline keeps a usable length.
 func checkControlRow() {
-    func row(_ w: CGFloat, timeline: Bool = true, long: Bool = false, modes: Bool = true, volume: ControlRowVolume = .slider) -> ControlRow {
-        ArtworkLayout.controlRow(width: w, timeline: timeline, longClock: long, modes: modes, volume: volume)
+    func row(_ w: CGFloat, timeline: Bool = true, long: Bool = false, modes: Bool = true, volume: ControlRowVolume = .icon,
+             favourite: Bool = false) -> ControlRow {
+        ArtworkLayout.controlRow(width: w, timeline: timeline, longClock: long, modes: modes, volume: volume, favourite: favourite)
     }
     let wide = row(376)                                       // a 400 pt window
     let all = [wide.previous, wide.playPause, wide.next, wide.elapsed, wide.timeline, wide.remaining, wide.shuffle, wide.repeatMode,
-               wide.volumeIcon, wide.volume].compactMap { $0 }
-    expect(all.count == 10, "a wide window shows every part")
+               wide.volumeIcon].compactMap { $0 }
+    expect(all.count == 9, "a wide window shows every part (the volume slider isn't in the row: it pops up above the speaker)")
     expect(wide.previous!.minX == 0 && wide.previous!.maxX < wide.playPause!.minX && wide.playPause!.maxX < wide.next!.minX,
            "⏮ ⏯ ⏭ from the left edge")
     expect(wide.next!.maxX < wide.elapsed!.minX && wide.elapsed!.maxX <= wide.timeline!.minX && wide.timeline!.maxX <= wide.remaining!.minX,
            "then elapsed, the timeline and remaining")
     expect(wide.remaining!.maxX < wide.shuffle!.minX && wide.shuffle!.maxX < wide.repeatMode!.minX && wide.repeatMode!.maxX < wide.volumeIcon!.minX
-           && wide.volumeIcon!.maxX < wide.volume!.minX && wide.volume!.maxX == 376, "then shuffle, repeat and the volume at the right edge")
+           && wide.volumeIcon!.maxX == 376, "then shuffle, repeat and the speaker at the right edge")
     expect(all.allSatisfy { abs($0.midY - ArtworkLayout.controlsHeight / 2) <= 1 && $0.maxY <= ArtworkLayout.controlsHeight && $0.minY >= 0 },
            "one row: everything centred on the same line")
     for i in all.indices { for j in all.indices where j > i { expect(!all[i].intersects(all[j]), "parts \(i) and \(j) don't overlap") } }
     expect(wide.timeline!.width >= 120, "a 400 pt window has a long timeline (\(wide.timeline!.width))")
-    let usual = row(276)                                      // the usual 300 pt window
-    expect(usual.elapsed == nil && usual.remaining != nil && usual.shuffle != nil && usual.repeatMode != nil && usual.volume != nil
-           && usual.previous != nil && usual.timeline!.width >= ArtworkLayout.minTimeline, "300 pt: only the elapsed time gives way")
-    let smaller = row(220)
-    expect(smaller.shuffle == nil && smaller.repeatMode == nil && smaller.volume != nil, "then shuffle/repeat")
-    let narrow = row(200)
-    expect(narrow.volume == nil && narrow.volumeIcon != nil && narrow.remaining != nil, "then the volume slider (the speaker stays)")
+    expect(row(276).elapsed != nil && row(243).elapsed != nil, "the usual 300 pt window has room for everything (no slider in the row)")
+    let usual = row(230)
+    expect(usual.elapsed == nil && usual.remaining != nil && usual.shuffle != nil && usual.repeatMode != nil && usual.volumeIcon != nil
+           && usual.previous != nil && usual.timeline!.width >= ArtworkLayout.minTimeline, "a bit narrower: only the elapsed time gives way")
+    let smaller = row(190)
+    expect(smaller.shuffle == nil && smaller.repeatMode == nil && smaller.remaining != nil && smaller.volumeIcon != nil, "then shuffle/repeat")
+    let narrow = row(150)
+    expect(narrow.remaining == nil && narrow.previous != nil && narrow.volumeIcon != nil, "then the remaining time (the speaker stays)")
     let tiny = row(100)
     expect(tiny.previous == nil && tiny.next == nil && tiny.remaining == nil && tiny.playPause != nil && tiny.timeline != nil,
            "a tiny window keeps ⏯ and the timeline")
@@ -245,8 +310,30 @@ func checkControlRow() {
     expect(noLength.timeline == nil && noLength.elapsed == nil && noLength.remaining == nil && noLength.shuffle != nil, "no length: no timeline or times")
     let other = row(376, modes: false, volume: .none)
     expect(other.shuffle == nil && other.volumeIcon == nil && other.timeline!.maxX > 340, "an app Watch can't script: the timeline takes the room")
-    let denied = row(376, volume: .icon)
-    expect(denied.volume == nil && denied.volumeIcon != nil, "not allowed: the speaker alone")
+    // 3.26: the volume slider pops up above the speaker, so the speaker — at the right edge — is there at every window size.
+    for w: CGFloat in [80, 100, 150, 200, 276, 376, 600] {
+        let r = row(w)
+        expect(r.volumeIcon != nil && r.volumeIcon!.maxX == w && r.volumeIcon!.minX >= r.playPause!.maxX, "a \(Int(w)) pt row has the speaker at its right edge")
+    }
+    // 3.26: the ★ (Apple Music's favourite) sits left of shuffle; it outlasts shuffle/repeat and goes with the remaining time.
+    let starred = row(376, volume: .icon, favourite: true)
+    expect(starred.favourite != nil && starred.shuffle != nil && starred.repeatMode != nil, "a wide window shows ★, shuffle and repeat")
+    expect(starred.remaining!.maxX < starred.favourite!.minX && starred.favourite!.maxX < starred.shuffle!.minX
+           && starred.shuffle!.maxX < starred.repeatMode!.minX && starred.repeatMode!.maxX < starred.volumeIcon!.minX, "…in the order ★ 🔀 🔁 🔊")
+    expect(starred.favourite!.width == starred.shuffle!.width && starred.favourite!.midY == starred.shuffle!.midY, "the ★ is the same size as the buttons beside it")
+    let starParts = [starred.previous, starred.playPause, starred.next, starred.elapsed, starred.timeline, starred.remaining, starred.favourite,
+                     starred.shuffle, starred.repeatMode, starred.volumeIcon].compactMap { $0 }
+    for i in starParts.indices { for j in starParts.indices where j > i { expect(!starParts[i].intersects(starParts[j]), "with the ★, parts \(i) and \(j) don't overlap") } }
+    expect(row(376, volume: .icon).favourite == nil && row(376, favourite: false).favourite == nil, "no ★ unless the app has one")
+    let starSmall = row(220, volume: .icon, favourite: true)
+    expect(starSmall.shuffle == nil && starSmall.repeatMode == nil && starSmall.favourite != nil && starSmall.volumeIcon!.minX - starSmall.favourite!.maxX == 6,
+           "shuffle/repeat give way first; the ★ stays beside the speaker")
+    let starTiny = row(180, volume: .icon, favourite: true)
+    expect(starTiny.favourite == nil && starTiny.remaining == nil && starTiny.volumeIcon != nil && starTiny.timeline != nil, "then the ★ goes with the remaining time")
+    let starNoVolume = row(376, modes: false, volume: .none, favourite: true)
+    expect(starNoVolume.favourite != nil && starNoVolume.favourite!.maxX == 376 && starNoVolume.shuffle == nil, "a ★ without volume or shuffle sits at the right edge")
+    expect([starred, starSmall, starTiny].allSatisfy { ($0.timeline?.maxX ?? 0) <= ($0.favourite ?? $0.shuffle ?? $0.volumeIcon ?? CGRect(x: 10_000, y: 0, width: 0, height: 0)).minX },
+           "the timeline never runs into the ★")
     expect(row(376, long: true).elapsed!.width > wide.elapsed!.width, "hour-long tracks get wider times")
 }
 

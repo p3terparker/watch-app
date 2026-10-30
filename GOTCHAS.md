@@ -2,6 +2,19 @@
 
 ## Watch
 
+> **Spotify can't be "liked" from Watch — AppleScript has no command for it** *(Watch · 2026-10-30)*
+> Music has `favorited` (older versions `loved`) on a track, so the music window's ★ works there (`AppVolume.favouriteReadScript`; the
+> script tries `favorited` inside `try` and falls back to `loved` through `run script`, because an unknown term is a compile error that
+> `try` can't catch). Spotify's scripting dictionary has no like/save, so Watch shows no star for it. The real ways are the Spotify Web
+> API (OAuth with a client ID the user registers) or sending its keyboard shortcut (needs Accessibility and focus) — both were
+> declined for now. Don't fake it with `loved` on Spotify: there is no such property.
+
+> **A status item's custom view must not swallow the click** *(Watch · 2026-10-30)*
+> The menu-bar ticker puts its text in a clip view inside the `NSStatusBarButton`. The clip's `hitTest` returns nil so every click
+> reaches the button (and its action); the scroll is a Core Animation key-frame animation on the strip's layer (no timer, paused by the
+> system when the menu bar is hidden). Create the item with length 0 and set `length` before reading the button's size — its bounds
+> are empty until then.
+
 > **There is no common "app volume" — Music/Spotify need AppleScript, and that means an Automation prompt** *(Watch · 2026-10-28)*
 > MediaRemote (and the adapter) can play, pause, skip and seek, but has no per-app volume; the system output volume
 > would move everything, Watch's own videos included. Music and Spotify expose `sound volume` (0–100) to AppleScript,

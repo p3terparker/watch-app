@@ -283,6 +283,62 @@ for t: Double in [300, 300.5, 301, 301.5, 302] { slowCounts.append(slowRun.press
 expect(slowCounts == [1, 1, 1, 1, 1], "clicks half a second apart are never a double-click (\(slowCounts))")
 slowRun.reset()
 expect(slowRun.count == 0 && slowRun.press(at: 302.125) == 1, "after a reset the next click is a single, even a moment after the last")
+// 3.26: the volume control's drag. A press on the speaker is a click until the pointer moves sideways; then it moves the level
+// from where it is, by the distance travelled, wherever the pointer started.
+expect(!VolumeGesture.isDrag(0) && !VolumeGesture.isDrag(2.9) && !VolumeGesture.isDrag(-2.9), "a wobble under the slop is still a click")
+expect(VolumeGesture.isDrag(3) && VolumeGesture.isDrag(-3) && VolumeGesture.isDrag(40), "3 pt either way is a drag")
+let halfVolume = VolumeGesture(start: 0.5, span: 80)
+expect(halfVolume.level(afterMoving: 0) == 0.5, "no movement: the level stays where it was — it doesn't jump to the pointer")
+expect(halfVolume.level(afterMoving: 20) == 0.75 && halfVolume.level(afterMoving: -20) == 0.25, "dragging right is louder, left quieter, 1/80 per point")
+expect(halfVolume.level(afterMoving: 1000) == 1 && halfVolume.level(afterMoving: -1000) == 0, "clamped to 0…1")
+expect(halfVolume.level(afterMoving: 120) == 1 && halfVolume.level(afterMoving: 60) == 1 && halfVolume.level(afterMoving: 20) == 0.75,
+       "pulling back from past the end unwinds the way it came (measured from the press, not the last event)")
+expect(VolumeGesture(start: 0, span: 80).level(afterMoving: 40) == 0.5 && VolumeGesture(start: 1, span: 80).level(afterMoving: -40) == 0.5, "from a muted or full start")
+expect(VolumeGesture(start: 7, span: 80).start == 1 && VolumeGesture(start: -3, span: 80).start == 0 && VolumeGesture(start: .nan, span: 80).start == 0, "a nonsense start is clamped")
+expect(VolumeGesture(start: 0.5, span: 0).span == VolumeGesture.fallbackSpan && VolumeGesture(start: 0.5, span: -5).span == VolumeGesture.fallbackSpan
+       && VolumeGesture(start: 0.5, span: .infinity).span == VolumeGesture.fallbackSpan, "no usable span: a default one, never a division by zero")
+expect(VolumeGesture(start: 0.5, span: 36).level(afterMoving: 18) == 1, "on a short slider the knob follows the pointer one to one")
+// The slider is out only while the pointer is on the speaker (a little beyond it) or, once out, on the slider.
+let speaker = CGRect(x: 360, y: 4, width: 16, height: 18), slideOut = CGRect(x: 318, y: 4, width: 40, height: 18)
+let tuckedZone = VolumeHover.zone(icon: speaker, slider: nil), outZone = VolumeHover.zone(icon: speaker, slider: slideOut)
+expect(tuckedZone == CGRect(x: 356, y: -2, width: 24, height: 30), "tucked away: only the speaker, grown 4 pt sideways and 6 pt up and down (\(tuckedZone))")
+expect(tuckedZone.contains(CGPoint(x: 368, y: 13)) && !tuckedZone.contains(CGPoint(x: 330, y: 13)), "…the slider's place doesn't open it")
+expect(outZone.contains(CGPoint(x: 330, y: 13)) && outZone.contains(CGPoint(x: 368, y: 13)) && !outZone.contains(CGPoint(x: 300, y: 13)),
+       "slid out: the speaker and the slider keep it, nothing beyond")
+expect(outZone.minX == 314 && outZone.maxX == 380, "…joined, so the pointer can travel from the speaker along the slider")
+// 3.26: the volume slider is a vertical panel that pops up above the speaker, at any window size.
+let popIcon = CGRect(x: 150, y: 4, width: 16, height: 18)
+let popup = VolumePopup.frame(above: popIcon, in: CGSize(width: 320, height: 320))
+expect(popup == CGRect(x: 144, y: 26, width: 28, height: 96), "centred above the speaker, 4 pt clear of it, 28 × 96 (\(popup))")
+expect(VolumePopup.frame(above: CGRect(x: 2, y: 4, width: 16, height: 18), in: CGSize(width: 320, height: 320)).minX == 4, "kept inside the left edge")
+expect(VolumePopup.frame(above: CGRect(x: 300, y: 4, width: 16, height: 18), in: CGSize(width: 320, height: 320)).maxX == 316, "…and the right edge")
+let smallPopup = VolumePopup.frame(above: CGRect(x: 100, y: 19, width: 16, height: 18), in: CGSize(width: 240, height: 100))
+expect(smallPopup.height < 96 && smallPopup.height >= VolumePopup.minHeight && smallPopup.maxY <= 100 - VolumePopup.margin + 0.001 && smallPopup.minY >= 41,
+       "a short window gives it less height, never above the top (\(smallPopup))")
+let cramped = VolumePopup.frame(above: CGRect(x: 10, y: 30, width: 16, height: 18), in: CGSize(width: 60, height: 60))
+expect(cramped.maxY <= 60 && cramped.minY >= 0 && cramped.minX >= 0 && cramped.maxX <= 60, "even a cramped window keeps it on screen (\(cramped))")
+expect(VolumePopup.frame(above: popIcon, in: CGSize(width: 20, height: 320)).width == 28, "a window narrower than the panel doesn't squash it")
+let popZone = VolumeHover.zone(icon: popIcon, slider: popup)
+expect(popZone.contains(CGPoint(x: 158, y: 24)) && popZone.contains(CGPoint(x: 158, y: 60)) && !popZone.contains(CGPoint(x: 158, y: 140)),
+       "the zone joins the speaker and the panel above it — the 4 pt gap between them too — and nothing beyond")
+
+// 3.26: the menu-bar ticker's one line and its motion.
+expect(TickerText.line(title: "Song", artist: "Artist") == "Song – Artist", "song – artist")
+expect(TickerText.line(title: "Song", artist: nil) == "Song" && TickerText.line(title: "Song", artist: "  ") == "Song", "no artist: just the song")
+expect(TickerText.line(title: "  ", artist: "Artist") == nil && TickerText.line(title: "", artist: nil) == nil, "no song name: nothing to show")
+expect(TickerText.line(title: "Two\nLines\t here", artist: "A  B") == "Two Lines here – A B", "line breaks and runs of spaces collapse to one line")
+let fits = Marquee(textWidth: 90)
+expect(!fits.scrolls && fits.window == 90 && fits.travel == 0 && fits.duration == 0 && fits.offset(at: 5) == 0, "text that fits stands still at its own width")
+expect(!Marquee(textWidth: 150).scrolls && Marquee(textWidth: 150).window == 150, "exactly the widest window still fits")
+let long = Marquee(textWidth: 298)
+expect(long.scrolls && long.window == 150, "longer text scrolls in a 150 pt window")
+expect(long.travel == 330 && long.duration == 13, "one pass slides the text and its gap (298 + 32 = 330 pt at 30 pt/s = 11 s) after a 2 s rest")
+expect(abs(long.restFraction - 2.0 / 13.0) < 1e-9, "the animation rests for 2/13 of its cycle")
+expect(long.offset(at: 0) == 0 && long.offset(at: 1.9) == 0 && long.offset(at: 2) == 0, "it rests at the start first")
+expect(long.offset(at: 3) == -30 && long.offset(at: 7) == -150 && long.offset(at: 13 - 0.0001) < -329.9, "then slides left (reading left to right) at 30 pt/s")
+expect(long.offset(at: 13) == 0 && long.offset(at: 13 + 3) == -30, "and the loop starts over, where the second copy had arrived")
+expect(Marquee(textWidth: 1000, maxWidth: 100).window == 100 && Marquee(textWidth: 40, maxWidth: 100).window == 40, "the window is the narrower of the text and the limit")
+expect(Marquee(textWidth: -5).window == 0 && !Marquee(textWidth: .nan).scrolls && !Marquee(textWidth: 50, maxWidth: -1).window.isNaN, "nonsense widths don't break it")
 expect(PlayerZone.at(CGPoint(x: 500, y: -5), in: player) == .skipForward, "points just outside clamp to the nearest zone")
 expect(PlayerZone.at(.zero, in: .zero) == .resize, "an empty view has no play/skip zones")
 

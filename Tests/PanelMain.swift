@@ -245,6 +245,16 @@ final class FixtureMusicApp: MusicAppControl {
         completion(true)
     }
     override func reveal(_ bundleID: String) { revealed.append(bundleID) }
+    // 3.26: Apple Music's ★ — what the fixture app reports, and what Watch set (never the real app).
+    var favouriteReply = false
+    var favouriteSets: [Bool] = []
+    override func favourite(_ bundleID: String, completion: @escaping (Bool?) -> Void) {
+        completion(AppVolume.favouriteApps.contains(bundleID) ? favouriteReply : nil)
+    }
+    override func setFavourite(_ on: Bool, bundleID: String, completion: @escaping (Bool) -> Void) {
+        guard AppVolume.favouriteApps.contains(bundleID) else { completion(false); return }
+        favouriteSets.append(on); favouriteReply = on; completion(true)
+    }
     // 3.24: Watch pausing/resuming the app for its own playback (never asks). Off unless a check turns it on, so the
     // other checks' command counts stay as they were.
     var recordsAllowed = false
@@ -313,6 +323,22 @@ Prefs.showNowPlaying = false; panel.nowPlayingSettingsChanged()
 check(panel.nowPlayingRow.isHidden, "Preference off hides the row")
 Prefs.showNowPlaying = true; panel.nowPlayingSettingsChanged()
 check(!panel.nowPlayingRow.isHidden, "Preference on shows it again")
+// 3.26: the menu-bar ticker — off by default; on, one line "Song – Artist" in its own status item (still while paused or when it
+// fits, scrolling when it doesn't), gone with the song and with the preference.
+check(!Prefs.showTicker && panel.ticker == nil, "the menu-bar ticker is off by default")
+Prefs.showTicker = true; panel.tickerSettingChanged()
+check(panel.ticker?.isShowing == true && panel.ticker?.text == "Fixture Song – Fixture Artist", "on: the paused song, one line (\(String(describing: panel.ticker?.text)))")
+check(panel.ticker?.isScrolling == false && panel.ticker?.marquee?.scrolls == false, "…short and paused, so it stands still")
+let longTitle = "A Very Long Song Title That Could Not Possibly Fit In A Small Menu Bar Window At Once"
+panel.nowPlayingChanged(nowPlayingFixture(longTitle, square)); pump(0.1)
+check(panel.ticker?.text == longTitle + " – Fixture Artist" && panel.ticker?.marquee?.scrolls == true && panel.ticker?.marquee?.window == Marquee.maxWidth,
+      "a long title is cut to a 150 pt window")
+check(panel.ticker?.isScrolling == !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, "…and scrolls while it plays (unless Reduce Motion is on)")
+panel.nowPlayingChanged(nowPlayingFixture(longTitle, square, playing: false)); pump(0.1)
+check(panel.ticker?.isScrolling == false, "…and stops while paused")
+panel.nowPlayingChanged(nowPlayingFixture("Fixture Song", square, playing: false)); pump(0.1)
+Prefs.showTicker = false; panel.tickerSettingChanged()
+check(panel.ticker == nil, "off again: the item is gone")
 panel.openArtwork(); pump(0.3)
 let viewer = panel.artworkWindow!
 check(viewer.musicApp === fixtureMusic, "the music window controls Music/Spotify through the app's own MusicAppControl")
@@ -379,18 +405,38 @@ check(waitFor(3) { viewer.controlsRevealed && viewer.controls.alphaValue > 0.9 }
 check(Date().timeIntervalSince(approach) >= ArtworkWindowController.revealDwell - 0.02, "…not before the dwell")
 check(viewer.chromeVisible, "the caption stays")
 pump(ArtworkWindowController.revealDuration + 0.1)
-check(!viewer.controls.volume.isHidden && abs(viewer.controls.volume.value - 0.4) < 0.001, "Music's own volume shows its level")
+check(!viewer.controls.volumeIcon.isHidden && abs(viewer.controls.volume.value - 0.4) < 0.001, "Music's own volume shows its level (the slider itself is in a pop-up)")
 check(abs(viewer.controls.timeline.value - 0.25) < 0.02, "timeline at the reported position")
 // One row under the caption: ⏮ ⏯ ⏭ from the left, the timeline, then Music's own shuffle/repeat and its volume.
 let musicRow = viewer.controls
 check(musicRow.frame.minY == 6 && musicRow.frame.height == ArtworkLayout.controlsHeight, "the controls are one row along the bottom (\(musicRow.frame))")
 check(!musicRow.previous.isHidden && musicRow.previous.frame.minX == 0 && musicRow.previous.frame.maxX < musicRow.playPause.frame.minX
       && musicRow.playPause.frame.maxX < musicRow.next.frame.minX && musicRow.next.frame.maxX < musicRow.timeline.frame.minX, "⏮ ⏯ ⏭ left of the timeline")
-check(!musicRow.shuffle.isHidden && !musicRow.repeatButton.isHidden && musicRow.timeline.frame.maxX < musicRow.shuffle.frame.minX
-      && musicRow.repeatButton.frame.maxX < musicRow.volumeIcon.frame.minX && musicRow.volume.frame.maxX == musicRow.bounds.width, "shuffle, repeat, then the volume at the right")
-check([musicRow.previous, musicRow.playPause, musicRow.next, musicRow.timeline, musicRow.shuffle, musicRow.repeatButton, musicRow.volumeIcon, musicRow.volume]
+check(!musicRow.shuffle.isHidden && !musicRow.repeatButton.isHidden && !musicRow.favourite.isHidden && musicRow.timeline.frame.maxX < musicRow.favourite.frame.minX
+      && musicRow.favourite.frame.maxX < musicRow.shuffle.frame.minX && musicRow.repeatButton.frame.maxX < musicRow.volumeIcon.frame.minX
+      && musicRow.volumeIcon.frame.maxX == musicRow.bounds.width, "★, shuffle, repeat, then the speaker at the right edge")
+let contentView = viewer.window.contentView!
+check(!musicRow.volumeOpen && musicRow.volumePopup.superview === contentView && musicRow.volumePopup.alphaValue < 0.05
+      && musicRow.volumePopup.hitTest(NSPoint(x: musicRow.volumePopup.frame.midX, y: musicRow.volumePopup.frame.midY)) == nil,
+      "the volume slider is always hidden until the pointer is on the speaker (its pop-up sits beside the row, in the window)")
+check([musicRow.previous, musicRow.playPause, musicRow.next, musicRow.timeline, musicRow.favourite, musicRow.shuffle, musicRow.repeatButton, musicRow.volumeIcon]
       .allSatisfy { abs($0.frame.midY - musicRow.playPause.frame.midY) <= 1 }, "everything on the same line")
 viewerSnapshot("artwork-controls")
+// 3.26 ★: Apple Music's own favourite flag, read when the controls come up and set in the background by a click — Music isn't
+// brought forward, and Watch's own Favourites list (the right-click menu) is untouched.
+check(viewer.isFavourite == false && fixtureMusic.favouriteSets.isEmpty, "the ★ reads Music's flag (off) and sets nothing by itself")
+let favouritesBefore = Favourites.shared.all().count
+musicRow.favourite.performClick(nil); pump(0.1)
+check(fixtureMusic.favouriteSets == [true] && viewer.isFavourite == true, "★ favourites the song in Music")
+musicRow.favourite.performClick(nil); pump(0.1)
+check(fixtureMusic.favouriteSets == [true, false] && viewer.isFavourite == false, "…and a second click removes it")
+check(Favourites.shared.all().count == favouritesBefore && fixtureMusic.revealed.isEmpty, "Watch's own Favourites list is separate, and Music stays where it was")
+fixtureMusic.favouriteReply = true
+viewer.show(timedSong); musicRow.pointerMoved(at: nil); pump(0.05)
+var nextSong = timedSong; nextSong.title = "Another Song"; viewer.show(nextSong); pump(0.1)
+check(viewer.isFavourite == true, "a new song reads its own flag (\(String(describing: viewer.isFavourite)))")
+fixtureMusic.favouriteReply = false; viewer.show(timedSong); pump(0.1)
+check(viewer.isFavourite == false, "…and back")
 // 🔀 🔁 set Music's own shuffle and repeat (never Watch's queue), lit while on.
 check(musicRow.shuffle.lit == false && musicRow.repeatButton.lit == false, "Music's shuffle and repeat read as off")
 musicRow.shuffle.performClick(nil); pump(0.1)
@@ -411,6 +457,116 @@ viewer.controls.timeline.onChange?(0.5, true)
 check(sent.last == .seek(100), "letting go of the timeline halfway seeks to half the length")
 viewer.controls.volume.onChange?(0.7, true)
 check(fixtureMusic.sets.last == 0.7, "the volume slider sets the app's own volume")
+// 3.26: the slider is hidden unless the pointer is on the speaker, then pops up above it; a click mutes, a drag up or down from the
+// speaker moves the volume from where it is — the pointer needn't be on the slider.
+let speaker = NSPoint(x: musicRow.volumeIcon.frame.midX, y: musicRow.volumeIcon.frame.midY)
+musicRow.pointerMoved(at: NSPoint(x: musicRow.timeline.frame.midX, y: speaker.y))
+check(!musicRow.volumeOpen, "the pointer elsewhere on the row leaves the slider hidden")
+musicRow.pointerMoved(at: speaker); pump(0.3)
+let popupFrame = musicRow.volumePopup.frame, speakerInWindow = musicRow.convert(musicRow.volumeIcon.frame, to: contentView)
+check(musicRow.volumeOpen && musicRow.volumePopup.alphaValue > 0.9, "on the speaker the slider pops up")
+check(popupFrame.minY >= speakerInWindow.maxY && popupFrame.height > popupFrame.width && abs(popupFrame.midX - speakerInWindow.midX) <= 14 && contentView.bounds.contains(popupFrame),
+      "…above the speaker, upright, inside the window (\(popupFrame) over \(speakerInWindow))")
+check(musicRow.volume.vertical && musicRow.volume.relative && musicRow.volumePopup.slider === musicRow.volume, "…a vertical slider that drags from where it is")
+let upOnto = musicRow.convert(NSPoint(x: popupFrame.midX, y: popupFrame.midY), from: contentView)
+musicRow.pointerMoved(at: upOnto); pump(ArtworkControlsView.volumeCloseDelay + 0.3)
+check(musicRow.volumeOpen, "moving up from the speaker onto the panel keeps it up")
+musicRow.volume.value = 0.7        // the callback above doesn't move the slider itself; a real drag would have
+musicRow.volumeIcon.onDragStart?(); musicRow.volumeIcon.onDrag?(8, false)
+check(abs((fixtureMusic.sets.last ?? 0) - 0.8) < 0.001 && abs(musicRow.volume.value - 0.8) < 0.001, "dragging up from the speaker raises the volume from 70% by 1/80 per point")
+musicRow.volumeIcon.onDrag?(-8, true)
+check(abs((fixtureMusic.sets.last ?? 0) - 0.6) < 0.001, "pulling back unwinds it, measured from the press: \(String(describing: fixtureMusic.sets.last))")
+musicRow.volumeIcon.performClick(nil); pump(0.1)
+check(fixtureMusic.sets.last == 0 && musicRow.volume.value == 0, "a click on the speaker mutes")
+musicRow.volumeIcon.performClick(nil); pump(0.1)
+check(abs((fixtureMusic.sets.last ?? 0) - 0.6) < 0.001, "…and the next unmutes to where it was")
+musicRow.pointerMoved(at: NSPoint(x: musicRow.timeline.frame.midX, y: speaker.y))
+check(waitFor(2) { !musicRow.volumeOpen && musicRow.volumePopup.alphaValue < 0.05 }, "off the speaker and the panel it goes again")
+// …at any window size: the speaker stays in the row and the panel fits above it, even in a small window (a stand-alone row, so the
+// live music window's size — which later checks rely on — stays as it is).
+let smallHost = NSView(frame: NSRect(x: 0, y: 0, width: 150, height: 90))
+let smallRow = ArtworkControlsView(frame: NSRect(x: 12, y: 6, width: 126, height: ArtworkLayout.controlsHeight))
+smallHost.addSubview(smallRow)
+smallRow.setVolume(access: .granted, appName: "Music")
+let smallSpeaker = NSPoint(x: smallRow.volumeIcon.frame.midX, y: smallRow.volumeIcon.frame.midY)
+check(!smallRow.volumeIcon.isHidden && smallRow.volumePopup.superview === smallHost, "in a 150 pt window the speaker is still in the row")
+smallRow.pointerMoved(at: smallSpeaker); pump(0.3)
+check(smallRow.volumeOpen && smallRow.volumePopup.alphaValue > 0.9 && smallHost.bounds.contains(smallRow.volumePopup.frame)
+      && smallRow.volumePopup.frame.minY >= smallRow.frame.maxY,
+      "…and the slider pops up above it, inside the window (\(smallRow.volumePopup.frame) in \(smallHost.bounds))")
+smallRow.collapseVolume()
+check(!smallRow.volumeOpen && smallRow.volumePopup.alphaValue < 0.05, "and goes with the controls")
+// The real mouse paths: DragButton (click vs drag) and a relative ThinSlider, driven with events.
+final class ClickCounter: NSObject { var hits = 0; @objc func hit() { hits += 1 } }
+let counter = ClickCounter()
+let probe = DragButton(frame: NSRect(x: 4, y: 40, width: 20, height: 20))
+probe.target = counter; probe.action = #selector(ClickCounter.hit)
+var probeDrags: [(CGFloat, Bool)] = [], probeStarts = 0
+probe.onDragStart = { probeStarts += 1 }
+probe.onDrag = { probeDrags.append(($0, $1)) }
+viewer.window.contentView!.addSubview(probe)
+let probeMid = NSPoint(x: 10, y: 10)
+probe.mouseDown(with: mouse(.leftMouseDown, probe, probeMid, clicks: 1))
+probe.mouseDragged(with: mouse(.leftMouseDragged, probe, NSPoint(x: 12, y: 10), clicks: 1))
+probe.mouseUp(with: mouse(.leftMouseUp, probe, NSPoint(x: 12, y: 10), clicks: 1))
+check(counter.hits == 1 && probeStarts == 0 && probeDrags.isEmpty, "a press that moves under 3 pt is a click")
+probe.mouseDown(with: mouse(.leftMouseDown, probe, probeMid, clicks: 1))
+probe.mouseDragged(with: mouse(.leftMouseDragged, probe, NSPoint(x: 20, y: 10), clicks: 1))
+check(probeStarts == 1 && probe.isDragging && probeDrags.count == 1 && abs(probeDrags[0].0 - 10) < 0.01 && !probeDrags[0].1, "moving sideways starts a drag")
+probe.mouseDragged(with: mouse(.leftMouseDragged, probe, NSPoint(x: 6, y: 10), clicks: 1))
+probe.mouseUp(with: mouse(.leftMouseUp, probe, NSPoint(x: 6, y: 10), clicks: 1))
+check(counter.hits == 1 && probeStarts == 1 && !probe.isDragging && probeDrags.count == 3 && abs(probeDrags[2].0 + 4) < 0.01 && probeDrags[2].1,
+      "…reported as the distance from the press, ending with finished and no click")
+probe.removeFromSuperview()
+let probeSlider = ThinSlider(frame: NSRect(x: 4, y: 40, width: 108, height: 18))
+probeSlider.relative = true; probeSlider.value = 0.5
+var sliderEvents: [(Double, Bool)] = []
+probeSlider.onChange = { sliderEvents.append(($0, $1)) }
+viewer.window.contentView!.addSubview(probeSlider)
+probeSlider.mouseDown(with: mouse(.leftMouseDown, probeSlider, NSPoint(x: 8, y: 9), clicks: 1))
+check(probeSlider.value == 0.5 && sliderEvents.isEmpty, "pressing a relative slider far from its knob doesn't move it")
+probeSlider.mouseDragged(with: mouse(.leftMouseDragged, probeSlider, NSPoint(x: 28, y: 9), clicks: 1))
+check(abs(probeSlider.value - 0.7) < 0.001 && sliderEvents.last?.1 == false, "dragging 20 pt of a 100 pt line moves it 20%, from where it was")
+probeSlider.mouseUp(with: mouse(.leftMouseUp, probeSlider, NSPoint(x: 28, y: 9), clicks: 1))
+check(abs(probeSlider.value - 0.7) < 0.001 && sliderEvents.last?.1 == true && !probeSlider.isTracking, "letting go keeps it and says it's finished")
+probeSlider.mouseDown(with: mouse(.leftMouseDown, probeSlider, NSPoint(x: 90, y: 9), clicks: 1))
+probeSlider.mouseUp(with: mouse(.leftMouseUp, probeSlider, NSPoint(x: 90, y: 9), clicks: 1))
+check(abs(probeSlider.value - 0.7) < 0.001 && sliderEvents.last?.1 == true, "a plain click on the line leaves it alone")
+probeSlider.removeFromSuperview()
+// The pop-up's slider runs bottom to top, and the speaker drags up and down.
+let upright = ThinSlider(frame: NSRect(x: 4, y: 40, width: 18, height: 108))
+upright.vertical = true; upright.relative = true; upright.value = 0.5
+var uprightEvents: [(Double, Bool)] = []
+upright.onChange = { uprightEvents.append(($0, $1)) }
+viewer.window.contentView!.addSubview(upright)
+upright.mouseDown(with: mouse(.leftMouseDown, upright, NSPoint(x: 9, y: 8), clicks: 1))
+upright.mouseDragged(with: mouse(.leftMouseDragged, upright, NSPoint(x: 9, y: 28), clicks: 1))
+check(abs(upright.value - 0.7) < 0.001 && uprightEvents.last?.1 == false, "dragging a vertical slider up 20 pt of its 100 pt line raises it 20%, from where it was")
+upright.mouseDragged(with: mouse(.leftMouseDragged, upright, NSPoint(x: 9, y: -12), clicks: 1))
+check(abs(upright.value - 0.3) < 0.001, "down lowers it (measured from the press)")
+upright.mouseUp(with: mouse(.leftMouseUp, upright, NSPoint(x: 9, y: -12), clicks: 1))
+check(abs(upright.value - 0.3) < 0.001 && uprightEvents.last?.1 == true, "letting go keeps it")
+upright.removeFromSuperview()
+let vertical = DragButton(frame: NSRect(x: 4, y: 40, width: 20, height: 20))
+vertical.dragAxis = .vertical
+var verticalDrags: [(CGFloat, Bool)] = []
+vertical.onDrag = { verticalDrags.append(($0, $1)) }
+viewer.window.contentView!.addSubview(vertical)
+// A button's own coordinates are flipped (y grows downward), so the events are built from window points: "up" is up on screen.
+let pressedAt = vertical.convert(NSPoint(x: 10, y: 10), to: nil)
+let movedUp = { (dy: CGFloat, dx: CGFloat) -> NSPoint in vertical.convert(NSPoint(x: pressedAt.x + dx, y: pressedAt.y + dy), from: nil) }
+vertical.mouseDown(with: mouse(.leftMouseDown, vertical, movedUp(0, 0), clicks: 1))
+vertical.mouseDragged(with: mouse(.leftMouseDragged, vertical, movedUp(1, 20), clicks: 1))
+check(verticalDrags.isEmpty, "sideways movement doesn't start a vertical drag")
+vertical.mouseDragged(with: mouse(.leftMouseDragged, vertical, movedUp(12, 0), clicks: 1))
+check(verticalDrags.count == 1 && abs(verticalDrags[0].0 - 12) < 0.01 && !verticalDrags[0].1,
+      "moving up 12 pt on screen starts a drag of +12 (\(verticalDrags))")
+vertical.mouseDragged(with: mouse(.leftMouseDragged, vertical, movedUp(-6, 0), clicks: 1))
+check(verticalDrags.count == 2 && abs(verticalDrags[1].0 + 6) < 0.01, "moving down below the press is negative (\(verticalDrags))")
+vertical.mouseUp(with: mouse(.leftMouseUp, vertical, movedUp(-6, 0), clicks: 1))
+check(verticalDrags.count == 3 && verticalDrags[2].1 && abs(verticalDrags[2].0 + 6) < 0.01,
+      "…and ends finished on release at the same distance (\(verticalDrags))")
+vertical.removeFromSuperview()
 // Once up, a larger zone keeps them, so the band growing and the text lifting can't make them flicker.
 viewer.pointerMoved(at: NSPoint(x: area.midX, y: revealZone.maxY + 10)); pump(ArtworkWindowController.hideDelay + 0.3)
 check(viewer.controlsRevealed, "they stay while the pointer is in the larger keep zone, above where it revealed them")
@@ -526,7 +682,7 @@ let episode = NowPlayingInfo(title: "Fixture Episode", artist: "Fixture Show", a
 panel.nowPlayingChanged(episode); pump(0.5)
 check(viewer.info?.title == "Fixture Episode", "Podcasts does take over the music window")
 check(revealControls(viewer), "resting on the caption reveals the controls")
-check(viewer.controlsRevealed && viewer.controls.volumeIcon.isHidden && viewer.controls.volume.isHidden, "no volume for an app Watch can't set")
+check(viewer.controlsRevealed && viewer.controls.volumeIcon.isHidden && viewer.controls.volumePopup.alphaValue < 0.05, "no volume for an app Watch can't set")
 check(viewer.controls.timeline.isHidden, "no length: no timeline")
 check(!viewer.controls.playPause.dimmed, "controllable while it holds the slot")
 var tab = nowPlayingFixture("Video Clip", wide)
@@ -559,24 +715,35 @@ musicBroadcast(["Player State": "Stopped"])
 check(panel.nowPlayingRow.isHidden, "Music stopping clears the row")
 panel.nowPlayingChanged(nil)
 panel.nowPlayingChanged(nowPlayingFixture("Fixture Song", square)); pump(0.3)
-// The player's volume: tucked away until the speaker is hovered, then a slider that sets the volume.
-let bar = PlayerControlBar(frame: NSRect(x: 0, y: 0, width: 408, height: 20))
+// The player's volume: hidden until the speaker is hovered, then a vertical slider in a panel above it, at any bar width.
+let barHost = NSView(frame: NSRect(x: 0, y: 0, width: 408, height: 120))
+let bar = PlayerControlBar(frame: NSRect(x: 0, y: 6, width: 408, height: 20))
+barHost.addSubview(bar)
 var volumes: [Double] = []
 bar.onVolume = { volumes.append($0) }
 bar.update(playing: true, muted: false, volume: 0.8, current: 30, duration: 120)
-let barVolume = bar.subviews.compactMap { $0 as? ThinSlider }.first { $0.accessibilityLabel() == "Volume" }!
-check(!bar.volumeOpen && barVolume.frame.width == 0, "player volume tucked away at rest")
-bar.pointerMoved(at: NSPoint(x: 408 - 13, y: 10)); pump(0.4)
-check(bar.volumeOpen && barVolume.frame.width == PlayerControlBar.volumeWidth && abs(barVolume.value - 0.8) < 0.001, "hovering the speaker slides the volume out")
+let barPanel = barHost.subviews.compactMap { $0 as? VolumePopupView }.first!
+let barVolume = barPanel.slider
+check(!bar.volumeOpen && barPanel.alphaValue < 0.05 && barVolume.vertical, "player volume hidden at rest")
+bar.pointerMoved(at: NSPoint(x: 408 - 13, y: 10)); pump(0.3)
+check(bar.volumeOpen && barPanel.alphaValue > 0.9 && abs(barVolume.value - 0.8) < 0.001, "hovering the speaker pops the volume up")
+check(barPanel.frame.minY >= bar.frame.maxY && barHost.bounds.contains(barPanel.frame) && barPanel.frame.height > barPanel.frame.width,
+      "…above the bar, upright, inside the window (\(barPanel.frame))")
+check(bar.isScrubbing, "the bar stays up while the volume is")
 barVolume.onChange?(0.3, false)
 check(volumes == [0.3], "dragging it sets the volume")
 bar.update(playing: true, muted: true, volume: 0.3, current: 30, duration: 120)
 check(barVolume.value == 0, "muted shows as zero")
-bar.pointerMoved(at: NSPoint(x: 20, y: 10)); pump(0.9)
-check(!bar.volumeOpen, "it tucks away after the pointer leaves")
-let narrowBar = PlayerControlBar(frame: NSRect(x: 0, y: 0, width: 150, height: 20))
-narrowBar.pointerMoved(at: NSPoint(x: 150 - 13, y: 10)); pump(0.3)
-check(!narrowBar.volumeOpen, "no slide-out in a narrow bar")
+bar.pointerMoved(at: NSPoint(x: 20, y: 10)); _ = waitFor(2) { !bar.volumeOpen }
+check(!bar.volumeOpen && barPanel.alphaValue < 0.05 && !bar.isScrubbing, "it goes after the pointer leaves")
+let narrowHost = NSView(frame: NSRect(x: 0, y: 0, width: 120, height: 60))
+let narrowBar = PlayerControlBar(frame: NSRect(x: 0, y: 6, width: 100, height: 20))
+narrowHost.addSubview(narrowBar)
+let narrowPanel = narrowHost.subviews.compactMap { $0 as? VolumePopupView }.first!
+narrowBar.pointerMoved(at: NSPoint(x: 100 - 13, y: 10)); pump(0.3)
+check(narrowBar.volumeOpen && narrowPanel.alphaValue > 0.9 && narrowHost.bounds.contains(narrowPanel.frame), "even in a narrow bar (100 pt) the volume pops up, inside the window (\(narrowPanel.frame))")
+let tinyBar = PlayerControlBar(frame: NSRect(x: 0, y: 6, width: 60, height: 20))
+check(!tinyBar.subviews.contains { $0 is NSButton && $0.isHidden && ($0 as? NSButton)?.toolTip?.hasPrefix("Volume") == true }, "and the speaker is still in a 60 pt bar")
 // Windows never cover each other (when the screen has room): a new player's spot avoids the music window. The music
 // window sits where it opens for real, under the menu-bar icon at the top right (the harness has no icon; CI's screen is
 // 1024×768 at 1×, too small for two windows side by side when one is centred).
@@ -627,7 +794,7 @@ if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
     key(s, 125, "\u{F701}"); key(s, 125, "\u{F701}")
     check(abs(player.playbackVolume - 0.4) < 0.001 && abs(Prefs.playerVolume - 0.4) < 0.001, "↓ lowers it, remembered for the next window")
     let playerBar = player.window.contentView!.subviews.compactMap { $0 as? PlayerControlBar }.first
-    let playerVolume = playerBar?.subviews.compactMap { $0 as? ThinSlider }.first { $0.accessibilityLabel() == "Volume" }
+    let playerVolume = player.window.contentView!.subviews.compactMap { $0 as? VolumePopupView }.first?.slider
     playerVolume?.onChange?(0.25, true)
     check(playerVolume != nil && abs(player.playbackVolume - 0.25) < 0.001, "the bar's volume slider sets it")
     let cap = player.qualityLimit
@@ -700,7 +867,7 @@ if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
     check(up.engine == .native && musicWindow.info?.appBundleID == UniversalQueue.ownID, "the file plays in Watch, shown in the music window")
     check(waitFor(6) { (musicWindow.info?.position(at: Date()) ?? 0) > 0.5 && musicWindow.info?.isPlaying == true }, "Watch's own player is playing it")
     check(revealControls(musicWindow), "resting on the caption reveals Watch's own item's controls")
-    check(musicWindow.controls.shuffle.isHidden && !musicWindow.controls.volume.isHidden, "Watch's own item: no shuffle/repeat (those are the apps'), Watch's volume")
+    check(musicWindow.controls.shuffle.isHidden && !musicWindow.controls.volumeIcon.isHidden, "Watch's own item: no shuffle/repeat (those are the apps'), Watch's volume")
     viewerSnapshot("music-window-own-item")
     _ = waitFor(3) { musicWindow.info?.isPlaying == true }
     musicWindow.controls.playPause.performClick(nil)
