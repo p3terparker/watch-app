@@ -28,6 +28,11 @@ final class FixturePanel: AppDelegate {
     override func resolveEpisode(_ link: String, completion: @escaping (PodcastEpisode?) -> Void) {
         episodeLookups.append(link); completion(episodeAnswer)
     }
+    // Your Music library (3.23): fixture answers in place of Music.
+    var librarySearches: [(query: String, done: (LibraryAnswer) -> Void)] = []
+    override func performLibrarySearch(_ query: String, completion: @escaping (LibraryAnswer) -> Void) {
+        librarySearches.append((query, completion))
+    }
 }
 let testApp = NSApplication.shared
 // Do not assign an application delegate or run applicationDidFinishLaunching.
@@ -240,8 +245,11 @@ final class FixtureMusicApp: MusicAppControl {
         completion(true)
     }
     override func reveal(_ bundleID: String) { revealed.append(bundleID) }
-    var spotifyScripts: [String] = []
-    override func playSpotify(_ script: String, completion: @escaping (Bool) -> Void) { spotifyScripts.append(script); completion(true) }
+    var playedScripts: [(script: String, app: String)] = []
+    var spotifyScripts: [String] { playedScripts.filter { $0.app == SpotifyLink.bundleID }.map { $0.script } }
+    override func playScript(_ script: String, app id: String, completion: @escaping (Bool) -> Void) {
+        playedScripts.append((script, id)); completion(true)
+    }
 }
 let fixtureMusic = FixtureMusicApp()
 panel.musicControl = fixtureMusic
@@ -630,8 +638,8 @@ if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
     if let id = up.queue?.peek(1, wrap: false)?.id { up.jump(to: id) }
     pump(0.5)
     let queued = panel.windowManager.players.last
-    check(panel.windowManager.players.count == before + 1 && up.engine == .video && queued?.onEnded != nil,
-          "a queued video opens in a video window that the queue drives")
+    check(panel.windowManager.players.count == before + 1 && up.engine == .video && queued?.onEnded != nil && queued?.onShowList != nil,
+          "a queued video opens in a video window that the queue drives (its ⌥⌘U shows the music window's list)")
     let queuedFrame = queued?.window.frame ?? musicWindow.window.frame
     check(!queuedFrame.intersects(musicWindow.window.frame) && !(drawer?.window.frame.intersects(queuedFrame) ?? false),
           "beside the music window and its list, not on them (\(queuedFrame))")
@@ -718,6 +726,58 @@ if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
     check(up.queue == nil, "closing the music window stops it")
 } else {
     print("SKIP podcast playback checks: no fixture media")
+}
+// Your Music library (3.23): the Music tab searches Music's own library (fixture answers; no Music here). Without Music
+// running, or without permission, the page says so with the button that fixes it — never a prompt of its own; a song plays
+// in Music by its id, through Up Next, and Music carries on with its own Up Next afterwards.
+func messageButton() -> NSButton? {
+    panel.browseList.arrangedSubviews.compactMap { $0 as? NSStackView }.flatMap { $0.arrangedSubviews }.compactMap { $0 as? NSButton }.first
+}
+type("back in black"); pump(0.42)
+if let tabs = serviceTabs() {
+    tabs.selectedSegment = 2
+    panel.searchServiceChosen(tabs)
+}
+check(panel.librarySearches.map { $0.query } == ["back in black"] && serviceTabs()?.selectedSegment == 2, "the Music tab searches your library")
+panel.librarySearches.last?.done(.needsAccess)
+check(messageButton()?.title == "Allow…", "not yet allowed: an Allow… button (\(messageButton()?.title ?? "none"))")
+panel.reloadPage()
+panel.librarySearches.last?.done(.notRunning)
+check(panel.librarySearches.count == 2 && messageButton()?.title == "Open Music", "Music not open: Open Music")
+panel.reloadPage()
+panel.librarySearches.last?.done(.songs([LibrarySong(persistentID: "0123456789ABCDEF", title: "Back in Black", artist: "AC/DC",
+                                                     album: "Back in Black", duration: 255)]))
+check(rows(panel.browseList).count == 1 && messageButton() == nil, "the library's songs")
+snapshot("music-library")
+fixtureMusic.playedScripts = []
+rows(panel.browseList).first?.onClick?(); pump(0.3)
+check(fixtureMusic.playedScripts.map { $0.script } == [MusicLibrary.playScript("0123456789ABCDEF")!] && fixtureMusic.playedScripts.first?.app == "com.apple.Music",
+      "a library song plays in Music, by its id: \(fixtureMusic.playedScripts)")
+check(panel.upNext.engine == .external("com.apple.Music") && panel.upNext.queue?.handBack == "com.apple.Music",
+      "as Up Next's item, with Music carrying on afterwards")
+panel.artworkWindow?.close(); pump(0.3)
+// A video window's own Up Next list (3.23): the same drop-down, under the video window — here, its folder.
+if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
+    let tone = URL(fileURLWithPath: video).deletingLastPathComponent().appendingPathComponent("a.m4a").path
+    let player = panel.windowManager.open(video, anchor: nil)
+    _ = waitFor(10) { player.isPlaying }
+    player.toggleUpNextList(); pump(0.3)
+    if let list = player.upNextList {
+        check(list.isShown && waitFor(3) { drawerTitles(list) == ["player", "v180", "v360"] }, "⌥⌘U drops this window's own Up Next down: \(drawerTitles(list))")
+        let l = list.window.frame, w = player.window.frame
+        check(l.maxY <= w.minY || l.minY >= w.maxY, "under (or over) the video window, never on it (\(l) vs \(w))")
+        player.insertIntoUpNext([QueueItem(url: tone, title: "Fixture Tone"), QueueItem(url: "https://open.spotify.com/track/6rqhFgbbKwnb9MLmUQDhG6")], at: nil)
+        check(drawerTitles(list) == ["player", "Fixture Tone", "v180", "v360"], "a dropped file plays next here; a Spotify song stays out: \(drawerTitles(list))")
+        windowSnapshot(list.window, "video-up-next")
+        if let id = player.queue?.items.first(where: { $0.title == "Fixture Tone" })?.id { list.onPlay?(id) }
+        pump(0.3)
+        check(player.sourceURL == tone && drawerTitles(list).first == "Fixture Tone", "double-click plays it in this window")
+        player.window.close(); pump(0.2)
+        check(!list.isShown, "the list goes with its window")
+    } else {
+        check(false, "⌥⌘U makes a list")
+        player.window.close(); pump(0.2)
+    }
 }
 panel.searchService = .youtube
 type(""); pump(0.1)

@@ -28,6 +28,7 @@ final class UniversalQueue: NSObject {
     var onChange: (() -> Void)?                        // the drop-down list, the music window
     var show: ((NowPlayingInfo?) -> Void)?             // Watch's own item into the music window; nil = back to the music app
     var openVideo: ((String, String?) -> PlayerWindowController?)?   // (link, title) → a video window beside the music window
+    var showList: (() -> Void)?                        // the music window's Up Next list (a queue-driven video window's ⌥⌘U)
     var control = MusicAppControl()                    // Music/Spotify commands and Spotify's play-by-URI
     var frontmostApp: () -> String? = { NSWorkspace.shared.frontmostApplication?.bundleIdentifier }
     var appIsRunning: (String) -> Bool = { !NSRunningApplication.runningApplications(withBundleIdentifier: $0).isEmpty }
@@ -75,6 +76,7 @@ final class UniversalQueue: NSObject {
         case .start:
             var q = PlayQueue(kind: .list, name: "Up Next", items: [])
             q.insert(items, .later)
+            q.handBack = q.current.flatMap { Self.app(for: $0) }   // begun with a song in Music/Spotify: it carries on after
             queue = q; held = false
             if let first = queue?.current { start(first) }
         }
@@ -182,13 +184,15 @@ final class UniversalQueue: NSObject {
         guard let app = Self.app(for: item) else { advance(); return }
         engine = .external(app)
         show?(nil)                                           // the music window follows the app again
-        awaiting = (title: SpotifyLink.uri(item.url) != nil ? item.title : nil, since: Date())
+        // A Spotify song or a Music library song is started by its script; the mirror of "what the app was playing" just resumes.
+        let script = Handoff.spotifyPlayScript(item.url) ?? MusicLibrary.persistentID(item.url).flatMap(MusicLibrary.playScript)
+        awaiting = (title: script != nil ? item.title : nil, since: Date())
         let mine = token
         let done: (Bool) -> Void = { [weak self] ok in
             guard let self = self, self.token == mine, !ok else { return }
             NSSound.beep(); self.advance()                     // couldn't play it there: go on
         }
-        if let script = Handoff.spotifyPlayScript(item.url) { control.playSpotify(script, completion: done) }
+        if let script = script { control.playScript(script, app: app, completion: done) }
         else { control.perform(.command(.play), bundleID: app, completion: done) }   // the song it was on: carry on
     }
     // Every report from the music apps (adapter and broadcasts), while the queue's current item plays in one of them.
@@ -392,6 +396,7 @@ final class UniversalQueue: NSObject {
             self.advance()
         }
         pc.onStep = { [weak self] delta in if delta > 0 { self?.advance() } else { self?.previous() } }
+        pc.onShowList = { [weak self] in self?.showList?() }
         pc.onClosed = { [weak self] in
             guard let self = self, self.token == mine else { return }
             self.videoClosed()
@@ -437,7 +442,7 @@ final class UniversalQueue: NSObject {
         pc.window.close()
     }
     private func detachVideo() {
-        video?.onEnded = nil; video?.onStep = nil; video?.onClosed = nil
+        video?.onEnded = nil; video?.onStep = nil; video?.onClosed = nil; video?.onShowList = nil
         video = nil
     }
 

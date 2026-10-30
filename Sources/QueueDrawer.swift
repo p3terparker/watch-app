@@ -42,6 +42,9 @@ final class QueueDrawer: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
     var onClear: (() -> Void)?
     var onResume: (() -> Void)?
     var extraMenu: ((QueueItem) -> [NSMenuItem])?     // Add to Favourites, Show in Finder, Copy Link…
+    // What the list says when nothing is lined up (a video window's own list says where its drops play).
+    var emptyHint = "Right-click anything in Watch ▸ Play Next, or drop songs, videos and files here."
+    var idleHint = "Add something with Play Next / Play Later, or drop it here — it plays when this song ends."
 
     override init() {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: Self.minWidth, height: 200),
@@ -171,7 +174,7 @@ final class QueueDrawer: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             add(.item(now, .now), nil)
             add(.header("Playing Next"), q.pos + 1)
             if s.playingNext.isEmpty {
-                add(.note("Right-click anything in Watch ▸ Play Next, or drop songs, videos and files here.", button: nil, action: nil), q.pos + 1)
+                add(.note(emptyHint, button: nil, action: nil), q.pos + 1)
             }
             for (i, item) in s.playingNext.enumerated() { add(.item(item, .next), q.pos + 1 + i) }
             let restStart = q.pos + 1 + s.playingNext.count
@@ -187,7 +190,7 @@ final class QueueDrawer: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
                 add(.item(now, .now), nil)
             }
             add(.note(nowPlaying() == nil ? "Nothing is playing. Right-click a video or song in Watch ▸ Play Next, or drop files and links here."
-                                          : "Add something with Play Next / Play Later, or drop it here — it plays when this song ends.",
+                                          : idleHint,
                       button: nil, action: nil), 0)
             endTarget = 0
             clearButton.isHidden = true

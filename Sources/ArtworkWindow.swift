@@ -959,11 +959,10 @@ class MusicAppControl {
             DispatchQueue.main.async { completion(done) }
         }
     }
-    // Plays a Spotify song or episode (Handoff.spotifyPlayScript) — always from the user's own action (adding it to the
-    // queue, a link), so macOS may ask once. Spotify is opened in the background first if it isn't running, and given a
-    // moment to start answering.
-    func playSpotify(_ script: String, completion: @escaping (Bool) -> Void) {
-        let id = SpotifyLink.bundleID
+    // Plays a Spotify song or episode (Handoff.spotifyPlayScript) or a Music library song (MusicLibrary.playScript) — always
+    // from the user's own action (adding it to the queue, a link, a click), so macOS may ask once. The app is opened in the
+    // background first if it isn't running, and given a moment to start answering.
+    func playScript(_ script: String, app id: String, completion: @escaping (Bool) -> Void) {
         if !Self.isRunning(id) {
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { completion(false); return }
             let options = NSWorkspace.OpenConfiguration(); options.activates = false
@@ -982,6 +981,23 @@ class MusicAppControl {
                 }
             }
             DispatchQueue.main.async { completion(played) }
+        }
+    }
+    // A search of Music's library (MusicLibrary.searchScript): only while Music runs and Watch is already allowed — it
+    // never asks (typing searches as you go); the panel's Allow… button asks with requestAccess.
+    func searchLibrary(_ query: String, completion: @escaping (LibraryAnswer) -> Void) {
+        let id = MusicLibrary.bundleID
+        guard let script = MusicLibrary.searchScript(query) else { completion(.songs([])); return }
+        guard Self.isRunning(id) else { completion(.notRunning); return }
+        queue.async {
+            let answer: LibraryAnswer
+            switch Self.access(automationPermission(id, ask: false)) {
+            case .granted:      answer = Self.run(script).map { LibraryAnswer.songs(MusicLibrary.parse($0.stringValue ?? "")) } ?? .failed
+            case .undetermined: answer = .needsAccess
+            case .denied:       answer = .denied
+            case .unsupported:  answer = .notRunning
+            }
+            DispatchQueue.main.async { completion(answer) }
         }
     }
     // Double-click: Music shows the playing song in its window — only if Watch is already allowed.

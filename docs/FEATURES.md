@@ -1,4 +1,4 @@
-# Watch — v3.22 · Beta *(reworked)*
+# Watch — v3.23 · Beta *(reworked)*
 **Plays almost any video, from anywhere — and downloads it.** Hotkey **⌥⌘Y**.
 
 **Features**
@@ -58,6 +58,15 @@
   Next), **↗** opens it in Apple Podcasts, **⬇** downloads it; right‑click to Mark as Played. Episodes **resume where you
   left off** and get their ✓ when finished. Pasting an Apple Podcasts **episode** link plays it the same way, and copied
   episode links appear in Recent Links. Double‑click the music window to open the episode in Apple Podcasts.
+- **Your Music library (3.23):** a third search tab, **Music**, searches the songs in the Music app's library (names,
+  artists, albums). Click a song to play it in Music, or **+** to add it to Up Next (⌥ = Play Next) — mixed with videos,
+  files, podcasts and Spotify songs. Watch only looks while Music is open and you've allowed it: otherwise the tab offers
+  **Open Music** or **Allow…** (macOS asks once). When a list that began with a Music or Spotify song ends, that app
+  carries on with its own Up Next.
+- **Up Next in video windows (3.23):** every video window can drop its own Up Next down under it, like the music window —
+  **⌥⌘U** or **Show Up Next List** in its "…" menu. It's the window's own list (the playlist, search results, folder or
+  YouTube's next videos): drag to reorder, ⌫ removes, double-click plays, drop videos, files or links on it to play them
+  next in that window. A video the music window's queue opened shows that queue's list instead.
 - **Recent Links** — video links you copy or play, newest first: a **small thumbnail**, the title, and *site ·
   duration · how long ago*; a video you stopped part‑way shows where you left off (**12:34 / 45:10**) and a red
   **resume bar** on its thumbnail, a live stream shows LIVE. Each video appears **once**, whatever link shape it was copied as
@@ -176,6 +185,8 @@
 - Now Playing relies on a workaround (system perl loading the bundled MediaRemote adapter) for macOS 15.4+'s
   restriction on reading Now Playing information. If a future macOS closes it, the row simply stops appearing.
 - Some sites block yt‑dlp from certain networks (e.g. Vimeo 403) — those fall back to loading the page.
+- Music library: songs that aren't in your library (Apple Music catalogue) can't be searched or played by Watch; the
+  search lists the first 50 matches.
 - Podcasts: paid (Apple Podcasts Subscriptions) and private feeds aren't playable; a show page lists the newest 200
   episodes from Apple's directory (its feed when the directory has none). Apple Podcasts' own library and listening
   history aren't read.
@@ -185,6 +196,8 @@
   to go to until it's taught the new shape; lists you played from keep working.
 
 **Changelog**
+- **3.23** — **Your Music library** as a search tab (songs play in Music through Up Next), the **Up Next list in every video
+  window** (⌥⌘U), and Music/Spotify carrying on after a list that began with one of their songs.
 - **3.22** — **Podcasts:** YouTube | Podcasts tabs on search results, show pages with episodes, Apple Podcasts show/episode
   links and feeds in the field, episodes played in the music window with resume and ✓. The Up Next list never covers the
   music window on small screens (the window moves up for it).

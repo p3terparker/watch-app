@@ -234,3 +234,11 @@ yt-dlp instead (`AppDelegate.resolveEpisode`). Build the Search URL's term by ha
 in a search can't change the query. The GUI harness on GitHub's Mac runs on a 1024×768 screen: placement checks must
 leave the windows room (a full screen makes windows cascade by design).
 
+## Watch 3.23 — library search: never a prompt while typing
+
+The Music tab searches as you type, so `MusicAppControl.searchLibrary` must never ask macOS for Automation: it runs only when
+Music is running and `AEDeterminePermissionToAutomateTarget(ask: false)` already says yes, and reports `.notRunning` /
+`.needsAccess` / `.denied` otherwise. The page's Open Music and Allow… buttons are the only things that launch Music or
+ask. Anything typed goes into the script only through `MusicLibrary.escaped` (quotes, backslashes, control characters), and
+only a validated 16-hex-digit persistent ID ever reaches the play script.
+

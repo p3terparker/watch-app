@@ -1,5 +1,22 @@
 # Watch verification
 
+## 3.23 (55) — Up Next in video windows, your Music library, 2026-10-30 (preview; hands-on acceptance pending)
+
+Every video window gets the drop-down Up Next list for its own list (⌥⌘U, its "…" menu): reorder, remove, double-click,
+drops play there (a window the universal queue runs shows the music window's list). Search gets a **Music** tab: Music's
+own library, searched by AppleScript only while Music runs and Watch is already allowed (Open Music / Allow… buttons do
+the rest, on the user's click), songs played in Music by persistent ID through Up Next (`Sources/MusicLibrary.swift`). A
+queue begun with a Music/Spotify song now hands back to that app when it ends. No preference keys added; bundle ID, hotkey
+and URL handlers unchanged.
+
+### Verification
+
+- Authored without a local Swift toolchain; GitHub Actions on macOS compiles and tests it. Results are recorded here once the
+  run finishes.
+- Manual (pending, needs a real Mac): library search in real Music (speed on a large library, cloud-only songs, the one-time
+  Automation prompt from Allow…), playing a library song and Music carrying on afterwards, a video window's list for a
+  YouTube playlist / recommendations / a folder, drops from Finder and browsers onto it.
+
 ## 3.22 (54) — Podcasts, 2026-10-30 (preview; hands-on acceptance pending)
 
 Podcasts in the panel and the music window: YouTube | Podcasts tabs on search results (iTunes Search, no account), show
@@ -11,8 +28,13 @@ shows' feeds, only after a search, opening a show or playing an episode.
 
 ### Verification
 
-- Authored without a local Swift toolchain; GitHub Actions on macOS compiles and tests it. Results are recorded here once the
-  run finishes.
+- Authored without a local Swift toolchain; GitHub Actions on macOS compiles and tests it.
+- Run [40986072812](https://github.com/p3terparker/watch-app/actions/runs/40986072812) (`1792058`): every step green on the
+  first push — type-check, `./check.sh` (unit + tooling), universal build and package, bundled tools + Now Playing adapter
+  (12 checks), installer verification, GUI harness 209 checks / 0 failures. Published
+  [v3.22-preview](https://github.com/p3terparker/watch-app/releases/tag/v3.22-preview), "Watch 3.22 preview (54)", DMG
+  230,793,703 bytes, SHA-256 `545417e805dddf2563653862e3ebbe450f68f6fb6e6f2d1dd596aaae0d103122`. The informational live
+  YouTube step resolved 1 of 3 public videos natively; two hit YouTube's bot check from GitHub's address.
 - Manual (pending, needs a real Mac): real podcast searches and show pages (artwork, dates, lengths), a feed link, an Apple
   Podcasts episode link (recent and older than 200 episodes), resuming and ✓ across relaunches, downloads of an episode, and
   the Up Next list's placement under small and large music windows near the screen's bottom.

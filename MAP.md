@@ -1,6 +1,6 @@
 # Watch — where everything lives
 
-A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift`, `ArtworkWindow.swift`, `ArtworkStyle.swift`, `StreamSupport.swift`, `Queue.swift`, `Handoff.swift`, `UpNext.swift`, `QueueDrawer.swift` and `Podcasts.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.22** — native AVKit playback for YouTube (HD + live), in-app
+A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift`, `ArtworkWindow.swift`, `ArtworkStyle.swift`, `StreamSupport.swift`, `Queue.swift`, `Handoff.swift`, `UpNext.swift`, `QueueDrawer.swift`, `Podcasts.swift` and `MusicLibrary.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.23** — native AVKit playback for YouTube (HD + live), in-app
 downloads, YouTube search / History / Playlists in the panel (absorbed from the retired Tube app), an
 **Up Next** list per player window (Next/Previous · Autoplay · Repeat All/One · Shuffle), and a small library:
 watched marks, Favourites and playlist progress — plus a **Now Playing** row showing what other apps play, whose artwork
@@ -46,6 +46,9 @@ opens in a window that follows the music. See `docs/FEATURES.md` for the feature
   show/episode ids, feed-looking links, the Search/Lookup URLs), `ITunesPodcasts` (Search/Lookup JSON), `PodcastFeed` (RSS via
   `XMLParser`, durations, RFC 822 dates) — Foundation only, `test.sh` covers it (`Tests/PodcastChecks.swift`) — and
   `PodcastDirectory` (the network calls: search, a show's episodes via its lookup or feed, one episode by its link).
+- `Sources/MusicLibrary.swift` (3.23) — `LibrarySong` (+ `queueItem`: `music:<persistent ID>`), `LibraryAnswer`,
+  `MusicLibrary` (`escaped` AppleScript string text, `searchScript`, `parse`, `isPersistentID`, `persistentID(_:)`,
+  `playScript`). Foundation only; `test.sh` covers it (`Tests/MusicLibraryChecks.swift`).
 - `Sources/StreamSupport.swift` — `StreamLadder` (the lower H.264 renditions to offer beside yt-dlp's pick; the resolution cap
   for a video area; the "720p" label), `PlaybackFailure` (does yt-dlp's error want a signed-in viewer; the reason worth
   showing) and `PlaybackLog` (`~/Library/Logs/Watch/playback.log`, 256 KB, whole lines). Foundation (+ CoreGraphics); `test.sh` covers it.
@@ -195,6 +198,22 @@ queue under the music window (`UniversalQueue`, below).
   `openSource` opens the episode's Apple Podcasts page.
 - Keys: `QueueItem.resumeKey` — `PlaybackPositions.key` gives every Apple Podcasts link to one episode `podcast:<id>`, so a
   pasted link, Recent Links and the episodes page share one resume point and ✓.
+
+### Music library tab + video-window lists (3.23)
+- `SearchService` is an `Int` enum (`youtube`/`podcasts`/`music` = the tab index). `.music` → `librarySearchFetch` →
+  `performLibrarySearch` (boundary; `MusicAppControl.searchLibrary`: `.notRunning` / `.needsAccess` / `.denied` / `.failed` /
+  `.songs`) → `.songs(q, songs)` or a message page whose button is `MessageAction.openMusic` (`openMusicForSearch`: opens
+  Music in the background, searches again once it runs), `.allowMusic` (`allowMusicForSearch` → `requestAccess`, the one
+  prompt) or `.automationSettings`. `songRow` (+ / menu) and `playLibrarySong` → `upNext.playNow([song.queueItem])`.
+- `UniversalQueue.playExternal` starts a `music:<id>` item with `MusicLibrary.playScript` and a Spotify item with
+  `Handoff.spotifyPlayScript`, both through `MusicAppControl.playScript(_:app:)` (opens the app in the background first);
+  `.start` sets `handBack` when the first item is the app's, so it carries on after the list.
+- `PlayerWindowController.toggleUpNextList` (⌥⌘U in `handleKey`, "Show/Hide Up Next List" in `addUpNext`) →
+  `makeUpNextList` (a `QueueDrawer` over the window's `queue`; Now Playing from `sourceURL` while there's no list) →
+  `ensureQueue` then `reload`. `insertIntoUpNext` (drops; Music/Spotify items refused) makes a provisional list for a lone
+  video; `finishQueue` merges a late list around it (`PlayQueue.merged(into:)`). `startLoad`, `finishQueue` and
+  `toggleShuffle` reload it. `onShowList` (set by `UniversalQueue.playVideo`) sends ⌥⌘U to `AppDelegate.showQueue`.
+  `WindowManager.tile` hides lists; `freeFrame` treats a shown list as part of its window (`upNextListFrame`).
 
 ### Downloads — `DownloadKind` / `DownloadJob` / `DownloadManager`
 - `DownloadKind` — `.originalVideo` (`bv*+ba/b`, source container) · `.mp4Best` · `.originalAudio` (`-x`, no

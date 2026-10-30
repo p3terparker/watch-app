@@ -1,6 +1,6 @@
 # Watch App
 
-A "plays almost any video" menu-bar player. **Current: v3.22.**
+A "plays almost any video" menu-bar player. **Current: v3.23.**
 Binary `Watch` · bundle `com.jacob.watch` · hotkey **⌥⌘Y** ·
 frameworks: Cocoa, WebKit, Carbon, ServiceManagement, **AVKit, AVFoundation**.
 
@@ -100,6 +100,15 @@ an episode link plays (`playEpisodeLink`; older episodes via yt-dlp in `resolveE
 (`UniversalQueue.playPodcast` → `playNative`), resume (`QueueItem.resumeKey`, `podcast:<episode id>` in `PlaybackPositions`)
 and get ✓ like videos. The harness overrides `performPodcastSearch`/`fetchEpisodes`/`resolveEpisode`. The Up Next list never
 sits on the music window (`DrawerLayout`, `Sources/Tiling.swift`: the window moves up for it when needed).
+**3.23 — Up Next in video windows + your Music library:** every `PlayerWindowController` can drop its own list down
+(`toggleUpNextList`, ⌥⌘U / "…" menu; `QueueDrawer` with `emptyHint`/`idleHint`; drops via `insertIntoUpNext`, a late
+playlist/recommendations list `merged(into:)` around them; queue-driven windows' `onShowList` opens the music window's list
+instead; lists hide for Tile Windows and count in `freeFrame`). Search's third tab **Music** (`SearchService.music`):
+`Sources/MusicLibrary.swift` (tested) builds the escaped library-search script and parses Music's answer
+(`LibrarySong`, `LibraryAnswer`); `MusicAppControl.searchLibrary` runs it only while Music runs and Watch is already allowed
+(never asks; the page's Open Music / Allow… / Open System Settings buttons act on a click). Songs are `music:<persistent ID>`
+queue items Music plays via `MusicLibrary.playScript` (`MusicAppControl.playScript`, which also plays Spotify URIs). A queue
+started with a Music/Spotify song hands back to that app at its end.
 
 **Gotchas (see GOTCHAS.md):** never AppleScript an app by name unless it's running (uninstalled names pop a
 "Where is …?" chooser) and never send Apple Events without checking `AEDeterminePermissionToAutomateTarget`
@@ -107,9 +116,10 @@ with ask=false first — no unrequested popups. Remote fMP4 in AVFoundation is u
 A stale yt-dlp can cause YouTube failures — replace Watch with a newer build. Media tools are included. Browser-tab detection needs "Allow JavaScript from Apple Events" in the browser. App Nap is disabled while playing.
 Now Playing: never run the adapter's `test` (it registers a fake player); `send`/`seek` only from a click on the artwork
 window (controls, click zones, keys), never automatically. Never auto-load YouTube's embed or watch page; never send cookies
-except the one retry after YouTube asked for a signed-in viewer with an account connected. AppleScript to Music/Spotify only for their volume, playback commands
-and artwork, only when running, addressed by bundle id, asking Automation only on the user's own drag or click (artwork only
-when already allowed; 3.3 removed the automatic probes for their prompts).
+except the one retry after YouTube asked for a signed-in viewer with an account connected. AppleScript to Music/Spotify only for their volume, playback commands,
+artwork, shuffle/repeat, playing a queued song (Spotify URI / Music persistent ID, validated) and the Music library search
+(3.23: only while Music runs and Watch is already allowed), addressed by bundle id, asking Automation only on the user's own
+drag or click (artwork and search only when already allowed; 3.3 removed the automatic probes for their prompts).
 
 **Build:** `./build.sh` (build only → `build/native/Watch.app`; add `--install` for an explicit install after quitting the app).
 
