@@ -6,7 +6,8 @@
     "Carbon",
     "ServiceManagement",
     "AVKit",
-    "AVFoundation"
+    "AVFoundation",
+    "MediaPlayer"
   ],
   "minimum_macos": "13.0",
   "swift_version": "5"

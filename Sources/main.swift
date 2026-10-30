@@ -41,6 +41,9 @@ enum Prefs {
     static var showNowPlaying: Bool { get { d.object(forKey: "showNowPlaying") as? Bool ?? true } set { d.set(newValue, forKey: "showNowPlaying") } }
     // Full-screen artwork backdrop: a gradient of the artwork's colours (default) or black.
     static var playerVolume: Double { get { d.object(forKey: "playerVolume") as? Double ?? 1 } set { d.set(newValue, forKey: "playerVolume") } }  // what a new player starts at
+    // 3.24: pause Music/Spotify while Watch plays (asked once, on your own click), and play it again when Watch is done.
+    static var pauseMusicWhilePlaying: Bool { get { d.object(forKey: "pauseMusicWhilePlaying") as? Bool ?? true } set { d.set(newValue, forKey: "pauseMusicWhilePlaying") } }
+    static var resumeMusicAfter: Bool { get { d.object(forKey: "resumeMusicAfter") as? Bool ?? true } set { d.set(newValue, forKey: "resumeMusicAfter") } }
     static var artworkColourBackground: Bool { get { d.object(forKey: "artworkColourBackground") as? Bool ?? true } set { d.set(newValue, forKey: "artworkColourBackground") } }
     // Playback modes. Each player window keeps its own (its "…" menu toggles them); these are what a NEW
     // window starts with, i.e. the last choice made anywhere.
@@ -680,6 +683,8 @@ final class SettingsController: NSObject, NSTextFieldDelegate {
     private var clipboardHotkeyCheck: NSButton!
     private var browserTabsCheck: NSButton!
     private var nowPlayingCheck: NSButton!
+    private var pauseMusicCheck: NSButton!
+    private var resumeMusicCheck: NSButton!
     private var dirField: NSTextField!
     private var updateButton: NSButton!
     private var updateLabel: NSTextField!
@@ -694,7 +699,7 @@ final class SettingsController: NSObject, NSTextFieldDelegate {
 
     init(app: AppDelegate) {
         self.app = app
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 560),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 640),
                           styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Watch Preferences"; window.isReleasedWhenClosed = false
         super.init()
@@ -757,6 +762,14 @@ final class SettingsController: NSObject, NSTextFieldDelegate {
         nowPlayingCheck = NSButton(checkboxWithTitle: "Show what's playing in other apps (Music, Spotify, browsers…) with its artwork", target: self, action: #selector(nowPlayingChanged))
         nowPlayingCheck.state = Prefs.showNowPlaying ? .on : .off
         stack.addArrangedSubview(nowPlayingCheck)
+        pauseMusicCheck = NSButton(checkboxWithTitle: "Pause Music or Spotify while Watch plays", target: self, action: #selector(pauseMusicChanged))
+        pauseMusicCheck.state = Prefs.pauseMusicWhilePlaying ? .on : .off
+        stack.addArrangedSubview(pauseMusicCheck)
+        resumeMusicCheck = NSButton(checkboxWithTitle: "…and play it again when Watch's videos are closed", target: self, action: #selector(resumeMusicChanged))
+        resumeMusicCheck.state = Prefs.resumeMusicAfter ? .on : .off
+        resumeMusicCheck.isEnabled = Prefs.pauseMusicWhilePlaying
+        let resumeRow = NSStackView(views: [resumeMusicCheck]); resumeRow.edgeInsets = NSEdgeInsets(top: 0, left: 18, bottom: 0, right: 0)
+        stack.addArrangedSubview(resumeRow)
 
         dirField = NSTextField(string: Prefs.downloadDir); dirField.isEditable = false
         dirField.widthAnchor.constraint(equalToConstant: 300).isActive = true
@@ -849,6 +862,11 @@ final class SettingsController: NSObject, NSTextFieldDelegate {
     @objc private func clipboardHotkeyChanged() { Prefs.hotkeyPlaysClipboard = (clipboardHotkeyCheck.state == .on) }
     @objc private func browserTabsChanged() { Prefs.showBrowserTabs = (browserTabsCheck.state == .on); app?.mediaSettingsChanged() }
     @objc private func nowPlayingChanged() { Prefs.showNowPlaying = (nowPlayingCheck.state == .on); app?.nowPlayingSettingsChanged() }
+    @objc private func pauseMusicChanged() {
+        Prefs.pauseMusicWhilePlaying = (pauseMusicCheck.state == .on)
+        resumeMusicCheck.isEnabled = Prefs.pauseMusicWhilePlaying
+    }
+    @objc private func resumeMusicChanged() { Prefs.resumeMusicAfter = (resumeMusicCheck.state == .on) }
     @objc private func loginChanged() { app?.toggleLoginItem(); loginCheck.state = currentLogin() ? .on : .off }
     @objc private func updateNow() { showMediaToolUpdateHelp() }
 }
@@ -2772,6 +2790,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     var suppressMoveSave = false
     var dragView: DragReceiverView?
     var pendingURLPlays: [String] = []
+    var pendingFiles: [String] = []                  // Finder ▸ Open With before launch finished (3.24)
+    // macOS's Now Playing for Watch's own playback, and pausing Music/Spotify while Watch plays (3.24; systemTick).
+    lazy var systemNowPlaying: SystemNowPlaying = {
+        let s = SystemNowPlaying()
+        s.onCommand = { [weak self] request in self?.systemCommand(request) ?? false }
+        return s
+    }()
+    private var systemTimer: Timer?
+    private(set) var systemSource = OwnPlayback.Source.none
+    private weak var systemPlayer: PlayerWindowController?
+    private var lastPlayed: [ObjectIdentifier: Date] = [:]
+    private var watchWasPlaying = false
+    private(set) var pausedForWatch: String?          // the music app Watch paused, to play again when Watch is done
+    private var musicPlaying: [String: Bool] = [:]    // Music/Spotify's own broadcasts, whatever the Now Playing preference
+    private var playerArtwork: (url: String, data: Data?)?
 
     let windowManager = WindowManager()
     let mediaMonitor = MediaMonitor()
@@ -2878,12 +2911,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         let queued = pendingURLPlays
         pendingURLPlays.removeAll()
         queued.forEach { play($0) }
+        if !pendingFiles.isEmpty { let files = pendingFiles; pendingFiles = []; openFiles(files) }
         // First launch only: the setup guide (reopen any time from Preferences ▸ Setup Guide…).
         if !Prefs.hasSeenWelcome { Prefs.hasSeenWelcome = true; openWelcome() }
     }
     func applicationWillTerminate(_ n: Notification) {
         liveSearch.cancel(); browseTask?.cancel()
         windowManager.players.forEach { $0.savePosition() }
+        upNext.quitting()
         downloads.stopAll()
         nowPlaying.stopAll()
     }
@@ -3234,6 +3269,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     }
     static let ownBundleIDs: Set<String> = [Bundle.main.bundleIdentifier ?? "com.jacob.watch", "com.jacob.watch"]
     private func setMusic(_ info: NowPlayingInfo?) {
+        if let i = info, AppVolume.supported.contains(i.appBundleID) { musicPlaying[i.appBundleID] = i.isPlaying }
         if info?.artwork != nowPlayingInfo?.artwork { nowPlayingImage = info?.artwork.flatMap { NSImage(data: $0) } }
         nowPlayingInfo = info
         rebuildNowPlayingRow()
@@ -3248,6 +3284,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     // Music / Spotify said their track or state changed. A new track seen only this way (a video holds the "now playing"
     // slot) gets its artwork from the app itself when Watch is allowed to ask; otherwise the window's usual grace + icon.
     @objc func musicBroadcast(_ n: Notification) {
+        if let app = NowPlayingInfo.broadcasts[n.name.rawValue] {    // for Preferences ▸ pause while Watch plays, always
+            musicPlaying[app] = (n.userInfo?["Player State"] as? String) == "Playing"
+        }
         guard Prefs.showNowPlaying, let app = NowPlayingInfo.broadcasts[n.name.rawValue] else { return }
         guard let heard = NowPlayingInfo.broadcast(n.userInfo ?? [:], app: app) else {
             if nowPlayingInfo?.appBundleID == app { setMusic(nil) }         // stopped
@@ -3340,11 +3379,134 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         return viewer
     }
 
+    // MARK: Watch in macOS's Now Playing, and Music/Spotify paused while Watch plays (3.24)
+    // Runs once a second while anything of Watch's is open (started by play(), the queue and showQueueItem; stops itself).
+    func ensureSystemTick() {
+        guard systemTimer == nil else { return }
+        systemTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.systemTick() }
+    }
+    func systemTick() {
+        let players = windowManager.players.filter { $0.onStep == nil }    // a window Up Next runs is the queue's own item
+        let now = Date()
+        for p in players where p.isPlaying { lastPlayed[ObjectIdentifier(p)] = now }
+        let own = upNext.ownInfo
+        let states = players.enumerated().map { i, p in
+            OwnPlayback.PlayerState(id: i, playing: p.isPlaying, lastPlayed: lastPlayed[ObjectIdentifier(p)] ?? .distantPast)
+        }
+        let source = OwnPlayback.pick(queueItem: own != nil, queuePlaying: own?.isPlaying == true, players: states,
+                                      musicPlaying: playingMusicApp() != nil)
+        systemSource = source
+        switch source {
+        case .none:          systemPlayer = nil; systemNowPlaying.publish(nil)
+        case .queue:         systemPlayer = nil; systemNowPlaying.publish(own)
+        case .player(let i): systemPlayer = players[i]; systemNowPlaying.publish(playerInfo(players[i]))
+        }
+        // Watch began playing: pause the music app (only if already allowed — this isn't a click). Watch is done: play it again.
+        let watchPlaying = own?.isPlaying == true || players.contains { $0.isPlaying }
+        if watchPlaying && !watchWasPlaying { pauseMusicForWatch(asking: false) }
+        watchWasPlaying = watchPlaying
+        let active = !windowManager.players.isEmpty || upNext.showsOwnItem
+        if let app = pausedForWatch,
+           MusicPause.shouldResume(enabled: Prefs.resumeMusicAfter, paused: app, watchActive: active, appPlaying: musicPlaying[app] == true) {
+            pausedForWatch = nil
+            musicControl.performIfAllowed(.command(.play), bundleID: app) { _ in }
+        }
+        let open = Set(windowManager.players.map { ObjectIdentifier($0) })
+        lastPlayed = lastPlayed.filter { open.contains($0.key) }
+        if windowManager.players.isEmpty && !upNext.showsOwnItem && pausedForWatch == nil {
+            systemTimer?.invalidate(); systemTimer = nil
+            watchWasPlaying = false
+            systemNowPlaying.publish(nil)
+        }
+    }
+    // The music app playing now (its own broadcasts, or the Now Playing reading) — nil when none is.
+    private func playingMusicApp() -> String? {
+        if let info = nowPlayingInfo, info.isPlaying, info.appBundleID != UniversalQueue.ownID,
+           musicPlaying[info.appBundleID] != false { return info.appBundleID }      // its own broadcast is the fresher word
+        return musicPlaying.first { $0.value }?.key
+    }
+    // Preferences ▸ Pause Music or Spotify while Watch plays. `asking`: the user's own click started it, so macOS may ask once.
+    func pauseMusicForWatch(asking: Bool) {
+        let queueUses: Bool = {
+            if case .external = upNext.engine { return true }
+            return upNext.queue?.handBack != nil && upNext.queue?.handBack == playingMusicApp()
+        }()
+        guard let app = MusicPause.toPause(enabled: Prefs.pauseMusicWhilePlaying, playingApp: playingMusicApp(), queueUsesApp: queueUses) else { return }
+        let done: (Bool) -> Void = { [weak self] paused in
+            guard paused, let self = self else { return }
+            self.pausedForWatch = app; self.musicPlaying[app] = false
+            self.ensureSystemTick()
+        }
+        if asking { musicControl.perform(.command(.pause), bundleID: app, completion: done) }
+        else { musicControl.performIfAllowed(.command(.pause), bundleID: app, completion: done) }
+    }
+    // Media keys / Control Center → whatever of Watch's owns Now Playing.
+    private func systemCommand(_ request: NowPlayingRequest) -> Bool {
+        switch systemSource {
+        case .none: return false
+        case .queue: upNext.command(request)
+        case .player:
+            guard let p = systemPlayer else { return false }
+            switch request {
+            case .command(.play):     p.setPaused(false)
+            case .command(.pause):    p.setPaused(true)
+            case .command(.next):     p.nextItem()
+            case .command(.previous): p.previousItem()
+            case .seek(let t):        p.seek(toSeconds: t)
+            }
+        }
+        systemTick()
+        return true
+    }
+    private func playerInfo(_ p: PlayerWindowController) -> NowPlayingInfo {
+        let site = VideoLinks.site(p.sourceURL)
+        var info = NowPlayingInfo(title: p.mediaTitle ?? site, artist: site, album: nil, bundleID: UniversalQueue.ownID, isPlaying: p.isPlaying)
+        info.duration = p.playbackDuration
+        info.elapsed = p.playbackTime.isFinite ? p.playbackTime : 0
+        info.elapsedAt = Date()
+        info.rate = 1
+        info.artwork = artwork(for: p.sourceURL)
+        return info
+    }
+    // A video's picture for Control Center: its thumbnail, fetched once per video.
+    private func artwork(for url: String) -> Data? {
+        if let known = playerArtwork, known.url == url { return known.data }
+        playerArtwork = (url, nil)
+        if let s = links.link(for: url)?.thumbnail ?? VideoLinks.thumbnail(url), let u = URL(string: s), u.scheme?.hasPrefix("http") == true {
+            URLSession.shared.dataTask(with: u) { [weak self] data, _, _ in
+                DispatchQueue.main.async { if self?.playerArtwork?.url == url { self?.playerArtwork = (url, data) } }
+            }.resume()
+        }
+        return nil
+    }
+
+    // MARK: Finder ▸ Open With ▸ Watch (3.24)
+    func application(_ sender: NSApplication, open urls: [URL]) {
+        let files = urls.filter(\.isFileURL).map(\.path)
+        guard !files.isEmpty else { return }
+        if statusItem == nil { pendingFiles += files } else { openFiles(files) }
+    }
+    // One video plays in a window (its folder becomes its Up Next); audio, folders and several files go to Up Next under the
+    // music window.
+    func openFiles(_ paths: [String]) {
+        let items = paths.flatMap { path -> [QueueItem] in
+            var folder: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &folder) else { return [] }
+            if folder.boolValue { return PlayQueue.media(inFolder: URL(fileURLWithPath: path)) }
+            return PlayQueue.mediaKind((path as NSString).pathExtension) != nil ? [QueueItem(url: path)] : []
+        }
+        guard !items.isEmpty else { NSSound.beep(); return }
+        if items.count == 1, items[0].source == .file { play(items[0].url); return }
+        pauseMusicForWatch(asking: true)
+        upNext.playNow(items)
+        showQueue()
+    }
+
     // MARK: the universal queue — Play Next / Play Later from anywhere, played under the music window (UpNext.swift)
     private func makeUpNext() -> UniversalQueue {
         let q = UniversalQueue()
         q.control = musicControl
-        q.onChange = { [weak self] in self?.queueDrawer?.reload(); self?.refreshControllable() }
+        q.onChange = { [weak self] in self?.queueDrawer?.reload(); self?.refreshControllable(); self?.ensureSystemTick() }
         q.show = { [weak self] info in self?.showQueueItem(info) }
         q.showList = { [weak self] in self?.showQueue() }
         q.resolveEpisode = { [weak self] link, done in
@@ -3374,6 +3536,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             refreshControllable()
             return
         }
+        ensureSystemTick()
         let viewer = artworkWindow ?? makeArtworkWindow()
         viewer.musicApp = ownControl
         if viewer.window.isVisible { viewer.show(info) } else { presentMusicWindow(viewer, info, takePanelSpot: false) }
@@ -3421,6 +3584,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         }
         d.onClear = { [weak self] in self?.upNext.clearAdded() }
         d.onResume = { [weak self] in self?.upNext.resume() }
+        d.savedCount = { [weak self] in self?.upNext.saved?.items.count }
+        d.onResumeSaved = { [weak self] in self?.upNext.resumeSaved() }
         d.extraMenu = { [weak self] item in self?.queueItemMenu(item) ?? [] }
         queueDrawer = d
         return d
@@ -4012,12 +4177,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     // Play an episode now, in the music window, with Up Next carrying on after it.
     func playEpisode(_ episode: PodcastEpisode) {
         liveSearch.cancel()
+        pauseMusicForWatch(asking: true)
         upNext.playNow([episode.queueItem()])
         showQueue()
     }
     // An Apple Podcasts episode link (the field, Recent Links, the URL scheme): Up Next looks it up and plays it.
     func playEpisodeLink(_ link: String) {
         recordLink(link, probe: false)                        // its title and picture arrive with the lookup (makeUpNext)
+        pauseMusicForWatch(asking: true)
         upNext.playNow([QueueItem(url: link, source: .podcast)])
         showQueue()
     }
@@ -4474,6 +4641,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             && !(musicFrame.map { windowManager.takeFrame(replacing: dropdown.frame).intersects($0) } ?? false)
         let pc = windowManager.open(input, anchor: statusItem, queue: queue, replacing: takeOver ? dropdown.frame : nil)
         if takeOver { stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors() }
+        pauseMusicForWatch(asking: true)                       // your own click: macOS may ask once
+        ensureSystemTick()
         if !local { recordLink(pc.sourceURL, probe: false) }   // the player reports title/thumbnail via onInfo
     }
     // Puts a video link on top of Recent Links. `probe` asks yt-dlp for its title, thumbnail and duration when

@@ -1,5 +1,23 @@
 # Watch verification
 
+## 3.24 (56) — part of your Mac, 2026-10-30 (preview; hands-on acceptance pending)
+
+Watch's own playback in macOS's Now Playing with media keys / Control Center / headphone commands
+(`Sources/SystemNowPlaying.swift`, MediaPlayer framework added), Music/Spotify paused while Watch plays and resumed after
+(Preferences, two new keys `pauseMusicWhilePlaying` and `resumeMusicAfter`, both on), Up Next saved across closing the music
+window and relaunching (new key `upNextQueue`), Finder's Open With for video/audio (`CFBundleDocumentTypes`, Alternate rank —
+Watch never becomes the default app). The pure decisions (`OwnPlayback`, `MusicPause`, `QueueSnapshot`) are unit-tested. The
+GUI harness's three play/pause checks that failed once on 3.23's first run now wait for the state instead of fixed pauses.
+Bundle ID, hotkey and URL handlers unchanged.
+
+### Verification
+
+- Authored without a local Swift toolchain; GitHub Actions on macOS compiles and tests it. Results are recorded here once the
+  run finishes.
+- Manual (pending, needs a real Mac): media keys, Control Center and AirPods with a video and with an episode; the keys going
+  back to Music when only Music plays; the pause/resume with real Music and Spotify (and the one Automation prompt); Up Next
+  after quitting and reopening; Finder ▸ Open With ▸ Watch on a video, an audio file, several files and a folder.
+
 ## 3.23 (55) — Up Next in video windows, your Music library, 2026-10-30 (preview; hands-on acceptance pending)
 
 Every video window gets the drop-down Up Next list for its own list (⌥⌘U, its "…" menu): reorder, remove, double-click,
@@ -11,8 +29,15 @@ and URL handlers unchanged.
 
 ### Verification
 
-- Authored without a local Swift toolchain; GitHub Actions on macOS compiles and tests it. Results are recorded here once the
-  run finishes.
+- Authored without a local Swift toolchain; GitHub Actions on macOS compiles and tests it.
+- Run [40987013917](https://github.com/p3terparker/watch-app/actions/runs/40987013917) (`50a847d`), attempt 1: type-check,
+  `./check.sh`, build, package, bundled tools and installer passed; the GUI harness failed 3 of 220 checks, all play/pause in
+  the music window — a delayed single click that hadn't fired within its 0.15 s margin, and two ⏯ presses checked after a
+  fixed 0.3 s — in code 3.23 didn't change and that passed on 3.22. One re-run of the job (attempt 2) passed every step,
+  including the GUI harness, and published [v3.23-preview](https://github.com/p3terparker/watch-app/releases/tag/v3.23-preview),
+  "Watch 3.23 preview (55)", DMG 230,685,226 bytes, SHA-256
+  `5a02b2cf930597728fc4826b303af11b0435b7631063ac8b1b5939101e8af0f6`. Judged timing on a busy runner, not a 3.23 defect; 3.24
+  makes those checks wait for the state. The informational live YouTube step resolved 1 of 3 (bot checks).
 - Manual (pending, needs a real Mac): library search in real Music (speed on a large library, cloud-only songs, the one-time
   Automation prompt from Allow…), playing a library song and Music carrying on afterwards, a video window's list for a
   YouTube playlist / recommendations / a folder, drops from Finder and browsers onto it.

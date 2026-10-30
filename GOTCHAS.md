@@ -242,3 +242,12 @@ Music is running and `AEDeterminePermissionToAutomateTarget(ask: false)` already
 ask. Anything typed goes into the script only through `MusicLibrary.escaped` (quotes, backslashes, control characters), and
 only a validated 16-hex-digit persistent ID ever reaches the play script.
 
+## Watch 3.24 — publishing Now Playing takes the media keys
+
+Once Watch sets `MPNowPlayingInfoCenter`'s info, macOS sends the media keys to Watch — even while Music plays — until Watch
+clears it. So `SystemNowPlaying.publish(nil)` (info nil, state stopped, every command target removed) runs whenever nothing of
+Watch's should hold them: nothing of Watch's open, or only paused Watch players while a music app plays
+(`OwnPlayback.pick`). Watch's own MediaRemote reading then sees Watch as the "now playing" app; it's ignored there
+(`AppDelegate.ownBundleIDs`), so the music window keeps following Music through its broadcasts. Pausing Music for Watch's
+playback is not a click unless `play()` started it: it uses `performIfAllowed` (never prompts).
+

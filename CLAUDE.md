@@ -1,8 +1,8 @@
 # Watch App
 
-A "plays almost any video" menu-bar player. **Current: v3.23.**
+A "plays almost any video" menu-bar player. **Current: v3.24.**
 Binary `Watch` · bundle `com.jacob.watch` · hotkey **⌥⌘Y** ·
-frameworks: Cocoa, WebKit, Carbon, ServiceManagement, **AVKit, AVFoundation**.
+frameworks: Cocoa, WebKit, Carbon, ServiceManagement, **AVKit, AVFoundation, MediaPlayer**.
 
 **What it is now:** the dropdown is a **control panel**: one field (search YouTube or paste a link; ⬇ Download beside it), download
 progress, videos open in browser tabs (Safari + Chromium via AppleScript + in-page JS), and recently-copied
@@ -109,6 +109,17 @@ instead; lists hide for Tile Windows and count in `freeFrame`). Search's third t
 (never asks; the page's Open Music / Allow… / Open System Settings buttons act on a click). Songs are `music:<persistent ID>`
 queue items Music plays via `MusicLibrary.playScript` (`MusicAppControl.playScript`, which also plays Spotify URIs). A queue
 started with a Music/Spotify song hands back to that app at its end.
+**3.24 — system integration:** `Sources/SystemNowPlaying.swift` publishes Watch's own playback to macOS's Now Playing
+(`MPNowPlayingInfoCenter`) and takes media keys / Control Center / headphone commands (`MPRemoteCommandCenter`, on only while
+it publishes). `AppDelegate.systemTick` (1 s, only while something of Watch's is open) picks the source with the pure
+`OwnPlayback.pick` (`Sources/Handoff.swift`, tested): the queue's own item or the latest video window; nothing while only a
+music app plays. Preferences ▸ "Pause Music or Spotify while Watch plays" / "…and play it again when Watch's videos are
+closed" (`Prefs.pauseMusicWhilePlaying`, `resumeMusicAfter`, both on; `MusicPause`, tested): a click that starts playback may
+ask Automation once (`perform`); anything else only acts if already allowed (`MusicAppControl.performIfAllowed`). Up Next is
+saved (`PlayQueue.snapshot`/`QueueSnapshot`, key `upNextQueue`) and offered back ("Up Next from before — Resume") after the
+music window closes or Watch relaunches; a list played to its end is forgotten. Finder ▸ Open With ▸ Watch
+(`CFBundleDocumentTypes`, Alternate rank; `application(_:open:)` → `openFiles`): one video plays in a window, audio, folders and
+several files go to Up Next.
 
 **Gotchas (see GOTCHAS.md):** never AppleScript an app by name unless it's running (uninstalled names pop a
 "Where is …?" chooser) and never send Apple Events without checking `AEDeterminePermissionToAutomateTarget`

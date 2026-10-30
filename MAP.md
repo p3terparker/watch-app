@@ -1,6 +1,6 @@
 # Watch — where everything lives
 
-A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift`, `ArtworkWindow.swift`, `ArtworkStyle.swift`, `StreamSupport.swift`, `Queue.swift`, `Handoff.swift`, `UpNext.swift`, `QueueDrawer.swift`, `Podcasts.swift` and `MusicLibrary.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.23** — native AVKit playback for YouTube (HD + live), in-app
+A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift`, `ArtworkWindow.swift`, `ArtworkStyle.swift`, `StreamSupport.swift`, `Queue.swift`, `Handoff.swift`, `UpNext.swift`, `QueueDrawer.swift`, `Podcasts.swift`, `MusicLibrary.swift` and `SystemNowPlaying.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.24** — native AVKit playback for YouTube (HD + live), in-app
 downloads, YouTube search / History / Playlists in the panel (absorbed from the retired Tube app), an
 **Up Next** list per player window (Next/Previous · Autoplay · Repeat All/One · Shuffle), and a small library:
 watched marks, Favourites and playlist progress — plus a **Now Playing** row showing what other apps play, whose artwork
@@ -37,7 +37,9 @@ opens in a window that follows the music. See `docs/FEATURES.md` for the feature
   `webURL`), `QueueItem` (id, url, title, subtitle, artwork, duration, source, `added`, `page`, `resumeKey`; Codable), `RepeatMode`, `QueueSections`
   and `PlayQueue` (see "Up Next"). Foundation only; `test.sh` covers it (`Tests/QueueChecks.swift`).
 - `Sources/Handoff.swift` (3.21) — `Handoff.judge` (what a music app's next report means while one of its songs is the
-  queue's current item), `Handoff.spotifyPlayScript`, `QueueRoute.pick`. Foundation only; `test.sh` covers it.
+  queue's current item), `Handoff.spotifyPlayScript`, `QueueRoute.pick`; 3.24 `OwnPlayback.pick` (which of Watch's players
+  owns macOS's Now Playing) and `MusicPause` (pause a music app while Watch plays / resume it). Foundation only; `test.sh`
+  covers it.
 - `Sources/UpNext.swift` (3.21) — `UniversalQueue` (the app-wide queue under the music window and where its item plays),
   `OwnPlaybackControl` (the music window's volume/commands for Watch's own item), `SpotifyOEmbed`.
 - `Sources/QueueDrawer.swift` (3.21) — `QueueDrawer` (the drop-down list: child window, `NSTableView`, drag/drop),
@@ -46,6 +48,9 @@ opens in a window that follows the music. See `docs/FEATURES.md` for the feature
   show/episode ids, feed-looking links, the Search/Lookup URLs), `ITunesPodcasts` (Search/Lookup JSON), `PodcastFeed` (RSS via
   `XMLParser`, durations, RFC 822 dates) — Foundation only, `test.sh` covers it (`Tests/PodcastChecks.swift`) — and
   `PodcastDirectory` (the network calls: search, a show's episodes via its lookup or feed, one episode by its link).
+- `Sources/SystemNowPlaying.swift` (3.24) — `SystemNowPlaying`: `publish(_:)` (MPNowPlayingInfoCenter: title, artist, album,
+  length, position, rate, artwork, playback state; nil clears it and turns the commands off), `handle(_:)`, the
+  MPRemoteCommandCenter targets (play, pause, toggle, next, previous, change position) → `onCommand`.
 - `Sources/MusicLibrary.swift` (3.23) — `LibrarySong` (+ `queueItem`: `music:<persistent ID>`), `LibraryAnswer`,
   `MusicLibrary` (`escaped` AppleScript string text, `searchScript`, `parse`, `isPersistentID`, `persistentID(_:)`,
   `playScript`). Foundation only; `test.sh` covers it (`Tests/MusicLibraryChecks.swift`).
@@ -198,6 +203,23 @@ queue under the music window (`UniversalQueue`, below).
   `openSource` opens the episode's Apple Podcasts page.
 - Keys: `QueueItem.resumeKey` — `PlaybackPositions.key` gives every Apple Podcasts link to one episode `podcast:<id>`, so a
   pasted link, Recent Links and the episodes page share one resume point and ✓.
+
+### System Now Playing, pausing music, saved Up Next, Open With (3.24)
+- `AppDelegate.ensureSystemTick` / `systemTick` (1 s while a player window is open, the queue shows its own item or a paused
+  app waits to be resumed): `lastPlayed` per window, `OwnPlayback.pick` → `systemSource` → `systemNowPlaying.publish`
+  (`playerInfo` for a window, with `artwork(for:)` fetching its thumbnail once) — and `MusicPause`: Watch starting to play →
+  `pauseMusicForWatch(asking: false)`; nothing of Watch's left → `performIfAllowed(.play)` on `pausedForWatch`. `play()`,
+  `playEpisode` and `openFiles` call `pauseMusicForWatch(asking: true)` (the user's click). `musicPlaying` follows Music's and
+  Spotify's broadcasts and every report (`setMusic`), whatever the Now Playing preference. `systemCommand` routes media keys:
+  the queue → `upNext.command`; a window → `setPaused` / `nextItem` / `previousItem` / `seek(toSeconds:)`.
+- `UniversalQueue.queue`'s `didSet` keeps `saved` (`PlayQueue.snapshot`, minus the music app's mirror item) in UserDefaults
+  `upNextQueue`; `finish()` clears it; `resumeSaved()` rebuilds it (`PlayQueue(snapshot:)`) and plays its current item.
+  `QueueDrawer.savedCount` / `onResumeSaved` show "Up Next from before — Resume" when no queue runs. `quitting()` saves an
+  episode's position.
+- `application(_:open:)` (file URLs; queued in `pendingFiles` until launch finishes) → `openFiles`: folders expand to their
+  media (`PlayQueue.media(inFolder:)`), one video → `play`, anything else → `upNext.playNow` + `showQueue`. Info.plist
+  `CFBundleDocumentTypes`: public.movie / public.audio, Viewer, Alternate (never the default app).
+- Preferences: `pauseMusicCheck`, `resumeMusicCheck` (enabled with the first).
 
 ### Music library tab + video-window lists (3.23)
 - `SearchService` is an `Int` enum (`youtube`/`podcasts`/`music` = the tab index). `.music` → `librarySearchFetch` →

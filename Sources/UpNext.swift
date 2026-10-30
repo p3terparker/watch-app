@@ -16,8 +16,12 @@ final class UniversalQueue: NSObject {
     static let musicID = "com.apple.Music"
     enum Engine: Equatable { case idle, external(String), native, video }
 
-    private(set) var queue: PlayQueue?
+    private(set) var queue: PlayQueue? { didSet { if let s = queue?.snapshot { keep(s) } } }
     private(set) var engine: Engine = .idle
+    // The last Up Next, kept across closing the music window and relaunching (3.24; UserDefaults `upNextQueue`) until it's
+    // played to its end or replaced: the list offers to resume it.
+    private(set) var saved: QueueSnapshot? = UniversalQueue.loadSaved()
+    static let savedKey = "upNextQueue"
     private(set) var held = false                      // a music app took over: the queue waits for Resume
     private(set) var volume: Double = Prefs.playerVolume
     var isRunning: Bool { queue != nil }
@@ -108,6 +112,26 @@ final class UniversalQueue: NSObject {
         onChange?()
     }
 
+    // MARK: saved Up Next (3.24)
+
+    private static func loadSaved() -> QueueSnapshot? {
+        UserDefaults.standard.data(forKey: savedKey).flatMap { try? JSONDecoder().decode(QueueSnapshot.self, from: $0) }
+    }
+    private func keep(_ s: QueueSnapshot?) {
+        saved = s
+        if let s = s, let data = try? JSONEncoder().encode(s) { UserDefaults.standard.set(data, forKey: Self.savedKey) }
+        else { UserDefaults.standard.removeObject(forKey: Self.savedKey) }
+    }
+    // The list's Resume for a saved Up Next: it plays again from the item it was on.
+    func resumeSaved() {
+        guard queue == nil, let s = saved else { return }
+        queue = PlayQueue(snapshot: s)
+        held = false
+        if let item = queue?.current { start(item) }
+    }
+    // Watch is quitting: an episode remembers where it was.
+    func quitting() { savePosition() }
+
     // MARK: stepping
 
     func advance() {
@@ -147,6 +171,7 @@ final class UniversalQueue: NSObject {
         let back = queue?.handBack
         leave(for: nil)
         queue = nil; held = false
+        keep(nil)                                          // played to its end: nothing to resume
         show?(nil)
         if let app = back, appIsRunning(app) { control.perform(.command(.play), bundleID: app) { _ in } }
         onChange?()

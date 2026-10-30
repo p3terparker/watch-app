@@ -64,6 +64,14 @@ enum SpotifyLink {
     }
 }
 
+// A saved Up Next (PlayQueue.snapshot), kept in UserDefaults (`upNextQueue`) so it's there after a relaunch.
+struct QueueSnapshot: Codable, Equatable {
+    var name: String
+    var items: [QueueItem]
+    var current: Int
+    var handBack: String?
+}
+
 struct QueueItem: Codable, Equatable, Identifiable {
     static let musicPrefix = "music:"     // a song in the Music app: "music:<persistent ID>", or "music:" for "what Music plays"
     var id = UUID()
@@ -209,6 +217,24 @@ struct PlayQueue {
         guard let i = items.firstIndex(where: { $0.id == id }) else { return }
         change(&items[i])
         items[i].id = id
+    }
+
+    // Up Next as it stands, to restore after a relaunch (3.24): the items in play order and where it was; the mirror of
+    // "what Music/Spotify was playing" isn't kept (it's the app's, not Watch's). nil when nothing of Watch's would remain.
+    var snapshot: QueueSnapshot? {
+        var kept: [QueueItem] = [], current = 0
+        for (i, index) in order.enumerated() {
+            let item = items[index]
+            if item.url == QueueItem.musicPrefix || item.url == "spotify:" { continue }
+            if i < pos { current += 1 }                          // what already played stays, before the cursor
+            kept.append(item)
+        }
+        guard !kept.isEmpty else { return nil }
+        return QueueSnapshot(name: name, items: kept, current: min(current, kept.count - 1), handBack: handBack)
+    }
+    init(snapshot s: QueueSnapshot) {
+        self.init(kind: .list, name: s.name, items: s.items, startAt: min(max(0, s.current), max(0, s.items.count - 1)))
+        handBack = s.handBack
     }
 
     // Shuffle randomizes everything around whatever is playing — which stays put and keeps playing — except Playing

@@ -42,6 +42,8 @@ final class QueueDrawer: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
     var onClear: (() -> Void)?
     var onResume: (() -> Void)?
     var extraMenu: ((QueueItem) -> [NSMenuItem])?     // Add to Favourites, Show in Finder, Copy Link…
+    var savedCount: () -> Int? = { nil }              // no queue running: how many items a saved Up Next has (3.24)
+    var onResumeSaved: (() -> Void)?
     // What the list says when nothing is lined up (a video window's own list says where its drops play).
     var emptyHint = "Right-click anything in Watch ▸ Play Next, or drop songs, videos and files here."
     var idleHint = "Add something with Play Next / Play Later, or drop it here — it plays when this song ends."
@@ -185,6 +187,9 @@ final class QueueDrawer: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             endTarget = q.order.count
             clearButton.isHidden = s.playingNext.isEmpty && !s.continuing.contains { $0.added }
         } else {
+            if let count = savedCount(), count > 0 {
+                add(.note("Up Next from before — \(count) item\(count == 1 ? "" : "s").", button: "Resume", action: { [weak self] in self?.onResumeSaved?() }), nil)
+            }
             if let now = nowPlaying() {
                 add(.header("Now Playing"), nil)
                 add(.item(now, .now), nil)

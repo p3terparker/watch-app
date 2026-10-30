@@ -148,3 +148,57 @@ func checkQueue() {
     expect(QueueRoute.pick(queueRunning: false, playingApp: "com.apple.podcasts") == .start && QueueRoute.pick(queueRunning: false, playingApp: nil) == .start,
            "otherwise a new queue")
 }
+
+// 3.24: what macOS's Now Playing shows of Watch's, pausing a music app while Watch plays, and Up Next after a relaunch.
+func checkSystemPlayback() {
+    let t0 = Date(timeIntervalSinceReferenceDate: 0)
+    func player(_ id: Int, _ playing: Bool, _ seconds: Double) -> OwnPlayback.PlayerState {
+        OwnPlayback.PlayerState(id: id, playing: playing, lastPlayed: t0.addingTimeInterval(seconds))
+    }
+    expect(OwnPlayback.pick(queueItem: false, queuePlaying: false, players: [], musicPlaying: false) == .none, "nothing of Watch's")
+    expect(OwnPlayback.pick(queueItem: true, queuePlaying: true, players: [player(1, true, 50)], musicPlaying: true) == .queue,
+           "the queue's own item while it plays")
+    expect(OwnPlayback.pick(queueItem: true, queuePlaying: false, players: [player(1, false, 10), player(2, true, 5)], musicPlaying: false) == .player(2),
+           "a playing video window over a paused queue item")
+    expect(OwnPlayback.pick(queueItem: false, queuePlaying: false, players: [player(1, true, 10), player(2, true, 30)], musicPlaying: false) == .player(2),
+           "of two playing windows, the one that played last")
+    expect(OwnPlayback.pick(queueItem: false, queuePlaying: false, players: [player(1, false, 10), player(2, false, 30)], musicPlaying: false) == .player(2),
+           "paused: the last one keeps ⏯")
+    expect(OwnPlayback.pick(queueItem: true, queuePlaying: false, players: [player(1, false, 30)], musicPlaying: true) == .none,
+           "paused while Music plays: the keys are Music's")
+    expect(OwnPlayback.pick(queueItem: true, queuePlaying: false, players: [player(1, false, 30)], musicPlaying: false) == .queue,
+           "paused, nothing else: the queue's item keeps ⏯")
+
+    expect(MusicPause.toPause(enabled: true, playingApp: "com.apple.Music", queueUsesApp: false) == "com.apple.Music", "pause Music")
+    expect(MusicPause.toPause(enabled: true, playingApp: "com.spotify.client", queueUsesApp: false) == "com.spotify.client", "pause Spotify")
+    expect(MusicPause.toPause(enabled: false, playingApp: "com.apple.Music", queueUsesApp: false) == nil, "the preference is off")
+    expect(MusicPause.toPause(enabled: true, playingApp: "com.apple.Music", queueUsesApp: true) == nil, "Up Next is handing off with it already")
+    expect(MusicPause.toPause(enabled: true, playingApp: "com.apple.Safari", queueUsesApp: false) == nil, "only Music and Spotify")
+    expect(MusicPause.toPause(enabled: true, playingApp: nil, queueUsesApp: false) == nil, "nothing playing")
+    expect(MusicPause.shouldResume(enabled: true, paused: "com.apple.Music", watchActive: false, appPlaying: false), "resume when Watch is done")
+    expect(!MusicPause.shouldResume(enabled: true, paused: "com.apple.Music", watchActive: true, appPlaying: false), "not while Watch still plays")
+    expect(!MusicPause.shouldResume(enabled: true, paused: "com.apple.Music", watchActive: false, appPlaying: true), "not if you resumed it yourself")
+    expect(!MusicPause.shouldResume(enabled: false, paused: "com.apple.Music", watchActive: false, appPlaying: false), "not with the preference off")
+    expect(!MusicPause.shouldResume(enabled: true, paused: nil, watchActive: false, appPlaying: false), "nothing was paused")
+
+    // Snapshots: play order kept, the music app's mirror dropped, the cursor on the same item (or the next of Watch's).
+    var q = PlayQueue(kind: .list, name: "Up Next", items: [QueueItem(url: QueueItem.musicPrefix, title: "Music's song", source: .music)])
+    q.handBack = "com.apple.Music"
+    q.insert([QueueItem(url: "/tmp/a.mp3", title: "a"), QueueItem(url: "https://youtu.be/b", title: "b")], .later)
+    guard let s = q.snapshot else { expect(false, "a queue with Watch's items has a snapshot"); return }
+    expect(s.items.map(\.title) == ["a", "b"] && s.current == 0 && s.handBack == "com.apple.Music" && s.items.allSatisfy(\.added),
+           "the mirror goes; the cursor moves to Watch's first item: \(s)")
+    q.step(1, wrap: false); q.step(1, wrap: false)
+    expect(q.snapshot?.current == 1 && q.snapshot?.items.map(\.title) == ["a", "b"], "the cursor stays on what plays")
+    let data = try? JSONEncoder().encode(s)
+    let back = data.flatMap { try? JSONDecoder().decode(QueueSnapshot.self, from: $0) }
+    expect(back == s, "a snapshot survives being saved")
+    let restored = PlayQueue(snapshot: QueueSnapshot(name: "Up Next", items: s.items, current: 1, handBack: nil))
+    expect(restored.current?.title == "b" && restored.sections().history.map(\.title) == ["a"] && restored.handBack == nil, "restored where it was")
+    expect(PlayQueue(snapshot: QueueSnapshot(name: "X", items: s.items, current: 9, handBack: nil)).current?.title == "b", "a bad cursor is clamped")
+    expect(PlayQueue(kind: .list, name: "Up Next", items: [QueueItem(url: "spotify:", source: .spotify)]).snapshot == nil, "only a mirror: nothing to keep")
+    var shuffled = PlayQueue(kind: .list, name: "S", items: (1...6).map { QueueItem(url: "https://youtu.be/\($0)", title: "\($0)") }, shuffled: true)
+    shuffled.step(1, wrap: false)
+    let order = shuffled.order.map { shuffled.items[$0].title }
+    expect(shuffled.snapshot?.items.map(\.title) == order && shuffled.snapshot?.current == 1, "a shuffled list is kept in the order it plays")
+}

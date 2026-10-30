@@ -4,6 +4,33 @@
 <dict>
 	<key>CFBundleDisplayName</key>
 	<string>Watch</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Video</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.movie</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Audio</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.audio</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleExecutable</key>
 	<string>Watch</string>
 	<key>CFBundleIconFile</key>
@@ -15,7 +42,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.23</string>
+	<string>3.24</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -28,7 +55,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>55</string>
+	<string>56</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSUIElement</key>

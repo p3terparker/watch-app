@@ -245,6 +245,13 @@ final class FixtureMusicApp: MusicAppControl {
         completion(true)
     }
     override func reveal(_ bundleID: String) { revealed.append(bundleID) }
+    // 3.24: Watch pausing/resuming the app for its own playback (never asks). Off unless a check turns it on, so the
+    // other checks' command counts stay as they were.
+    var recordsAllowed = false
+    override func performIfAllowed(_ request: NowPlayingRequest, bundleID: String, completion: @escaping (Bool) -> Void) {
+        guard recordsAllowed else { completion(false); return }
+        performed.append((request, bundleID)); completion(true)
+    }
     var playedScripts: [(script: String, app: String)] = []
     var spotifyScripts: [String] { playedScripts.filter { $0.app == SpotifyLink.bundleID }.map { $0.script } }
     override func playScript(_ script: String, app id: String, completion: @escaping (Bool) -> Void) {
@@ -406,7 +413,8 @@ check(fixtureMusic.performed.count == 1 && fixtureMusic.performed.last?.request 
 viewer.onCommand = { sent.append($0) }
 // The music window's clicks (MusicZone) and the player's keys.
 sent = []
-click(viewer.surface, at: centre); pump(viewer.clickDelay + 0.15)
+// Waits for the click rather than a fixed pause: a busy runner can be late on the delayed single click (3.23 run 1).
+click(viewer.surface, at: centre); _ = waitFor(viewer.clickDelay + 2) { !sent.isEmpty }
 check(sent == [.command(.pause)] && viewer.info?.isPlaying == false, "a click in the middle pauses: \(sent)")
 let corner = NSPoint(x: 6, y: viewer.surface.bounds.height - 6)
 click(viewer.surface, at: corner); pump(viewer.clickDelay + 0.15)
@@ -621,8 +629,10 @@ if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
     musicWindow.pointerMoved(at: NSPoint(x: 20, y: 20)); pump(0.3)
     check(musicWindow.controls.shuffle.isHidden && !musicWindow.controls.volume.isHidden, "Watch's own item: no shuffle/repeat (those are the apps'), Watch's volume")
     viewerSnapshot("music-window-own-item")
-    musicWindow.controls.playPause.performClick(nil); pump(0.3)
-    check(musicWindow.info?.isPlaying == false && fixtureMusic.performed.count == 2, "⏯ pauses Watch's player, not Music")
+    _ = waitFor(3) { musicWindow.info?.isPlaying == true }
+    musicWindow.controls.playPause.performClick(nil)
+    check(waitFor(3) { musicWindow.info?.isPlaying == false } && fixtureMusic.performed.count == 2,
+          "⏯ pauses Watch's player, not Music (\(fixtureMusic.performed.count) sent to Music)")
     musicWindow.controls.playPause.performClick(nil); pump(0.2)
     // A video queued next opens in a video window beside the music window and runs from the queue. GitHub's Mac has a
     // 1024×768 screen, where a 477 pt music window and its list leave no room for a player beside them (it would cascade,
@@ -704,10 +714,14 @@ if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
           "an episode plays in Watch, in the music window")
     check(waitFor(6) { (musicWindow?.info?.position(at: Date()) ?? 0) >= 19.5 } && (musicWindow?.info?.position(at: Date()) ?? 99) < 30,
           "it resumes where it was left (\(musicWindow?.info?.position(at: Date()) ?? -1))")
+    panel.systemTick()
+    check(panel.systemSource == .queue && panel.systemNowPlaying.published?.title == "Fixture Episode",
+          "macOS's Now Playing (Control Center, media keys) shows the episode: \(panel.systemNowPlaying.published?.title ?? "nothing")")
     musicWindow?.pointerMoved(at: NSPoint(x: 20, y: 20)); pump(0.3)
-    musicWindow?.controls.playPause.performClick(nil); pump(0.3)
-    check(musicWindow?.info?.isPlaying == false && (PlaybackPositions.shared.position(for: "podcast:1000000000001") ?? 0) >= 20,
-          "⏯ pauses it and remembers where it is")
+    _ = waitFor(3) { musicWindow?.info?.isPlaying == true }
+    musicWindow?.controls.playPause.performClick(nil)
+    check(waitFor(3) { musicWindow?.info?.isPlaying == false } && (PlaybackPositions.shared.position(for: "podcast:1000000000001") ?? 0) >= 20,
+          "⏯ pauses it and remembers where it is (\(PlaybackPositions.shared.position(for: "podcast:1000000000001") ?? -1))")
     viewerSnapshot("music-window-podcast")
     up.command(.seek(57)); up.command(.command(.play))
     check(waitFor(8) { up.queue == nil }, "it plays to the end, and Up Next ends with it")
@@ -756,6 +770,8 @@ check(fixtureMusic.playedScripts.map { $0.script } == [MusicLibrary.playScript("
 check(panel.upNext.engine == .external("com.apple.Music") && panel.upNext.queue?.handBack == "com.apple.Music",
       "as Up Next's item, with Music carrying on afterwards")
 panel.artworkWindow?.close(); pump(0.3)
+check(panel.upNext.queue == nil && panel.upNext.saved?.items.map(\.title) == ["Back in Black"] && UniversalQueue().saved?.items.first?.title == "Back in Black",
+      "closing the music window keeps Up Next to resume — after a relaunch too (3.24)")
 // A video window's own Up Next list (3.23): the same drop-down, under the video window — here, its folder.
 if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
     let tone = URL(fileURLWithPath: video).deletingLastPathComponent().appendingPathComponent("a.m4a").path
@@ -778,6 +794,39 @@ if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
         check(false, "⌥⌘U makes a list")
         player.window.close(); pump(0.2)
     }
+}
+// 3.24: a video takes macOS's Now Playing (media keys reach it), Music pauses while it plays and plays again when it closes
+// (fixture Music, already allowed); Finder's Open With puts an audio file in the music window; the saved Up Next resumes.
+if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
+    let tone = URL(fileURLWithPath: video).deletingLastPathComponent().appendingPathComponent("a.m4a").path
+    var background = nowPlayingFixture("Background Song", square)
+    background.isPlaying = true
+    panel.nowPlayingChanged(background); pump(0.1)
+    fixtureMusic.performed = []; fixtureMusic.recordsAllowed = true
+    Prefs.pauseMusicWhilePlaying = true; Prefs.resumeMusicAfter = true
+    let player = panel.windowManager.open(video, anchor: nil)
+    panel.ensureSystemTick()
+    check(waitFor(10) { player.isPlaying && panel.pausedForWatch == "com.apple.Music" }, "Music pauses while a video plays")
+    check(fixtureMusic.performed.map { $0.request } == [.command(.pause)] && fixtureMusic.performed.first?.app == "com.apple.Music",
+          "by a pause sent to Music itself: \(fixtureMusic.performed)")
+    check(waitFor(3) { panel.systemSource == .player(0) && panel.systemNowPlaying.published?.isPlaying == true },
+          "the video holds macOS's Now Playing: \(panel.systemSource)")
+    panel.systemNowPlaying.handle(.command(.pause)); pump(0.3)
+    check(!player.isPlaying, "a media key pauses it")
+    panel.systemNowPlaying.handle(.command(.play)); pump(0.3)
+    check(player.isPlaying, "and plays it again")
+    player.window.close()
+    check(waitFor(4) { fixtureMusic.performed.last?.request == .command(.play) } && panel.pausedForWatch == nil, "closing the video plays Music again")
+    fixtureMusic.recordsAllowed = false
+    panel.nowPlayingChanged(nil); musicBroadcast(["Player State": "Stopped"]); pump(0.1)
+    panel.openFiles([tone]); pump(0.5)
+    check(panel.upNext.engine == .native && panel.upNext.queue?.current?.url == tone && panel.artworkWindow?.window.isVisible == true,
+          "Open With ▸ Watch: an audio file plays in the music window")
+    panel.artworkWindow?.close(); pump(0.3)
+    check(panel.upNext.saved?.items.first?.url == tone, "kept to resume")
+    panel.upNext.resumeSaved(); pump(0.5)
+    check(panel.upNext.engine == .native && panel.upNext.queue?.current?.url == tone, "Resume plays it again")
+    panel.artworkWindow?.close(); pump(0.3)
 }
 panel.searchService = .youtube
 type(""); pump(0.1)

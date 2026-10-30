@@ -935,6 +935,15 @@ class MusicAppControl {
             DispatchQueue.main.async { completion(sent) }
         }
     }
+    // The same, for Watch's own reasons rather than a click (Preferences ▸ pause Music/Spotify while Watch plays): only when
+    // Watch is already allowed — never asks.
+    func performIfAllowed(_ request: NowPlayingRequest, bundleID: String, completion: @escaping (Bool) -> Void) {
+        guard let script = AppVolume.commandScript(request, bundleID: bundleID), Self.isRunning(bundleID) else { completion(false); return }
+        queue.async {
+            let sent = Self.access(automationPermission(bundleID, ask: false)) == .granted && Self.run(script) != nil
+            DispatchQueue.main.async { completion(sent) }
+        }
+    }
     // The app's own shuffle and repeat, only if Watch is already allowed (never asks); nil when they can't be read.
     func modes(_ bundleID: String, completion: @escaping (AppModes?) -> Void) {
         guard let script = AppVolume.modesScript(bundleID), Self.isRunning(bundleID) else { completion(nil); return }

@@ -1,4 +1,4 @@
-# Watch — v3.23 · Beta *(reworked)*
+# Watch — v3.24 · Beta *(reworked)*
 **Plays almost any video, from anywhere — and downloads it.** Hotkey **⌥⌘Y**.
 
 **Features**
@@ -67,6 +67,13 @@
   **⌥⌘U** or **Show Up Next List** in its "…" menu. It's the window's own list (the playlist, search results, folder or
   YouTube's next videos): drag to reorder, ⌫ removes, double-click plays, drop videos, files or links on it to play them
   next in that window. A video the music window's queue opened shows that queue's list instead.
+- **Part of your Mac (3.24):** whatever Watch plays shows in macOS's **Now Playing** (Control Center and the menu bar)
+  with its picture, and the keyboard's **media keys**, AirPods and headphone buttons play/pause it, skip to the next or
+  previous item and scrub it — a video window or what Up Next plays in the music window. When only Music or Spotify is
+  playing, the keys stay theirs. **Music or Spotify pauses while Watch plays** and plays again when you close Watch's
+  videos (Preferences, both on; macOS asks once, the first time you start something while one of them plays). **Up Next is
+  kept**: closing the music window or quitting doesn't lose it — the list offers **Up Next from before — Resume**.
+  **Finder ▸ Open With ▸ Watch** plays a video in a window, and puts audio files, folders or several files in Up Next.
 - **Recent Links** — video links you copy or play, newest first: a **small thumbnail**, the title, and *site ·
   duration · how long ago*; a video you stopped part‑way shows where you left off (**12:34 / 45:10**) and a red
   **resume bar** on its thumbnail, a live stream shows LIVE. Each video appears **once**, whatever link shape it was copied as
@@ -196,6 +203,8 @@
   to go to until it's taught the new shape; lists you played from keep working.
 
 **Changelog**
+- **3.24** — **Part of your Mac:** Watch in macOS's Now Playing with media keys and headphone controls, Music/Spotify paused
+  while Watch plays (and resumed afterwards), Up Next kept across closing and relaunching, and Finder's Open With.
 - **3.23** — **Your Music library** as a search tab (songs play in Music through Up Next), the **Up Next list in every video
   window** (⌥⌘U), and Music/Spotify carrying on after a list that began with one of their songs.
 - **3.22** — **Podcasts:** YouTube | Podcasts tabs on search results, show pages with episodes, Apple Podcasts show/episode
