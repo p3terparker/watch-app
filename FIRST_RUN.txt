@@ -1,47 +1,44 @@
-Watch 3.19 — start here
+Watch - read me
 
 INSTALL
-1. Drag Watch.app onto Applications.
-2. Eject this disk image, then open Watch from Applications.
-3. Click Start Watching in the welcome guide. Watch lives in your menu bar.
+1. Drag Watch onto Applications.
+2. Eject this disk image and open Watch from Applications.
+3. Click Start Watching in the welcome window. Watch lives in the menu bar.
 
-This personal preview is not notarized by Apple. If macOS blocks the first launch,
-open System Settings > Privacy & Security and look for Open Anyway after trying
-to open Watch. Approve only the copy you received from your trusted sender.
-If that option is unavailable, ask your sender for a signed/notarized installer.
-No Terminal commands or disabling system security are required by Watch.
+Watch isn't notarized by Apple, so macOS will probably block the first launch.
+Open System Settings > Privacy & Security, scroll down to Security and click
+Open Anyway next to Watch. You'll need to do this again after each update.
+Only download Watch from github.com/p3terparker/watch-app/releases.
 
-WATCH
+USING IT
 Click the play icon in the menu bar, or press Option-Command-Y.
-Type to search YouTube. Paste a video link and press Return to play it.
-Click a result to play; click its down-arrow button to download.
-Recent Links is fully listed: scroll to see older videos.
-Music or a video playing in another app shows at the top: click it to see the artwork.
-Public search and most public videos do not require signing in.
+Type to search YouTube, or paste a link and press Return.
+Click a result to play it. The arrow button next to it downloads it.
+Music or a podcast playing in another app shows up at the top of the list.
+Click it to open the artwork.
+Searching and most public videos work without signing in.
 
-EVERYTHING IS INCLUDED
-Watch includes yt-dlp, ffmpeg, ffprobe and Deno. No Homebrew, Python, Terminal,
-or separate helper downloads are needed. Apple Silicon and Intel are included.
-Requires macOS 13 or newer. Intel and macOS 13 hardware acceptance is still pending.
-Use Preferences > Setup Guide > Check Tools Again if something isn't working.
-If a tool is missing or won't start, replace Watch with a fresh installer copy.
+WHAT'S INSIDE
+yt-dlp, ffmpeg, ffprobe and Deno are inside the app, so there's nothing else to
+install. If something doesn't work, try Preferences > Setup Guide > Check Tools
+Again. If a tool is missing, download Watch again.
+Needs macOS 13 or newer. Intel Macs haven't been tested on real hardware.
 
-CONNECT YOUTUBE (OPTIONAL)
-Open Preferences > YouTube Account > Sign In.
-Pick Chrome or Safari, sign in to YouTube in that browser, and return to Watch.
-Click Connect and follow the permission instructions:
-- Chrome can ask for access to its Chrome Safe Storage Keychain item.
-- Safari can require Full Disk Access for Watch and a quit/reopen.
-Grant these only if you want Watch to read your browser's YouTube session.
-Your Google password is entered in the browser, not in Watch.
-History, Playlists and restricted videos depend on YouTube and may be unavailable
-if YouTube changes its service or denies access. Sign Out disconnects Watch;
-your browser stays signed in. No one else's account or cookies are in this installer.
+SIGN IN TO YOUTUBE (OPTIONAL)
+You only need this for History, Playlists, and videos that ask you to sign in.
+Open Preferences > YouTube Account > Sign In, pick Chrome or Safari, sign in to
+YouTube in that browser, then come back and click Connect.
+- Chrome may ask to use its "Chrome Safe Storage" Keychain item.
+- Safari may need Full Disk Access for Watch, and a quit and reopen.
+Your Google password goes into the browser, never into Watch. Sign Out
+disconnects Watch and leaves the browser signed in. YouTube changes things
+now and then, so this can stop working.
 
-UPDATES
-Ask your sender for a newer Watch installer. Quit Watch, drag the new app into
-Applications, and choose Replace. Your library and preferences stay in place.
-Media tools update with the app; Watch does not alter the signed helper files.
+UPDATING
+Download the new version, quit Watch, drag the new app onto Applications and
+choose Replace. Your links, favourites and settings are kept. The bundled
+tools update along with the app.
 
-The included third-party notices and source archives are accessible through
-Setup Guide > Open Third-Party Notices (inside Watch.app/Contents/Resources).
+LICENSES
+Notices and source for the bundled tools are in Preferences > Setup Guide >
+Open Third-Party Notices.
