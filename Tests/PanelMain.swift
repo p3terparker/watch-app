@@ -466,6 +466,7 @@ check(musicRow.volume.frame.maxX < musicRow.volumeIcon.frame.minX && musicRow.vo
 let outPoint = NSPoint(x: musicRow.volume.frame.minX + 4, y: speaker.y)
 musicRow.pointerMoved(at: outPoint); pump(ArtworkControlsView.volumeCloseDelay + 0.3)
 check(musicRow.volumeOpen, "moving along onto the slider keeps it out")
+musicRow.volume.value = 0.7        // the callback above doesn't move the slider itself; a real drag would have
 musicRow.volumeIcon.onDragStart?(); musicRow.volumeIcon.onDrag?(8, false)
 check(abs((fixtureMusic.sets.last ?? 0) - 0.8) < 0.001 && abs(musicRow.volume.value - 0.8) < 0.001, "dragging right from the speaker raises the volume from 70% by 1/80 per point")
 musicRow.volumeIcon.onDrag?(-8, true)
