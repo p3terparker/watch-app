@@ -463,12 +463,12 @@ let speaker = NSPoint(x: musicRow.volumeIcon.frame.midX, y: musicRow.volumeIcon.
 musicRow.pointerMoved(at: NSPoint(x: musicRow.timeline.frame.midX, y: speaker.y))
 check(!musicRow.volumeOpen, "the pointer elsewhere on the row leaves the slider hidden")
 musicRow.pointerMoved(at: speaker); pump(0.3)
-let panel = musicRow.volumePopup.frame, speakerInWindow = musicRow.convert(musicRow.volumeIcon.frame, to: contentView)
+let popupFrame = musicRow.volumePopup.frame, speakerInWindow = musicRow.convert(musicRow.volumeIcon.frame, to: contentView)
 check(musicRow.volumeOpen && musicRow.volumePopup.alphaValue > 0.9, "on the speaker the slider pops up")
-check(panel.minY >= speakerInWindow.maxY && panel.height > panel.width && abs(panel.midX - speakerInWindow.midX) <= 14 && contentView.bounds.contains(panel),
-      "…above the speaker, upright, inside the window (\(panel) over \(speakerInWindow))")
+check(popupFrame.minY >= speakerInWindow.maxY && popupFrame.height > popupFrame.width && abs(popupFrame.midX - speakerInWindow.midX) <= 14 && contentView.bounds.contains(popupFrame),
+      "…above the speaker, upright, inside the window (\(popupFrame) over \(speakerInWindow))")
 check(musicRow.volume.vertical && musicRow.volume.relative && musicRow.volumePopup.slider === musicRow.volume, "…a vertical slider that drags from where it is")
-let upOnto = musicRow.convert(NSPoint(x: panel.midX, y: panel.midY), from: contentView)
+let upOnto = musicRow.convert(NSPoint(x: popupFrame.midX, y: popupFrame.midY), from: contentView)
 musicRow.pointerMoved(at: upOnto); pump(ArtworkControlsView.volumeCloseDelay + 0.3)
 check(musicRow.volumeOpen, "moving up from the speaker onto the panel keeps it up")
 musicRow.volume.value = 0.7        // the callback above doesn't move the slider itself; a real drag would have
