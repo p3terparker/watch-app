@@ -1,28 +1,35 @@
-# Watch verification
+# Testing
 
-## 3.18 (48) — standalone extraction, 2026-10-26
+What's checked automatically, and what hasn't been tried. Update this when either changes.
 
-Watch now has its own repository, root Sources/ and Tests/, dedicated `scripts/watch_build.py`, app-only metadata, bundled helper preparation and DMG verification. No sibling source trees, suite build scripts, credentials, cookies, user libraries or prior Git history are included. Original Watch behavior is retained; the app version changes to identify this standalone packaging. The bundle ID, preferences, hotkey and URL handlers remain compatible.
+## On every build
 
-The source owner selected MIT for Watch code. Bundled tools retain their upstream licenses; notices and sources are included in the app. Large downloaded helpers, build output and DMGs are ignored by Git. The original project remains intact.
+GitHub Actions builds Watch on a macOS 15 (Apple Silicon) runner for each push to `main` or a `claude/*` branch. A build has to get through all of these before it's published as the current build:
 
-Validation results are recorded below after execution. Helper inputs were copied as ordinary files into the new ignored cache to avoid downloading identical archives; prepared binaries were not copied. FFmpeg/LAME are rebuilt for both architectures in this project.
+1. The whole app type-checks.
+2. `./check.sh`: the Swift regression checks (links, search, queue, downloads, Now Playing parsing, podcasts, tiling and click zones, stream selection) and the Python tooling tests.
+3. `./package.sh`: a universal (Apple Silicon and Intel) build and DMG.
+4. `Tests/bundled.py`: the real bundled tools, run from a copy of the app in a path with spaces and a clean `HOME` and `PATH`. It covers yt-dlp with Python and EJS, Deno offline, a download from a local HTTP server, MP3 conversion, HEVC conversion through VideoToolbox, merging audio and video tracks, the Now Playing adapter, and all four Intel tools under Rosetta.
+5. `scripts/verify_watch_package.py --canonical`: mounts the DMG read-only and checks the app's metadata, both architectures, the tool hashes, the code signatures, and that the Read Me matches `FIRST_RUN.txt`. Gatekeeper rejects the build, which is expected while it isn't notarized.
+6. `Tests/panel.py`: the real panel, player windows and music window on the runner's screen, with fixture videos made by the bundled FFmpeg and stand-ins for Music and the podcast directory. It covers click zones, keys, volume, resizing and the quality switch, the music-only rule, window placement, search, Up Next, podcasts and the Music tab.
 
-### Remaining acceptance boundaries
+Separately, an informational step asks the bundled yt-dlp to resolve three public YouTube videos. From GitHub's data centre some of them get bot-checked (1 of 3 resolved on the last run), so that step can't fail the build.
 
-- Local builds are ad-hoc signed and not notarized. Open-source publication does not remove Gatekeeper approval requirements.
-- Native Apple Silicon and Intel helpers under Rosetta can be tested here; real Intel hardware and macOS 13 acceptance remain pending.
-- Browser sign-in, Keychain/Full Disk Access prompts and authenticated History/Playlists require manual acceptance. Tests must not use personal cookies.
-- Public metadata checks do not guarantee all videos/sites will play; upstream behavior can change.
-- Review complete upstream licensing/source requirements before wider binary distribution; Watch's MIT license does not relicense its bundled dependencies.
+None of the tests use real accounts, cookies or your library. Close your own copy of Watch before running the panel tests.
 
-### Completed verification
+**Last full run (3.25):** [every step passed](https://github.com/p3terparker/watch-app/actions/runs/40995671082), including 261 panel checks with no failures. The installer is `Watch-3.25.dmg`, 230,863,811 bytes, SHA-256 `ff4fca6173d786bedb2d611f663ff24538bfa1050d5d9e959acf6906711d1d73`.
 
-- 14 tooling safety tests, 416 Swift regression checks, 58 isolated full-source AppKit checks, and 11 real-helper integration checks pass (499 checks). The integration fixture covers relocation to a path containing spaces, clean HOME/PATH, Python/EJS tool packaging, offline Deno execution, local HTTP download, MP3 conversion, HEVC VideoToolbox conversion, track merging, and all four Intel helper slices under Rosetta. No production instance was launched and no personal cookies were used. Public network metadata checks were not repeated for this extraction.
-- A new `git clone --no-local` into a temporary directory, without build caches or generated binaries, passed all 430 logic/tooling checks and remained clean. The repository has no object alternates, tracked symlinks or remote; its Git history starts with the standalone extraction.
-- FFmpeg and LAME were rebuilt from pinned source for both architectures in this project. Only hash-verified downloaded inputs were reused as physical copies.
-- `./package.sh` passed under a macOS sandbox policy denying reads from the original checkout. A control read of the original README failed with Operation not permitted, confirming the isolation policy was active. Universal app and helper validation passed.
-- `python3 scripts/verify_watch_package.py --canonical` passed: read-only DMG mount, application metadata, universal architectures, helper hashes, app/child signatures, exact first-run guide and disk-image integrity. The app also contains its own MIT license. Gatekeeper rejects this ad-hoc, unnotarized build as expected.
-- Logs and snapshots are local ignored artifacts under `build/`; the verified installer, checksum and receipt are under `dist/`. Generated dependencies and installers are not tracked by Git.
+## Not tried yet
 
-Installer: Watch 3.18 (48), 229799718 bytes. SHA-256: `45a34b13ee3541b7f32f6902536863efd6e0e6b8abccb14dc9d1b7cf95b743cf`.
+These need a person on a real Mac:
+
+- **The music window by hand.** How the hover controls and the click timing feel with a mouse and a trackpad. Real Music, Spotify and Podcasts: the controls, shuffle, repeat and volume, the one-time permission prompt, and handing the queue back to the app at the end of a song.
+- **Media keys, Control Center, AirPods and Finder's Open With.**
+- **Native full screen** for the artwork window (CI only exercises the menu and the background choice), including on more than one display. Also that no Now Playing adapter process is left running once the panel and artwork window are closed.
+- **YouTube with real traffic:** pasted links signed in and signed out, the error card on a bot-checked video, and the quality switching up and down with real renditions as you resize.
+- **Signing in to YouTube**, and the Chrome Keychain and Safari Full Disk Access prompts. Tests never use personal cookies.
+- **Real Intel hardware, and macOS 13 to 15.3.** The Intel tools have only run under Rosetta. The Now Playing workaround depends on Apple continuing to entitle `/usr/bin/perl`; if that stops, the row stops appearing.
+- **A clean Mac** installing from the DMG.
+- **Developer ID signing and notarization.** The build is ad hoc signed.
+
+A passing check doesn't mean every video or site plays. YouTube and other sites change, and yt-dlp changes with them.

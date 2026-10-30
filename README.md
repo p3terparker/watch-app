@@ -1,59 +1,65 @@
-# Watch App
+# Watch
 
-A standalone, native macOS menu-bar video player. Search YouTube as you type, play videos in small floating windows, browse your recent links and favourites, and download video or audio.
-
-Watch is an independent project. Its source, tests, dependency pins and packaging tools live entirely in this repository. No checkout or installation of another project is required.
+A video player that lives in the macOS menu bar. Search YouTube or paste a link and it plays in a small floating window. It also does music and podcasts, keeps a queue, and downloads video or audio when you want a copy.
 
 ## Install
 
-[Download Watch.dmg](https://github.com/p3terparker/watch-app/releases/latest/download/Watch.dmg) from the [latest release](https://github.com/p3terparker/watch-app/releases/latest). Open the disk image, drag Watch to Applications, eject the image, and open Watch. The first-run guide explains watching, included tools and optional YouTube connection. Click the play icon in the menu bar or press **Option–Command–Y**.
+Download `Watch-<version>.dmg` from the [latest release](https://github.com/p3terparker/watch-app/releases/latest), open it, drag Watch to Applications and launch it. Click the play icon in the menu bar or press **⌥⌘Y**.
 
-The fully bundled app includes yt-dlp (with Python and EJS), FFmpeg, ffprobe and Deno. Recipients do not need Homebrew, Python or Terminal. Existing system installations are left alone. Media tools update with the app.
+Needs macOS 13 or later. The app is universal (Apple Silicon and Intel).
 
-The downloadable preview and local builds are ad-hoc signed and **not notarized**. macOS may require Privacy & Security → Open Anyway. Making the source public does not change Gatekeeper requirements. See [first-run instructions](FIRST_RUN.txt).
+Watch is signed ad hoc and isn't notarized by Apple, so macOS will block the first launch. Open **System Settings → Privacy & Security**, scroll to Security and click **Open Anyway** next to Watch. You'll have to do this again after each update.
 
-Requires macOS 13+. Universal builds contain Apple Silicon and Intel slices; actual Intel/macOS 13 acceptance remains pending.
+Everything it needs is inside the app: yt-dlp, FFmpeg, ffprobe and Deno. There's nothing else to install, and updating Watch updates those too.
 
-## Build
+When there's a newer build that passed the tests but isn't released yet, it's posted on the Releases page as the **Current build**.
 
-Build prerequisites: macOS, Xcode Command Line Tools, Python 3.9+ and an internet connection for pinned helper downloads. No third-party Swift packages or Xcode project are required. Python is needed by contributors, not app recipients.
+## What it does
+
+- Search YouTube as you type, or paste a link. YouTube plays up to 1080p60, and other sites work wherever yt-dlp can get a stream.
+- Small floating windows that you can tile. Videos resume where you left off.
+- An Up Next queue for videos, audio files, podcasts and Spotify songs, with autoplay, repeat and shuffle.
+- Shows what Music, Spotify or Podcasts is playing, with the artwork in a floating window.
+- Recent links, favourites, watched marks, and YouTube history and playlists if you sign in (optional).
+- Downloads: video as MP4 or the original file, audio as MP3 or the original, whole playlists, live recordings.
+- Media keys, Control Center and AirPods controls work with whatever Watch is playing.
+
+[docs/FEATURES.md](docs/FEATURES.md) has the full list. Other apps and scripts can play a link with `glasskit-watch://play?url=<encoded link>` or add it to the queue with `glasskit-watch://queue?url=<encoded link>`.
+
+## Known issues
+
+- YouTube sometimes asks to confirm you're not a bot. Signing in under Preferences → YouTube Account usually fixes it.
+- Sites change often. If a video stops playing, check for a newer release first.
+- The Now Playing row relies on a workaround for the limit macOS 15.4 put on reading what other apps are playing. If a later macOS closes it, the row goes away.
+- Automated tests run on macOS 15 on Apple Silicon. Real Intel Macs and macOS 13–14 haven't been tried.
+
+## Building
+
+You need a Mac with the Xcode Command Line Tools and Python 3.9 or later. There are no Swift packages and no Xcode project.
 
 ```sh
-./check.sh                    # metadata and deterministic regression tests
-./build.sh                    # current architecture, fully bundled
-./build.sh --universal        # Apple Silicon + Intel
-./package.sh                  # tests, universal build, dist/Watch.dmg
-python3 scripts/verify_watch_package.py --canonical
+./build.sh              # build for this Mac into build/native/Watch.app
+./build.sh --universal  # Apple Silicon and Intel
+./package.sh            # tests, universal build, dist/Watch-<version>.dmg
 ```
 
-Builds never install or launch Watch. An explicit `./build.sh --install` replaces `~/Applications/Watch.app` after you quit it. Otherwise, use the DMG.
+The first build compiles FFmpeg and LAME, which takes a few minutes. Builds never install or launch the app. `./build.sh --install` copies it to `~/Applications` if you want that.
 
-The first build compiles FFmpeg and LAME for both architectures and may take several minutes. Download hashes and prepared helper files are checked before reuse. Generated artifacts and caches stay in ignored `build/` and `dist/` directories. Versions and frameworks are configured once in `Info.plist` and `scripts/app.json`.
-
-## Test
+## Tests
 
 ```sh
-./check.sh
-python3 Tests/panel.py        # isolated AppKit UI; requires a macOS GUI session
+./check.sh                                                       # unit and tooling tests
+python3 Tests/panel.py                                           # real UI, needs a macOS GUI session
 python3 Tests/bundled.py build/universal/Watch.app/Contents/Helpers
-# Optional public metadata tests, without cookies or account access:
-python3 Tests/bundled.py build/universal/Watch.app/Contents/Helpers --live
+python3 scripts/verify_watch_package.py --canonical              # check the finished DMG
 ```
 
-Tests use temporary fixtures and preferences. Do not run another production Watch instance or test with personal browser cookies. See [verification](docs/AUDIT.md) for results and remaining manual checks.
+The tests use temporary preferences and fixture files, so they never touch your own data. [docs/AUDIT.md](docs/AUDIT.md) lists what's covered and what hasn't been tried.
 
-## Project layout
+## More
 
-- `Sources/` — native app and media-tool boundary
-- `Tests/` — logic, AppKit and real-helper integration fixtures
-- `scripts/` — standalone build, dependency preparation and DMG verification
-- `Dependencies.json`, `SupplementalSources.json` — pinned upstream inputs
-- [MAP.md](MAP.md) — implementation map
-- [Features and changelog](docs/FEATURES.md), [UX spec](UX_SPEC.md), [gotchas](GOTCHAS.md)
-- [Contributing](CONTRIBUTING.md), [third-party components](THIRD_PARTY.md)
+[CONTRIBUTING.md](CONTRIBUTING.md) · [docs/RELEASE.md](docs/RELEASE.md) · [THIRD_PARTY.md](THIRD_PARTY.md) · [MAP.md](MAP.md) (where things live in the code)
 
-## Compatibility and license
+## License
 
-The app retains `com.jacob.watch`, its preference keys and the existing `glasskit-watch://play` URL handler so existing users keep their data and links. Those compatibility identifiers do not depend on any other app or repository.
-
-Watch's own source is licensed under [MIT](LICENSE). Bundled third-party tools retain their respective licenses and notices; they are not relicensed under MIT. The built app includes notices, pinned source archives and build instructions in `Contents/Resources/ThirdParty`.
+Watch's code is [MIT](LICENSE). The bundled tools keep their own licenses, listed in [THIRD_PARTY.md](THIRD_PARTY.md) and shipped inside the app.

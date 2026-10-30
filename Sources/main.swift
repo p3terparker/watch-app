@@ -37,6 +37,14 @@ enum Prefs {
     static var hasSeenWelcome: Bool { get { d.bool(forKey: "hasSeenWelcome") } set { d.set(newValue, forKey: "hasSeenWelcome") } }
     static var showBrowserTabs: Bool { get { d.object(forKey: "showBrowserTabs") as? Bool ?? true } set { d.set(newValue, forKey: "showBrowserTabs") } }
     static var showFavourites: Bool { get { d.bool(forKey: "showFavourites") } set { d.set(newValue, forKey: "showFavourites") } }  // the panel's list tab
+    // The panel's Now Playing row (what other apps are playing, with its artwork — NowPlaying.swift).
+    static var showNowPlaying: Bool { get { d.object(forKey: "showNowPlaying") as? Bool ?? true } set { d.set(newValue, forKey: "showNowPlaying") } }
+    // Full-screen artwork backdrop: a gradient of the artwork's colours (default) or black.
+    static var playerVolume: Double { get { d.object(forKey: "playerVolume") as? Double ?? 1 } set { d.set(newValue, forKey: "playerVolume") } }  // what a new player starts at
+    // 3.24: pause Music/Spotify while Watch plays (asked once, on your own click), and play it again when Watch is done.
+    static var pauseMusicWhilePlaying: Bool { get { d.object(forKey: "pauseMusicWhilePlaying") as? Bool ?? true } set { d.set(newValue, forKey: "pauseMusicWhilePlaying") } }
+    static var resumeMusicAfter: Bool { get { d.object(forKey: "resumeMusicAfter") as? Bool ?? true } set { d.set(newValue, forKey: "resumeMusicAfter") } }
+    static var artworkColourBackground: Bool { get { d.object(forKey: "artworkColourBackground") as? Bool ?? true } set { d.set(newValue, forKey: "artworkColourBackground") } }
     // Playback modes. Each player window keeps its own (its "…" menu toggles them); these are what a NEW
     // window starts with, i.e. the last choice made anywhere.
     static var autoplay: Bool { get { d.object(forKey: "autoplay") as? Bool ?? true } set { d.set(newValue, forKey: "autoplay") } }
@@ -319,96 +327,7 @@ func probeLink(_ link: String, completion: @escaping (LinkInfo?) -> Void) {
     }
 }
 
-// ----------------------------------------------------------------------------
-// MARK: - Up Next — the list Next/Previous walk through
-// ----------------------------------------------------------------------------
-// Every player window has one (built on demand, see PlayerWindowController.ensureQueue): the panel list a
-// video was started from (a playlist, search results, History), what YouTube would roll into next for a
-// video opened on its own, or the other media files sitting next to a local file. Autoplay / Repeat /
-// Shuffle all act on this list.
-struct QueueItem: Equatable { let url: String; let title: String? }
-enum RepeatMode: String { case off, all, one }
-
-struct PlayQueue {
-    enum Kind { case list, recommended, folder }
-    let kind: Kind
-    let name: String                  // shown as the Up Next heading: "History", a playlist's title, a folder…
-    private(set) var items: [QueueItem]
-    private(set) var order: [Int]     // indices into items, in play order — identity unless shuffled
-    private(set) var pos = 0          // where we are in `order`
-    private(set) var shuffled = false
-
-    init(kind: Kind, name: String, items: [QueueItem], startAt: Int = 0, shuffled: Bool = false) {
-        self.kind = kind; self.name = name; self.items = items
-        self.order = Array(items.indices)
-        self.pos = items.isEmpty ? 0 : min(max(0, startAt), items.count - 1)
-        if shuffled { setShuffle(true) }
-    }
-    var currentIndex: Int { order.indices.contains(pos) ? order[pos] : -1 }
-    var current: QueueItem? { items.indices.contains(currentIndex) ? items[currentIndex] : nil }
-    private func target(_ delta: Int, wrap: Bool) -> Int? {
-        guard !order.isEmpty else { return nil }
-        let p = pos + delta
-        if order.indices.contains(p) { return p }
-        guard wrap, order.count > 1 else { return nil }
-        return p < 0 ? order.count - 1 : 0
-    }
-    func peek(_ delta: Int, wrap: Bool) -> QueueItem? { target(delta, wrap: wrap).map { items[order[$0]] } }
-    @discardableResult mutating func step(_ delta: Int, wrap: Bool) -> QueueItem? {
-        guard let p = target(delta, wrap: wrap) else { return nil }
-        pos = p
-        return items[order[p]]
-    }
-    mutating func jump(toItem i: Int) -> QueueItem? {
-        guard let p = order.firstIndex(of: i) else { return nil }
-        pos = p
-        return items[i]
-    }
-    // Shuffle randomizes everything around whatever is playing, which stays put and keeps playing; turning it
-    // back off restores the real order at the same item. (Randomizing only what's "behind" the cursor would
-    // strand the items above a list you joined in the middle — they'd never come up.)
-    mutating func setShuffle(_ on: Bool) {
-        let here = max(0, currentIndex)
-        guard items.count > 1 else { shuffled = on; return }
-        if on {
-            order = [here] + items.indices.filter { $0 != here }.shuffled()
-            pos = 0
-        } else {
-            order = Array(items.indices)
-            pos = here
-        }
-        shuffled = on
-    }
-    // Recommendations arrive ~25 at a time; when they run out we append the next video's own.
-    @discardableResult mutating func append(_ more: [QueueItem]) -> Int {
-        let known = Set(items.map { $0.url })
-        let fresh = more.filter { !known.contains($0.url) }
-        guard !fresh.isEmpty else { return 0 }
-        order += Array(items.count..<(items.count + fresh.count))
-        items += fresh
-        return fresh.count
-    }
-
-    // A local file's neighbours: the other media of the same kind in its folder, in Finder order.
-    // Only what AVFoundation can actually open — a .webm sitting next door would just fail to play.
-    static let videoExts: Set<String> = ["mp4", "m4v", "mov", "qt", "3gp", "3g2"]
-    static let audioExts: Set<String> = ["mp3", "m4a", "m4b", "aac", "wav", "aif", "aiff", "aifc", "caf", "flac"]
-    static func mediaKind(_ ext: String) -> Int? {
-        let e = ext.lowercased()
-        return videoExts.contains(e) ? 0 : (audioExts.contains(e) ? 1 : nil)
-    }
-    static func folder(for path: String, shuffled: Bool) -> PlayQueue? {
-        let file = URL(fileURLWithPath: path.hasPrefix("file://") ? (URL(string: path)?.path ?? path) : path)
-        guard let kind = mediaKind(file.pathExtension),
-              let names = try? FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path) else { return nil }
-        let dir = file.deletingLastPathComponent()
-        let items = names.filter { mediaKind(($0 as NSString).pathExtension) == kind }
-            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-            .map { QueueItem(url: dir.appendingPathComponent($0).path, title: ($0 as NSString).deletingPathExtension) }
-        guard items.count > 1, let start = items.firstIndex(where: { $0.url == file.path }) else { return nil }
-        return PlayQueue(kind: .folder, name: dir.lastPathComponent, items: items, startAt: start, shuffled: shuffled)
-    }
-}
+// Up Next — QueueItem / PlayQueue (the list Next/Previous walk through) — lives in Queue.swift (compiled by the tests too).
 
 // ----------------------------------------------------------------------------
 // MARK: - YouTubeUpNext — "what would play next on youtube.com"
@@ -517,7 +436,7 @@ struct StreamRef {
 }
 enum StreamPlan {
     case single(StreamRef)                              // one muxed URL: progressive file or HLS playlist
-    case split(video: StreamRef, audio: StreamRef)      // separate video + audio → DashHLSBridge
+    case split(videos: [StreamRef], audio: StreamRef)   // video rendition(s), best first, + separate audio → DashHLSBridge
 }
 struct ResolvedStream { let title: String?; let isLive: Bool; let plans: [StreamPlan]; var thumbnail: String? = nil; var duration: Double? = nil }
 
@@ -531,16 +450,20 @@ func avPlayableMuxed(_ f: [String: Any]) -> Bool {
 }
 
 // One yt-dlp call (`-j`) gives the title, live flag and every format, so we build a primary plan plus
-// fallbacks without re-running it. Completes on main; nil = yt-dlp missing/failed (caller falls back to web).
-func resolveStream(_ link: String, completion: @escaping (ResolvedStream?) -> Void) {
+// fallbacks without re-running it. Completes on main with the stream, or nil and yt-dlp's last ERROR line.
+// `cookies` (the connected browser's) is only passed for a retry after YouTube asked for a signed-in viewer.
+@discardableResult
+func resolveStream(_ link: String, cookies: [String] = [], completion: @escaping (ResolvedStream?, String) -> Void) -> YtDlpTask {
     let fmt = parseYouTube(link) != nil
         // YouTube: H.264 HD video + AAC audio (bridged to HLS); live/other → best HLS; last resort muxed mp4.
         ? "bv*[vcodec^=avc1][height<=1080][protocol=https]+ba[ext=m4a][protocol=https]/b[protocol^=m3u8]/b[ext=mp4]/bv*+ba/b"
         : "b[protocol^=m3u8]/b[ext=mp4]/bv*[vcodec^=avc1]+ba[ext=m4a]/bv*[protocol^=m3u8]+ba[protocol^=m3u8]/b/bv*+ba"
-    YtDlp.capture(["-j", "--no-playlist", "--no-warnings", "-f", fmt, link]) { data in
+    return YtDlp.captureWithError(cookies + ["-j", "--no-playlist", "--no-warnings", "-f", fmt, link], timeout: 60) { data, error in
         guard let data = data,
               let firstLine = String(data: data, encoding: .utf8)?.split(separator: "\n").first,
-              let d = (try? JSONSerialization.jsonObject(with: Data(firstLine.utf8))) as? [String: Any] else { completion(nil); return }
+              let d = (try? JSONSerialization.jsonObject(with: Data(firstLine.utf8))) as? [String: Any] else {
+            completion(nil, error.isEmpty ? "yt-dlp returned unreadable output" : error); return
+        }
         let formats = (d["formats"] as? [[String: Any]]) ?? []
         let isLive = (d["is_live"] as? Bool) == true
         var plans: [StreamPlan] = []
@@ -554,9 +477,15 @@ func resolveStream(_ link: String, completion: @escaping (ResolvedStream?) -> Vo
                 plans.append(.single(s))
             }
         }
-        if let req = d["requested_formats"] as? [[String: Any]], req.count == 2,
-           let a = StreamRef(req[0]), let b = StreamRef(req[1]) {
-            plans.append(a.isVideo ? .split(video: a, audio: b) : .split(video: b, audio: a))
+        // Split video + audio: the chosen rendition plus the lower H.264 ones (StreamLadder), so AVPlayer can follow
+        // the window's size; then the chosen one alone (the bridge as it was) in case the ladder won't play.
+        if let req = d["requested_formats"] as? [[String: Any]], req.count == 2 {
+            let v = StreamRef(req[0])?.isVideo == true ? 0 : 1
+            if let audio = StreamRef(req[1 - v]) {
+                let ladder = StreamLadder.renditions(chosen: req[v], formats: formats).compactMap { StreamRef($0, headers: d["http_headers"]) }
+                if ladder.count > 1 { plans.append(.split(videos: ladder, audio: audio)) }
+                if let top = ladder.first { plans.append(.split(videos: [top], audio: audio)) }
+            }
         } else if let s = StreamRef(d) {
             plans.append(.single(s))
         }
@@ -567,7 +496,8 @@ func resolveStream(_ link: String, completion: @escaping (ResolvedStream?) -> Vo
             plans.append(.single(s))
         }
         let info = LinkInfo(json: d)   // also fills in the video's Recent Links row (WindowManager.onInfo)
-        completion(ResolvedStream(title: d["title"] as? String, isLive: isLive, plans: plans, thumbnail: info.thumbnail, duration: info.duration))
+        completion(ResolvedStream(title: d["title"] as? String, isLive: isLive, plans: plans, thumbnail: info.thumbnail, duration: info.duration),
+                   plans.isEmpty ? "yt-dlp found no format Watch can play" : "")
     }
 }
 
@@ -587,34 +517,50 @@ final class DashHLSBridge: NSObject, AVAssetResourceLoaderDelegate {
     struct Index { let initLength: Int; let segments: [(offset: Int, length: Int, duration: Double)] }
 
     // Completes on main with a ready-to-play asset (the bridge must be retained as long as the asset), or nil.
-    static func make(video: StreamRef, audio: StreamRef, completion: @escaping (DashHLSBridge?, AVURLAsset?) -> Void) {
+    // Every video rendition (best first) becomes a variant of one master playlist sharing the audio, so AVPlayer can
+    // switch resolution with the window (preferredMaximumResolution) and the bandwidth; one whose index can't be
+    // read is left out.
+    static func make(videos: [StreamRef], audio: StreamRef, completion: @escaping (DashHLSBridge?, AVURLAsset?) -> Void) {
         let base = "\(scheme)://p"
-        func finish(_ videoURI: String, _ audioURI: String, _ extra: [String: Data]) {
+        func finish(_ variants: [(StreamRef, String)], _ audioURI: String, _ extra: [String: Data]) {
             let b = DashHLSBridge()
-            let codecs = [video.vcodec, audio.acodec].compactMap { $0 }.filter { $0 != "none" }.joined(separator: ",")
-            var inf = "#EXT-X-STREAM-INF:BANDWIDTH=\((video.bitrate ?? 4_000_000) + (audio.bitrate ?? 128_000)),AUDIO=\"a\""
-            if !codecs.isEmpty { inf += ",CODECS=\"\(codecs)\"" }
-            if let w = video.width, let h = video.height { inf += ",RESOLUTION=\(w)x\(h)" }
-            let master = "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n"
+            var master = "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n"
                 + "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"Audio\",DEFAULT=YES,AUTOSELECT=YES,URI=\"\(audioURI)\"\n"
-                + "\(inf)\n\(videoURI)\n"
+            for (video, uri) in variants {
+                let codecs = [video.vcodec, audio.acodec].compactMap { $0 }.filter { $0 != "none" }.joined(separator: ",")
+                var inf = "#EXT-X-STREAM-INF:BANDWIDTH=\((video.bitrate ?? 4_000_000) + (audio.bitrate ?? 128_000)),AUDIO=\"a\""
+                if !codecs.isEmpty { inf += ",CODECS=\"\(codecs)\"" }
+                if let w = video.width, let h = video.height { inf += ",RESOLUTION=\(w)x\(h)" }
+                master += "\(inf)\n\(uri)\n"
+            }
             b.playlists = extra.merging(["/master.m3u8": Data(master.utf8)]) { $1 }
-            let asset = AVURLAsset(url: URL(string: "\(base)/master.m3u8")!, options: video.assetOptions)
+            let asset = AVURLAsset(url: URL(string: "\(base)/master.m3u8")!, options: variants[0].0.assetOptions)
             asset.resourceLoader.setDelegate(b, queue: b.queue)
             completion(b, asset)
         }
-        if video.isHLS && audio.isHLS {
-            DispatchQueue.main.async { finish(video.url.absoluteString, audio.url.absoluteString, [:]) }
+        guard let first = videos.first else { DispatchQueue.main.async { completion(nil, nil) }; return }
+        if first.isHLS && audio.isHLS {
+            DispatchQueue.main.async { finish([(first, first.url.absoluteString)], audio.url.absoluteString, [:]) }
             return
         }
-        guard !video.isHLS, !audio.isHLS else { DispatchQueue.main.async { completion(nil, nil) }; return }
-        let g = DispatchGroup(); var vi: Index?, ai: Index?
-        g.enter(); fetchIndex(video) { vi = $0; g.leave() }
+        let files = videos.filter { !$0.isHLS }
+        guard !files.isEmpty, !audio.isHLS else { DispatchQueue.main.async { completion(nil, nil) }; return }
+        let g = DispatchGroup(), lock = NSLock()
+        var indexes = [Index?](repeating: nil, count: files.count), ai: Index?
+        for (i, video) in files.enumerated() {
+            g.enter(); fetchIndex(video) { idx in lock.lock(); indexes[i] = idx; lock.unlock(); g.leave() }
+        }
         g.enter(); fetchIndex(audio) { ai = $0; g.leave() }
         g.notify(queue: .main) {
-            guard let vi = vi, let ai = ai else { completion(nil, nil); return }
-            finish("\(base)/video.m3u8", "\(base)/audio.m3u8",
-                   ["/video.m3u8": mediaPlaylist(video, vi), "/audio.m3u8": mediaPlaylist(audio, ai)])
+            guard let ai = ai else { completion(nil, nil); return }
+            var variants: [(StreamRef, String)] = [], extra = ["/audio.m3u8": mediaPlaylist(audio, ai)]
+            for (i, video) in files.enumerated() {
+                guard let idx = indexes[i] else { continue }
+                extra["/video\(i).m3u8"] = mediaPlaylist(video, idx)
+                variants.append((video, "\(base)/video\(i).m3u8"))
+            }
+            guard !variants.isEmpty else { completion(nil, nil); return }
+            finish(variants, "\(base)/audio.m3u8", extra)
         }
     }
 
@@ -736,6 +682,9 @@ final class SettingsController: NSObject, NSTextFieldDelegate {
     private var askDirCheck: NSButton!
     private var clipboardHotkeyCheck: NSButton!
     private var browserTabsCheck: NSButton!
+    private var nowPlayingCheck: NSButton!
+    private var pauseMusicCheck: NSButton!
+    private var resumeMusicCheck: NSButton!
     private var dirField: NSTextField!
     private var updateButton: NSButton!
     private var updateLabel: NSTextField!
@@ -750,7 +699,7 @@ final class SettingsController: NSObject, NSTextFieldDelegate {
 
     init(app: AppDelegate) {
         self.app = app
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 560),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 640),
                           styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Watch Preferences"; window.isReleasedWhenClosed = false
         super.init()
@@ -809,6 +758,18 @@ final class SettingsController: NSObject, NSTextFieldDelegate {
         accessLabel = note("macOS asks once per running browser to let Watch see its video tabs.")
         let accessRow = NSStackView(views: [access, accessLabel]); accessRow.spacing = 8; accessRow.alignment = .centerY
         stack.addArrangedSubview(accessRow)
+
+        nowPlayingCheck = NSButton(checkboxWithTitle: "Show what's playing in other apps (Music, Spotify, browsers…) with its artwork", target: self, action: #selector(nowPlayingChanged))
+        nowPlayingCheck.state = Prefs.showNowPlaying ? .on : .off
+        stack.addArrangedSubview(nowPlayingCheck)
+        pauseMusicCheck = NSButton(checkboxWithTitle: "Pause Music or Spotify while Watch plays", target: self, action: #selector(pauseMusicChanged))
+        pauseMusicCheck.state = Prefs.pauseMusicWhilePlaying ? .on : .off
+        stack.addArrangedSubview(pauseMusicCheck)
+        resumeMusicCheck = NSButton(checkboxWithTitle: "…and play it again when Watch's videos are closed", target: self, action: #selector(resumeMusicChanged))
+        resumeMusicCheck.state = Prefs.resumeMusicAfter ? .on : .off
+        resumeMusicCheck.isEnabled = Prefs.pauseMusicWhilePlaying
+        let resumeRow = NSStackView(views: [resumeMusicCheck]); resumeRow.edgeInsets = NSEdgeInsets(top: 0, left: 18, bottom: 0, right: 0)
+        stack.addArrangedSubview(resumeRow)
 
         dirField = NSTextField(string: Prefs.downloadDir); dirField.isEditable = false
         dirField.widthAnchor.constraint(equalToConstant: 300).isActive = true
@@ -900,6 +861,12 @@ final class SettingsController: NSObject, NSTextFieldDelegate {
     @objc private func askDirChanged() { Prefs.askDownloadDir = (askDirCheck.state == .on) }
     @objc private func clipboardHotkeyChanged() { Prefs.hotkeyPlaysClipboard = (clipboardHotkeyCheck.state == .on) }
     @objc private func browserTabsChanged() { Prefs.showBrowserTabs = (browserTabsCheck.state == .on); app?.mediaSettingsChanged() }
+    @objc private func nowPlayingChanged() { Prefs.showNowPlaying = (nowPlayingCheck.state == .on); app?.nowPlayingSettingsChanged() }
+    @objc private func pauseMusicChanged() {
+        Prefs.pauseMusicWhilePlaying = (pauseMusicCheck.state == .on)
+        resumeMusicCheck.isEnabled = Prefs.pauseMusicWhilePlaying
+    }
+    @objc private func resumeMusicChanged() { Prefs.resumeMusicAfter = (resumeMusicCheck.state == .on) }
     @objc private func loginChanged() { app?.toggleLoginItem(); loginCheck.state = currentLogin() ? .on : .off }
     @objc private func updateNow() { showMediaToolUpdateHelp() }
 }
@@ -1175,7 +1142,7 @@ final class MediaMonitor {
 // ============================================================================
 // MARK: - PlayerWindowController (B2) — a single video player window
 // ============================================================================
-final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
+final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     static let sharedProcessPool = WKProcessPool()   // reuse instead of cold-spawning a web view per player
     static let standardSize = NSSize(width: 440, height: 247)   // 16:9 — every player stays this size
     static let barInset: CGFloat = 16                            // playback bar ↔ window sides (keeps off the corner resize)
@@ -1209,7 +1176,9 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     private var youtubeID: String?
     private var youtubeStart = 0
     private var listID: String?                      // `list=` from the link that opened this video
-    private var triedWatchFallback = false
+    private var resolveTask: YtDlpTask?              // the running yt-dlp read; a new load or closing cancels it
+    private var lastPlaybackError: String?           // AVPlayer's reason when the last native plan failed
+    private let failureView = PlayerFailureView()    // "Couldn't play this video in Watch" + why — never YouTube's own page
     private var endObserver: NSObjectProtocol?
     // Resume where this video was left off (PlaybackPositions). An explicit `t=` wins over the saved spot.
     // `positionKey` belongs to the AVPlayer actually playing — startLoad of the next video leaves it alone,
@@ -1218,7 +1187,6 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     private var positionKey: String?
     private var positionReady = false                // no saves until the start/resume seek has landed
     private var lastPositionSave = Date.distantPast
-    private var startSeconds: Int { youtubeStart > 0 ? youtubeStart : Int(resumeAt) }
     // The playlist whose place this window keeps (PlaylistProgress): a playlist link's `list=`, or a YouTube
     // video link's. `playlistStart` is set when opening the playlist carried on past its first video; it belongs
     // to that one load (`token`), so a quick Next or a web fallback can't show it on a different video.
@@ -1239,6 +1207,13 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     var autoplay = Prefs.autoplay
     var repeatMode = RepeatMode(rawValue: Prefs.repeatMode) ?? .off
     var shuffle = Prefs.shuffle
+    // Run by the universal queue (UpNext.swift), which decides what comes next: `onEnded` replaces Autoplay's step when the
+    // video ends, `onStep` replaces Next/Previous (⌘←/⌘→, the menu), and `onClosed` says the window went.
+    var onEnded: (() -> Void)?
+    var onStep: ((Int) -> Void)?
+    var onClosed: (() -> Void)?
+    var onShowList: (() -> Void)?                    // ⌥⌘U: the universal queue's list (under the music window) instead of ours
+    private(set) var upNextList: QueueDrawer?        // this window's own Up Next, dropped down under it (3.23)
 
     init(manager: WindowManager) {
         self.manager = manager
@@ -1302,6 +1277,11 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         surface.onScroll = { [weak self] e in self?.webView?.scrollWheel(with: e) }
         surface.onKey = { [weak self] e in self?.handleKey(e) ?? false }
         drop.addSubview(surface)
+        failureView.frame = drop.bounds; failureView.autoresizingMask = [.width, .height]; failureView.isHidden = true
+        failureView.onRetry = { [weak self] in guard let self = self else { return }; self.startLoad(self.sourceURL, title: self.mediaTitle) }
+        failureView.onOpen = { [weak self] in self?.openInBrowser() }
+        failureView.onSignIn = { (NSApp.delegate as? AppDelegate)?.openYouTubeSignIn() }
+        drop.addSubview(failureView)
 
         resumeChip.isBordered = false; resumeChip.wantsLayer = true
         resumeChip.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.6).cgColor
@@ -1318,6 +1298,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         controls.onPlayPause = { [weak self] in self?.togglePlay() }
         controls.onSkip = { [weak self] s in self?.skip(s); self?.showControls() }
         controls.onMute = { [weak self] in self?.player?.isMuted.toggle(); self?.refreshControls() }
+        controls.onVolume = { [weak self] level in self?.setVolume(level) }
         controls.onSeek = { [weak self] f in self?.seek(toFraction: f) }
         drop.addSubview(controls)
 
@@ -1392,7 +1373,10 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         guard fileURL != nil || looksLikeURL(input) else { NSSound.beep(); return }
         loadToken += 1
         let token = loadToken
-        pendingPlans = []; youtubeID = nil; youtubeStart = 0; listID = nil; triedWatchFallback = false
+        defer { upNextList?.reload() }                // the list's Now Playing moves with it
+        pendingPlans = []; youtubeID = nil; youtubeStart = 0; listID = nil; lastPlaybackError = nil
+        resolveTask?.cancel(); resolveTask = nil
+        failureView.isHidden = true
         mediaTitle = title; isLive = false; resumeAt = 0; info = nil
         hideResumeChip()
         if let t = title { window.title = t }
@@ -1420,11 +1404,25 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         }
         recordPlaylistSpot()
         showLoading(title ?? "Loading…")
-        var settled = false
-        resolveStream(sourceURL) { [weak self] res in
-            guard let self = self, token == self.loadToken, !settled else { return }
-            settled = true
-            guard let res = res, !res.plans.isEmpty else { self.fallbackToWeb(token); return }
+        resolve(token, signedIn: false)
+    }
+    // One yt-dlp read. If YouTube asks for a signed-in viewer and an account is connected (Preferences ▸ YouTube
+    // Account), it's retried once with that browser's cookies — never otherwise. A slow answer is said, not abandoned:
+    // yt-dlp itself gives up after 60 s, and the failure card explains.
+    private func resolve(_ token: Int, signedIn: Bool) {
+        let cookies = signedIn ? YouTube.cookieArgs(YouTube.cookieSources().first ?? "safari") : []
+        resolveTask = resolveStream(sourceURL, cookies: cookies) { [weak self] res, error in
+            guard let self = self, token == self.loadToken else { return }
+            self.resolveTask = nil
+            guard let res = res, !res.plans.isEmpty else {
+                if !signedIn, self.youtubeID != nil, Prefs.youtubeConnected, PlaybackFailure.wantsSignIn(error) {
+                    self.loadingLabel.stringValue = "Trying with your YouTube account…"
+                    self.resolve(token, signedIn: true)
+                    return
+                }
+                self.couldNotPlay(token, error: error, signedIn: signedIn)
+                return
+            }
             self.isLive = res.isLive
             if let t = res.title {
                 self.mediaTitle = t; self.window.title = t; self.loadingLabel.stringValue = t
@@ -1435,38 +1433,51 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
             self.pendingPlans = res.plans
             self.tryNextPlan(token)
         }
-        // yt-dlp can hang on a bad network; don't leave the user staring at a spinner.
         DispatchQueue.main.asyncAfter(deadline: .now() + 25) { [weak self] in
-            guard let self = self, token == self.loadToken, !settled else { return }
-            settled = true; self.fallbackToWeb(token)
+            guard let self = self, token == self.loadToken, self.resolveTask != nil else { return }
+            self.loadingLabel.stringValue = "Still loading — YouTube is slow to answer…"
         }
     }
     private func tryNextPlan(_ token: Int) {
         guard token == loadToken else { return }
-        guard !pendingPlans.isEmpty else { fallbackToWeb(token); return }
+        guard !pendingPlans.isEmpty else { couldNotPlay(token, error: lastPlaybackError ?? "The stream wouldn't play", signedIn: false); return }
         switch pendingPlans.removeFirst() {
         case .single(let s):
             playAsset(AVURLAsset(url: s.url, options: s.assetOptions), token: token)
-        case .split(let v, let a):
-            DashHLSBridge.make(video: v, audio: a) { [weak self] bridge, asset in
+        case .split(let videos, let a):
+            DashHLSBridge.make(videos: videos, audio: a) { [weak self] bridge, asset in
                 guard let self = self, token == self.loadToken else { return }
                 guard let bridge = bridge, let asset = asset else { self.tryNextPlan(token); return }
                 self.playAsset(asset, bridge: bridge, token: token)
             }
         }
     }
-    // Nothing native worked (yt-dlp missing, outdated, or the site isn't supported): YouTube → IFrame embed,
-    // anything else → the page itself.
-    private func fallbackToWeb(_ token: Int) {
+    // Nothing native worked. YouTube: say why in Watch's own window, with Try Again / Open in Browser / Copy Details —
+    // never YouTube's web player (ads, signed out, no Watch controls). Other sites: their page, the only way to show
+    // them. Every failure is logged (PlaybackLog) so "Copy Details" or the log can be sent on.
+    private func couldNotPlay(_ token: Int, error: String, signedIn: Bool) {
         guard token == loadToken else { return }
-        if let id = youtubeID { loadYouTubeEmbed(id: id, start: startSeconds) }
-        else if let u = URL(string: sourceURL) { ensureWebView().load(URLRequest(url: u)) }
+        PlaybackLog.shared.append("\(sourceURL) — \(error.isEmpty ? "no reason given" : error)\(signedIn ? " (signed in)" : "")")
+        guard youtubeID != nil else {
+            if let u = URL(string: sourceURL) { ensureWebView().load(URLRequest(url: u)) }
+            return
+        }
+        teardownAVPlayer(); teardownWebView(); hideLoading()
+        let version = Bundle.main.infoDictionary.map { "\($0["CFBundleShortVersionString"] ?? "?") (\($0["CFBundleVersion"] ?? "?"))" } ?? "?"
+        let offerSignIn = PlaybackFailure.wantsSignIn(error) && !Prefs.youtubeConnected
+        let text = offerSignIn ? "YouTube wants to check you're not a bot. Sign in once (your browser's YouTube session) and Watch plays it directly."
+                               : PlaybackFailure.reason(error)
+        let details = "Watch \(version) · macOS \(ProcessInfo.processInfo.operatingSystemVersionString)\n\(sourceURL)\n"
+            + "Signed in: \(signedIn ? "yes" : "no")\n\(error.isEmpty ? "No reason given" : error)"
+        failureView.show(reason: text, details: details, offerSignIn: offerSignIn)
     }
     private func playAsset(_ asset: AVURLAsset, bridge: DashHLSBridge? = nil, token: Int) {
         teardownWebView(); teardownAVPlayer()
         self.bridge = bridge
         let item = AVPlayerItem(asset: asset)
+        item.preferredMaximumResolution = qualityCap()
         let p = AVPlayer(playerItem: item)
+        p.volume = Float(Prefs.playerVolume)
         // A bare AVPlayerLayer, NOT AVPlayerView: AVPlayerView's built-in controls pin the view to ≥130pt tall,
         // which stops the window shrinking and letterboxes the video (see GOTCHAS).
         let vv = PlayerVideoView(frame: window.contentView!.bounds)
@@ -1511,7 +1522,8 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
                         }
                     } else { self.positionReady = true; self.showStartChip(resumedAt: nil) }
                 case .failed where !becameReady:
-                    self.tryNextPlan(token)          // e.g. bridge/segment trouble → next plan (muxed), then web
+                    self.lastPlaybackError = item.error?.localizedDescription
+                    self.tryNextPlan(token)          // e.g. bridge/segment trouble → next plan (one rendition, muxed)
                 default: break
                 }
             }
@@ -1520,66 +1532,10 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         manager?.beginPlaybackActivity()
     }
 
-    // YouTube IFrame Player API on a youtube.com origin under a desktop-Safari UA (see GOTCHAS: error 153).
-    // Only reached when yt-dlp can't resolve the video; embed errors fall through to the full watch page.
-    private func loadYouTubeEmbed(id: String, start: Int) {
-        let wv = ensureWebView()
-        let html = """
-        <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-        <style>html,body{margin:0;height:100%;background:#000;overflow:hidden}
-        #p{position:fixed;inset:0;width:100%;height:100%}</style></head>
-        <body><div id="p"></div>
-        <script src="https://www.youtube.com/iframe_api"></script>
-        <script>
-        var reported=false;
-        function send(m){try{window.webkit.messageHandlers.yt.postMessage(m);}catch(e){}}
-        function gkWhere(){var p=window.gkPlayer;if(p&&p.getCurrentTime)send('time:\(id):'+p.getCurrentTime()+':'+p.getDuration());}
-        setInterval(function(){if(window.gkPlayer&&gkPlayer.getPlayerState&&gkPlayer.getPlayerState()===1)gkWhere();},5000);
-        function onYouTubeIframeAPIReady(){
-          window.gkPlayer=new YT.Player('p',{videoId:'\(id)',
-            playerVars:{autoplay:1,playsinline:1,rel:0,modestbranding:1,fs:1,start:\(start),origin:'https://www.youtube.com'},
-            events:{
-              'onReady':function(e){e.target.playVideo();},
-              'onError':function(e){send('error:'+e.data);},
-              'onStateChange':function(e){if(e.data===1||e.data===3){reported=true;send('playing');}
-                                          else if(e.data===2){gkWhere();}
-                                          else if(e.data===0){send('ended:\(id)');}}
-            }});
-        }
-        setTimeout(function(){if(!reported)send('timeout');},8000);
-        </script></body></html>
-        """
-        wv.loadHTMLString(html, baseURL: URL(string: "https://www.youtube.com"))
-    }
-    func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == "yt" else { return }
-        let body = (message.body as? String) ?? ""
-        if body == "playing" { hideLoading(); return }
-        // The embed saves its place as well: "time:<id>:<seconds>:<duration>" every 5 s while playing and on pause.
-        // The id travels with it, so a late message from a replaced embed can't land on the next video.
-        if body.hasPrefix("time:") {
-            let parts = body.split(separator: ":", maxSplits: 3).map(String.init)
-            guard parts.count == 4, let t = Double(parts[2]), let d = Double(parts[3]) else { return }
-            let key = PlaybackPositions.key(source: "", youtubeID: parts[1]), duration = d > 0 ? d : nil
-            PlaybackPositions.shared.save(t, duration: duration, for: key)
-            if WatchedVideos.shared.noteProgress(t, duration: duration, for: key) { NotificationCenter.default.post(name: .watchLibraryChanged, object: nil) }
-            return
-        }
-        // The embed fallback ends its video too — Autoplay / Repeat One work there as well.
-        if body.hasPrefix("ended") {
-            if let id = body.split(separator: ":").dropFirst().first { markWatched(PlaybackPositions.key(source: "", youtubeID: String(id))) }
-            if repeatMode == .one { webView?.evaluateJavaScript("gkPlayer.seekTo(0,true);gkPlayer.playVideo()") }
-            else if autoplay || repeatMode == .all { advance(1, auto: true) }
-            return
-        }
-        if body == "timeout" || body.hasPrefix("error") { loadWatchPageFallback() }
-    }
-    private func loadWatchPageFallback() {
-        guard let id = youtubeID, !triedWatchFallback else { return }
-        triedWatchFallback = true
-        var s = "https://www.youtube.com/watch?v=\(id)"
-        if startSeconds > 0 { s += "&t=\(startSeconds)s" }
-        if let u = URL(string: s) { ensureWebView().load(URLRequest(url: u)) }
+    // Most pixels worth decoding for the video area right now (StreamLadder.cap) — resizing moves it, so AVPlayer
+    // switches renditions with the window.
+    private func qualityCap() -> CGSize {
+        StreamLadder.cap(points: window.contentView?.bounds.size ?? Self.standardSize, scale: window.backingScaleFactor)
     }
     private func ensureWebView() -> WKWebView {
         teardownAVPlayer()
@@ -1588,7 +1544,6 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         cfg.processPool = Self.sharedProcessPool
         cfg.mediaTypesRequiringUserActionForPlayback = []
         cfg.preferences.isElementFullscreenEnabled = true
-        cfg.userContentController.add(self, name: "yt")   // YouTube IFrame API → userContentController(_:didReceive:)
         let wv = WKWebView(frame: window.contentView!.bounds, configuration: cfg)
         wv.autoresizingMask = [.width, .height]
         wv.navigationDelegate = self
@@ -1603,7 +1558,6 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         return wv
     }
     private func teardownWebView() {
-        webView?.configuration.userContentController.removeScriptMessageHandler(forName: "yt")
         webView?.removeFromSuperview(); webView = nil
     }
     private func teardownAVPlayer() {
@@ -1689,7 +1643,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         guard let p = player, let item = p.currentItem else { return }
         let dur = item.duration
         let live = isLive || !(dur.isNumeric && dur.seconds > 0)
-        controls.update(playing: p.timeControlStatus != .paused, muted: p.isMuted,
+        controls.update(playing: p.timeControlStatus != .paused, muted: p.isMuted, volume: Double(p.volume),
                         current: p.currentTime().seconds, duration: live ? nil : dur.seconds)
     }
     private func togglePlay() {
@@ -1734,10 +1688,11 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         }
     }
     private func handleKey(_ e: NSEvent) -> Bool {
-        if e.modifierFlags.contains(.command) {      // ⌘←/⌘→ step through Up Next (same as the menu)
+        if e.modifierFlags.contains(.command) {      // ⌘←/⌘→ step through Up Next (same as the menu); ⌥⌘U its list
             switch e.keyCode {
             case 123: previousItem()
             case 124: nextItem()
+            case 32 where e.modifierFlags.contains(.option): toggleUpNextList()
             default:  return false
             }
             return true
@@ -1747,9 +1702,20 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         case 49:  togglePlay(); showControls()       // space
         case 123: skip(-5); showControls()           // ←
         case 124: skip(5); showControls()            // →
+        case 126: setVolume(Double(player?.volume ?? 1) + 0.1); showControls()   // ↑
+        case 125: setVolume(Double(player?.volume ?? 1) - 0.1); showControls()   // ↓
         default:  return false
         }
         return true
+    }
+    // The volume slider and ↑/↓: this window's volume, remembered for the next window. Any level above zero unmutes.
+    private func setVolume(_ value: Double) {
+        guard let p = player else { return }
+        let level = min(1, max(0, (value * 100).rounded() / 100))
+        p.volume = Float(level)
+        if level > 0 { p.isMuted = false }
+        Prefs.playerVolume = level
+        refreshControls()
     }
     private func showControls() {
         guard player != nil, loadingView.isHidden else { return }
@@ -1783,7 +1749,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
 
     // MARK: Up Next — Next/Previous, and what happens when a video ends
     // This window can have an Up Next list as long as there's somewhere to look for one.
-    private var canQueue: Bool { isLocalFile || youtubeID != nil }
+    private var canQueue: Bool { onStep == nil && (isLocalFile || youtubeID != nil) }
     // Build the list if this window doesn't have one yet: the playlist a `list=` link carried, what
     // YouTube would play next after a lone video, or the folder a local file sits in. `done` runs either
     // way — callers check `queue` themselves.
@@ -1819,9 +1785,10 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     private func finishQueue(_ q: PlayQueue?, token: Int) {
         guard token == queueToken else { return }       // a different video is in this window now
         queueLoading = false; queueTried = true
-        if let q = q { queue = q }
+        if let q = q { queue = queue.map { $0.merged(into: q) } ?? q }   // dropped on the list meanwhile: kept, right after
         let waiting = queueWaiters; queueWaiters = []
         waiting.forEach { $0() }
+        upNextList?.reload()
     }
     // With autoplay on, have the list ready before the video ends — but only in its last minute, so
     // opening five players at once doesn't fire five page fetches.
@@ -1833,6 +1800,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     }
     // Step through Up Next. `auto` = the video ended by itself, so stay quiet when there's nowhere to go.
     private func advance(_ delta: Int, auto: Bool = false) {
+        if let step = onStep { step(delta); return }
         if queue == nil, canQueue, !auto { showLoading("Up Next…") }
         ensureQueue { [weak self] in
             guard let self = self else { return }
@@ -1861,6 +1829,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     private func itemDidEnd() {
         if let k = positionKey { markWatched(k) }
         if repeatMode == .one { player?.seek(to: .zero); player?.play(); refreshControls(); return }
+        if let ended = onEnded { ended(); return }
         guard autoplay || repeatMode == .all else { refreshControls(); return }
         advance(1, auto: true)
     }
@@ -1873,6 +1842,10 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         let prev = addItem(m, "Previous", #selector(previousItem), key: NSLeftArrowFunctionKey)
         let ahead = queue?.peek(1, wrap: wrap)
         let next = addItem(m, ahead?.title.map { "Next: " + Self.shorten($0) } ?? "Next", #selector(nextItem), key: NSRightArrowFunctionKey)
+        let list = NSMenuItem(title: upNextList?.isShown == true ? "Hide Up Next List" : "Show Up Next List",
+                              action: #selector(toggleUpNextList), keyEquivalent: "u")
+        list.keyEquivalentModifierMask = [.command, .option]; list.target = self
+        defer { m.addItem(list) }
         guard let q = queue else {
             prev.isEnabled = false; next.isEnabled = canQueue
             if canQueue { ensureQueue {} }
@@ -1932,6 +1905,51 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     @objc func toggleShuffle() {
         shuffle.toggle(); Prefs.shuffle = shuffle
         queue?.setShuffle(shuffle)
+        upNextList?.reload()
+    }
+
+    // MARK: Up Next list (3.23) — the music window's drop-down (QueueDrawer), for this window's own list: drag to reorder,
+    // ⌫ removes, double-click plays, drops go in where they land and play in this window. A window the universal queue
+    // runs shows that queue's list (under the music window) instead.
+    @objc func toggleUpNextList() {
+        if let show = onShowList { show(); return }
+        let list = upNextList ?? makeUpNextList()
+        if list.isShown { list.hide(); return }
+        list.show(under: window)
+        if queue == nil, canQueue { ensureQueue { [weak self] in self?.upNextList?.reload() } }   // a lone video: looked up now
+    }
+    func hideUpNextList() { upNextList?.hide() }
+    var upNextListFrame: NSRect? { upNextList?.isShown == true ? upNextList?.window.frame : nil }
+    private func makeUpNextList() -> QueueDrawer {
+        let d = QueueDrawer()
+        d.emptyHint = "Drop videos, files or links here — they play next in this window."
+        d.idleHint = "Drop videos, files or links here to play them next in this window."
+        d.queue = { [weak self] in self?.queue }
+        d.nowPlaying = { [weak self] in
+            guard let self = self, !self.sourceURL.isEmpty else { return nil }
+            return QueueItem(url: self.sourceURL, title: self.mediaTitle, source: isLocalMedia(self.sourceURL) ? .file : .web)
+        }
+        d.onPlay = { [weak self] id in
+            guard let self = self, let item = self.queue?.jump(to: id) else { return }
+            self.startLoad(item.url, title: item.title)
+        }
+        d.onRemove = { [weak self] ids in self?.queue?.remove(ids: ids); self?.upNextList?.reload() }
+        d.onMove = { [weak self] ids, position in self?.queue?.move(ids: ids, to: position); self?.upNextList?.reload() }
+        d.onInsert = { [weak self] items, position in self?.insertIntoUpNext(items, at: position) }
+        d.onClear = { [weak self] in self?.queue?.clearAdded(); self?.upNextList?.reload() }
+        upNextList = d
+        return d
+    }
+    // Dropped on the list: videos, files and links play here in turn (Music/Spotify songs belong to the music window's list).
+    func insertIntoUpNext(_ items: [QueueItem], at position: Int?) {
+        let here = items.filter { !$0.source.isExternal }
+        if here.count < items.count { NSSound.beep() }
+        guard !here.isEmpty else { return }
+        if queue == nil {                                    // a lone video: these, then whatever its list turns out to be
+            queue = PlayQueue(kind: .list, name: "Up Next", items: [QueueItem(url: sourceURL, title: mediaTitle)])
+            queue?.insert(here, .later)
+        } else if let p = position { queue?.insert(here, .at(p)) } else { queue?.insert(here, .later) }
+        upNextList?.reload()
     }
 
     // MARK: double-click — back to the size the window had before its latest resize. Every manual resize
@@ -1957,9 +1975,11 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     func windowShouldZoom(_ w: NSWindow, toFrame newFrame: NSRect) -> Bool { toggleSavedSize(); return false }
 
     func webView(_ wv: WKWebView, didFinish navigation: WKNavigation!) { hideLoading() }
-    // Embed page failed to load at the network level → try the full watch page once.
-    func webView(_ wv: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { loadWatchPageFallback() }
-    func webView(_ wv: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { loadWatchPageFallback() }
+    // A site's page that won't load: stop the spinner (its error stays in the log).
+    func webView(_ wv: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        hideLoading(); PlaybackLog.shared.append("\(sourceURL) — page: \(error.localizedDescription)")
+    }
+    func webView(_ wv: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { hideLoading() }
 
     func webView(_ wv: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if let u = navigationAction.request.url { wv.load(URLRequest(url: u)) }
@@ -1990,6 +2010,11 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         addUpNext(m)
         m.addItem(.separator())
         addPlaybackModes(m)
+        // Which rendition is showing — it follows the window's size (StreamLadder).
+        if let h = player?.currentItem?.presentationSize.height, let label = StreamLadder.label(height: Double(h)) {
+            let q = NSMenuItem(title: "Playing at \(label)", action: nil, keyEquivalent: ""); q.isEnabled = false
+            m.addItem(.separator()); m.addItem(q)
+        }
         if !isLocalFile {
             m.addItem(.separator())
             if isLive { addItem(m, "Record Live Stream", #selector(downloadVideo)) }
@@ -2012,6 +2037,29 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         return m
     }
     @objc func tileWindows() { manager?.tile(on: window.screen) }
+    // Read-only state for the isolated UI checks (Tests/PanelMain.swift), which drive the real click surface and keys.
+    var isPlayingNatively: Bool { player != nil && webView == nil }
+    var isPlaying: Bool { player.map { $0.timeControlStatus != .paused } ?? false }
+    var playbackTime: Double { player?.currentTime().seconds ?? 0 }
+    var playbackVolume: Double { Double(player?.volume ?? 0) }
+    var qualityLimit: CGSize { player?.currentItem?.preferredMaximumResolution ?? .zero }
+    var videoArea: NSRect { videoView?.frame ?? .zero }
+    var showsFailure: Bool { !failureView.isHidden }
+    var clickSurface: PlayerSurfaceView { surface }
+    var menuTitles: [String] { playerMenu().items.map(\.title) }
+    // Driven from the music window while this video is the universal queue's current item.
+    var playbackDuration: Double? {
+        guard let d = player?.currentItem?.duration, d.isNumeric, d.seconds > 0 else { return nil }
+        return d.seconds
+    }
+    func setPaused(_ paused: Bool) { if player != nil, paused == isPlaying { togglePlay() } }
+    func seek(toSeconds t: Double) {
+        guard let p = player else { return }
+        skipTarget = nil
+        p.seek(to: CMTime(seconds: max(0, t), preferredTimescale: 600), toleranceBefore: Self.skipTolerance, toleranceAfter: Self.skipTolerance)
+        refreshControls()
+    }
+    func setPlaybackVolume(_ level: Double) { setVolume(level) }
     // A grid slot from Tile Windows. It counts as a resize, so a double-click afterwards returns to the old size.
     func moveToTile(_ f: NSRect) {
         if f.size != window.frame.size { previousSize = window.frame.size }
@@ -2039,12 +2087,20 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     @objc func openInBrowser() { if let u = URL(string: sourceURL) { NSWorkspace.shared.open(u) } }
     @objc func closeSelf() { window.close() }
     func windowDidMove(_ n: Notification) { manager?.rememberFrame(window.frame) }
-    func windowDidResize(_ n: Notification) { manager?.rememberFrame(window.frame) }
+    func windowDidResize(_ n: Notification) {
+        manager?.rememberFrame(window.frame)
+        player?.currentItem?.preferredMaximumResolution = qualityCap()
+    }
     func windowWillClose(_ n: Notification) {
         manager?.rememberFrame(window.frame)
+        resolveTask?.cancel(); resolveTask = nil
         loadToken += 1; queueToken += 1; queueWaiters = []
         teardownAVPlayer(); teardownWebView()
+        upNextList?.hide()
+        let closed = onClosed
+        onClosed = nil; onEnded = nil; onStep = nil; onShowList = nil
         manager?.removed(self)
+        closed?()
     }
 }
 
@@ -2053,13 +2109,15 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
 // ============================================================================
 final class WindowManager {
     private(set) var players: [PlayerWindowController] = []
+    // Other Watch windows a new player must not cover (AppDelegate: the music window while it's open).
+    var keepClear: () -> [NSRect] = { [] }
     private var activityToken: NSObjectProtocol?
     var onInfo: ((String, LinkInfo) -> Void)?                    // (sourceURL, what yt-dlp resolved: title, thumbnail, …)
     var onDownload: ((String, String?, DownloadKind) -> Void)?   // (sourceURL, title, kind)
 
     // `replacing` = the control panel's frame when the video takes the panel's place (see AppDelegate.play).
     @discardableResult
-    func open(_ input: String, anchor: NSStatusItem, queue: PlayQueue? = nil, replacing: NSRect? = nil) -> PlayerWindowController {
+    func open(_ input: String, anchor: NSStatusItem?, queue: PlayQueue? = nil, replacing: NSRect? = nil) -> PlayerWindowController {
         let pc = PlayerWindowController(manager: self)
         if let f = replacing { take(f, for: pc.window) } else { place(pc.window, anchor: anchor) }
         players.append(pc)
@@ -2076,6 +2134,7 @@ final class WindowManager {
     // Tile Windows: every visible player goes into one grid filling `screen` (the one the command came from).
     // Windows keep their reading order (top row left to right, …), so re-tiling respects a window dragged elsewhere.
     func tile(on screen: NSScreen?) {
+        players.forEach { $0.hideUpNextList() }        // the grid fills the screen; a list would sit on a neighbour
         let tiled = players.filter { $0.window.isVisible && !$0.window.isMiniaturized && !$0.window.styleMask.contains(.fullScreen) }
         guard tiled.count > 1, let vis = (screen ?? tiled.last.flatMap { Self.screen(for: $0.window.frame) })?.visibleFrame else { return }
         let (cols, slots) = Tiling.grid(count: tiled.count, in: vis)
@@ -2102,16 +2161,30 @@ final class WindowManager {
     // New window: first one opens at the remembered frame (or under the menu-bar icon the very first
     // time); further ones take the remembered SIZE and sit beside an existing player without overlap.
     // Existing windows are never moved.
-    private func place(_ window: NSWindow, anchor: NSStatusItem) {
+    private func place(_ window: NSWindow, anchor: NSStatusItem?) {
         let saved = rememberedFrame()
         let size = saved?.size ?? window.frameRect(forContentRect: NSRect(origin: .zero, size: PlayerWindowController.standardSize)).size
-        if players.isEmpty {
-            if let f = saved, let vis = Self.screen(for: f)?.visibleFrame { window.setFrame(Self.clamp(f, to: vis), display: true) }
-            else { window.setFrame(NSRect(origin: window.frame.origin, size: size), display: true); positionUnderStatusItem(window, anchor: anchor) }
-            return
+        window.setFrame(freeFrame(size: size, anchor: anchor, remembered: saved, excluding: window), display: true)
+    }
+    // Where a new window of `size` goes. With nothing open: the remembered spot (players), else under the menu-bar icon.
+    // Otherwise beside an open window — players and `keepClear` (the music window) alike — without overlapping any;
+    // cascade if there's no room. Shared by players and the music window.
+    func freeFrame(size: NSSize, anchor: NSStatusItem?, remembered: NSRect? = nil, excluding: NSWindow? = nil) -> NSRect {
+        let open = players.filter { $0.window !== excluding }.flatMap { [$0.window.frame] + ($0.upNextListFrame.map { [$0] } ?? []) },
+            clear = keepClear()
+        let others = open + clear
+        if open.isEmpty {
+            // The first player goes where the last one was — unless the music window is there now.
+            if let f = remembered, let vis = Self.screen(for: f)?.visibleFrame, !clear.contains(where: { $0.intersects(Self.clamp(f, to: vis)) }) {
+                return Self.clamp(f, to: vis)
+            }
+            if clear.isEmpty {
+                if let a = anchor, let f = Self.frame(under: a, size: size) { return f }
+                let vis = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+                return NSRect(x: vis.midX - size.width / 2, y: vis.midY - size.height / 2, width: size.width, height: size.height)
+            }
         }
         let gap: CGFloat = 12
-        let others = players.map { $0.window.frame }
         for prev in others.reversed() {
             guard let vis = Self.screen(for: prev)?.visibleFrame else { continue }
             let candidates = [
@@ -2120,41 +2193,47 @@ final class WindowManager {
                 NSRect(x: prev.minX, y: prev.minY - gap - size.height, width: size.width, height: size.height),   // below
                 NSRect(x: prev.minX, y: prev.maxY + gap, width: size.width, height: size.height),                 // above
             ]
-            if let f = candidates.first(where: { c in vis.contains(c) && !others.contains(where: { $0.intersects(c) }) }) {
-                window.setFrame(f, display: true); return
-            }
+            if let f = candidates.first(where: { c in vis.contains(c) && !others.contains(where: { $0.intersects(c) }) }) { return f }
         }
         // No free spot beside any window — cascade off the most recent one.
         let last = others.last!
         let vis = Self.screen(for: last)?.visibleFrame ?? last
-        window.setFrame(Self.clamp(NSRect(x: last.minX + 28, y: last.maxY - 28 - size.height, width: size.width, height: size.height), to: vis), display: true)
+        return Self.clamp(NSRect(x: last.minX + 28, y: last.maxY - 28 - size.height, width: size.width, height: size.height), to: vis)
     }
     // Sit where the panel was: the usual player size (remembered, else standard), centred on the panel's top edge.
     private func take(_ panel: NSRect, for window: NSWindow) {
-        let size = rememberedFrame()?.size ?? window.frameRect(forContentRect: NSRect(origin: .zero, size: PlayerWindowController.standardSize)).size
-        var f = NSRect(x: panel.midX - size.width / 2, y: panel.maxY - size.height, width: size.width, height: size.height)
-        if let vis = Self.screen(for: panel)?.visibleFrame { f = Self.clamp(f, to: vis) }
-        window.setFrame(f, display: true)
+        window.setFrame(takeFrame(replacing: panel), display: true)
     }
-    private static func screen(for f: NSRect) -> NSScreen? {
+    func takeFrame(replacing panel: NSRect) -> NSRect {
+        let size = rememberedFrame()?.size ?? NSWindow.frameRect(forContentRect: NSRect(origin: .zero, size: PlayerWindowController.standardSize),
+                                                                    styleMask: [.titled, .closable, .resizable, .fullSizeContentView]).size
+        return Self.frame(replacing: panel, size: size)
+    }
+    // Shared with the artwork window: centred on the panel's top edge, kept on screen.
+    static func frame(replacing panel: NSRect, size: NSSize) -> NSRect {
+        let f = NSRect(x: panel.midX - size.width / 2, y: panel.maxY - size.height, width: size.width, height: size.height)
+        guard let vis = screen(for: panel)?.visibleFrame else { return f }
+        return clamp(f, to: vis)
+    }
+    // Just under the menu-bar icon, kept inside its screen horizontally.
+    static func frame(under anchor: NSStatusItem, size: NSSize) -> NSRect? {
+        guard let b = anchor.button, let bw = b.window else { return nil }
+        let on = bw.convertToScreen(b.convert(b.bounds, to: nil))
+        var f = NSRect(x: on.midX - size.width / 2, y: on.minY - size.height - 4, width: size.width, height: size.height)
+        if let vis = bw.screen?.visibleFrame { f.origin.x = min(max(f.origin.x, vis.minX + 8), vis.maxX - f.width - 8) }
+        return f
+    }
+    static func screen(for f: NSRect) -> NSScreen? {
         func overlap(_ s: NSScreen) -> CGFloat { let i = s.visibleFrame.intersection(f); return i.isNull ? 0 : i.width * i.height }
         guard let best = NSScreen.screens.max(by: { overlap($0) < overlap($1) }), overlap(best) > 0 else { return NSScreen.main }
         return best
     }
-    private static func clamp(_ f: NSRect, to vis: NSRect) -> NSRect {
+    static func clamp(_ f: NSRect, to vis: NSRect) -> NSRect {
         var r = f
         r.size.width = min(r.width, vis.width); r.size.height = min(r.height, vis.height)
         r.origin.x = min(max(r.minX, vis.minX), vis.maxX - r.width)
         r.origin.y = min(max(r.minY, vis.minY), vis.maxY - r.height)
         return r
-    }
-    private func positionUnderStatusItem(_ window: NSWindow, anchor: NSStatusItem) {
-        guard let b = anchor.button, let bw = b.window else { return }
-        let on = bw.convertToScreen(b.convert(b.bounds, to: nil))
-        var f = window.frame
-        f.origin.x = on.midX - f.width / 2; f.origin.y = on.minY - f.height - 4
-        if let vis = bw.screen?.visibleFrame { f.origin.x = min(max(f.origin.x, vis.minX + 8), vis.maxX - f.width - 8) }
-        window.setFrame(f, display: true)
     }
     // Disables App Nap while any player is open, so a visible-but-unfocused video isn't throttled.
     func beginPlaybackActivity() {
@@ -2171,6 +2250,7 @@ final class WindowManager {
 // ============================================================================
 final class DragReceiverView: NSView {
     var onDrop: ((String) -> Void)?
+    var onDropMany: (([QueueItem]) -> Void)?             // several items, or any with ⌥ held: Up Next
     override init(frame: NSRect) { super.init(frame: frame); registerForDraggedTypes([.fileURL, .URL, .string]) }
     required init?(coder: NSCoder) { fatalError() }
     // Forward ordinary clicks to the button underneath so the icon still opens the panel.
@@ -2180,6 +2260,8 @@ final class DragReceiverView: NSView {
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let pb = sender.draggingPasteboard
+        let items = QueueDrawer.items(from: pb)
+        if let many = onDropMany, items.count > 1 || (!items.isEmpty && NSEvent.modifierFlags.contains(.option)) { many(items); return true }
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL], let u = urls.first {
             onDrop?(u.isFileURL ? u.path : u.absoluteString); return true
         }
@@ -2209,6 +2291,7 @@ final class PlayerVideoView: NSView {
 final class PlayerSurfaceView: NSView {
     var onMultiClick: ((NSPoint, Int) -> Void)?
     var onHover: ((Bool) -> Void)?
+    var onPointer: ((NSPoint?) -> Void)?                  // where the pointer is (nil once it leaves) — the music window's caption
     var onClick: ((NSEvent, NSEvent) -> Void)?
     var onScroll: ((NSEvent) -> Void)?
     var onRightClick: ((NSEvent) -> Void)?
@@ -2222,9 +2305,9 @@ final class PlayerSurfaceView: NSView {
     override var mouseDownCanMoveWindow: Bool { false }   // we move it ourselves, and keep title-bar clicks here
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseEntered(with e: NSEvent) { onHover?(true) }
-    override func mouseMoved(with e: NSEvent) { onHover?(true) }
-    override func mouseExited(with e: NSEvent) { onHover?(false) }
+    override func mouseEntered(with e: NSEvent) { onHover?(true); onPointer?(convert(e.locationInWindow, from: nil)) }
+    override func mouseMoved(with e: NSEvent) { onHover?(true); onPointer?(convert(e.locationInWindow, from: nil)) }
+    override func mouseExited(with e: NSEvent) { onHover?(false); onPointer?(nil) }
     override func scrollWheel(with e: NSEvent) { onScroll?(e) }
     override func rightMouseDown(with e: NSEvent) { onRightClick?(e) }
     override func keyDown(with e: NSEvent) { if onKey?(e) != true { super.keyDown(with: e) } }
@@ -2249,22 +2332,30 @@ final class FadingButton: NSButton {
     override func hitTest(_ point: NSPoint) -> NSView? { alphaValue < 0.05 ? nil : super.hitTest(point) }
 }
 
-// The playback bar: ⟲10 · play/pause · ⟳10 · scrubber · time · mute. Parts drop out as the window narrows
-// (the skip buttons first, then the time, then mute).
+// The playback bar: ⟲10 · play/pause · ⟳10 · scrubber · time · volume. Parts drop out as the window narrows (the skip
+// buttons first, then the time, then the volume). The volume is the speaker icon — its glyph shows the level, a click
+// mutes — and hovering it slides a short slider out to its left (so the icon stays under the pointer), taking room
+// from the scrubber; it tucks away shortly after the pointer leaves. Both sliders are ThinSliders.
 final class PlayerControlBar: NSView {
+    static let volumeWidth: CGFloat = 50, volumeMinWidth: CGFloat = 180   // no slide-out in narrower bars
     var onPlayPause: (() -> Void)?
     var onSkip: ((Double) -> Void)?
     var onMute: (() -> Void)?
     var onSeek: ((Double) -> Void)?
-    private(set) var isScrubbing = false
+    var onVolume: ((Double) -> Void)?
+    // Dragging the scrubber or the volume: the bar stays up, and refreshes leave that slider where the finger is.
+    var isScrubbing: Bool { scrubber.isTracking || volumeSlider.isTracking }
+    private(set) var volumeOpen = false
     private let backButton = NSButton(title: "", image: NSImage(), target: nil, action: nil)
     private let playButton = NSButton(title: "", image: NSImage(), target: nil, action: nil)
     private let forwardButton = NSButton(title: "", image: NSImage(), target: nil, action: nil)
     private let muteButton = NSButton(title: "", image: NSImage(), target: nil, action: nil)
-    private let slider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
+    private let scrubber = ThinSlider()
+    private let volumeSlider = ThinSlider()
     private let timeLabel = NSTextField(labelWithString: "")
     private var isLiveStream = false
     private var longClock = false                    // an hour or more: "1:02:03 / 1:23:45" needs a wider label
+    private var closeVolumeWork: DispatchWorkItem?
     private static let symbolConfig = NSImage.SymbolConfiguration(pointSize: 10, weight: .bold)
     private static let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium)
 
@@ -2283,62 +2374,118 @@ final class PlayerControlBar: NSView {
         }
         backButton.image = sym("gobackward.10").withSymbolConfiguration(Self.symbolConfig); backButton.toolTip = "Back 10 seconds"
         forwardButton.image = sym("goforward.10").withSymbolConfiguration(Self.symbolConfig); forwardButton.toolTip = "Forward 10 seconds"
-        slider.controlSize = .small; slider.isContinuous = true
-        slider.target = self; slider.action = #selector(sliderMoved)
-        addSubview(slider)
+        muteButton.toolTip = "Volume — click to mute"
+        scrubber.onChange = { [weak self] value, _ in self?.onSeek?(value) }
+        scrubber.setAccessibilityLabel("Position")
+        addSubview(scrubber)
+        volumeSlider.onChange = { [weak self] value, finished in
+            self?.onVolume?(value)
+            if finished { self?.scheduleVolumeClose() }
+        }
+        volumeSlider.setAccessibilityLabel("Volume")
+        volumeSlider.alphaValue = 0
+        addSubview(volumeSlider)
         timeLabel.font = Self.timeFont
         timeLabel.textColor = NSColor.white.withAlphaComponent(0.8)
         timeLabel.alignment = .right
         addSubview(timeLabel)
-        setIcons(playing: false, muted: false)
+        setIcons(playing: false, volume: volumeSymbol(1))
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: nil))
         layoutParts()
     }
     required init?(coder: NSCoder) { fatalError() }
     override func hitTest(_ point: NSPoint) -> NSView? { alphaValue < 0.05 ? nil : super.hitTest(point) }
     override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); layoutParts() }
 
-    private func layoutParts() {
+    // MARK: volume slide-out
+    override func mouseEntered(with e: NSEvent) { pointerMoved(at: convert(e.locationInWindow, from: nil)) }
+    override func mouseMoved(with e: NSEvent) { pointerMoved(at: convert(e.locationInWindow, from: nil)) }
+    override func mouseExited(with e: NSEvent) { pointerMoved(at: nil) }
+    private var volumeZone: NSRect { (volumeOpen ? muteButton.frame.union(volumeSlider.frame) : muteButton.frame).insetBy(dx: -4, dy: -6) }
+    func pointerMoved(at point: NSPoint?) {
+        if let p = point, volumeZone.contains(p), !muteButton.isHidden, bounds.width >= Self.volumeMinWidth {
+            closeVolumeWork?.cancel(); closeVolumeWork = nil
+            if !volumeOpen { volumeOpen = true; layoutParts(animated: true) }
+        } else if volumeOpen {
+            scheduleVolumeClose()
+        }
+    }
+    private func scheduleVolumeClose() {
+        guard closeVolumeWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.closeVolumeWork = nil
+            guard !self.volumeSlider.isTracking else { return }          // its release schedules this again
+            if let w = self.window, self.volumeZone.contains(self.convert(w.mouseLocationOutsideOfEventStream, from: nil)) { return }
+            self.volumeOpen = false
+            self.layoutParts(animated: true)
+        }
+        closeVolumeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    private func layoutParts(animated: Bool = false) {
         let h = bounds.height, btn: CGFloat = 16, gap: CGFloat = 4, pad: CGFloat = 5, labelH: CGFloat = 12, y = (h - btn) / 2
+        var frames: [(NSView, NSRect)] = []
         let skips = bounds.width >= 150
         backButton.isHidden = !skips; forwardButton.isHidden = !skips
         var x = pad
         for b in [backButton, playButton, forwardButton] where !b.isHidden {
-            b.frame = NSRect(x: x, y: y, width: btn, height: btn); x += btn + gap
+            frames.append((b, NSRect(x: x, y: y, width: btn, height: btn))); x += btn + gap
         }
         var right = bounds.width - pad
         muteButton.isHidden = bounds.width < 100
-        if !muteButton.isHidden { muteButton.frame = NSRect(x: right - btn, y: y, width: btn, height: btn); right -= btn + gap }
+        if !muteButton.isHidden { frames.append((muteButton, NSRect(x: right - btn, y: y, width: btn, height: btn))); right -= btn + gap }
+        let showVolume = volumeOpen && !muteButton.isHidden && bounds.width >= Self.volumeMinWidth
+        let volumeW = showVolume ? Self.volumeWidth : 0
+        frames.append((volumeSlider, NSRect(x: right - volumeW, y: 0, width: volumeW, height: h)))
+        if showVolume { right -= volumeW + gap }
         let left = x + 2
         if isLiveStream {
-            slider.isHidden = true
+            scrubber.isHidden = true
             timeLabel.isHidden = false; timeLabel.alignment = .left; timeLabel.stringValue = "LIVE"
-            timeLabel.frame = NSRect(x: left, y: (h - labelH) / 2, width: max(0, right - left), height: labelH)
-            return
+            frames.append((timeLabel, NSRect(x: left, y: (h - labelH) / 2, width: max(0, right - left), height: labelH)))
+        } else {
+            scrubber.isHidden = false; timeLabel.alignment = .right
+            timeLabel.isHidden = bounds.width < 210
+            if !timeLabel.isHidden {
+                let w = Self.clockWidth(long: longClock)
+                frames.append((timeLabel, NSRect(x: right - w, y: (h - labelH) / 2, width: w, height: labelH))); right -= w + gap
+            }
+            frames.append((scrubber, NSRect(x: left, y: 0, width: max(0, right - left), height: h)))
         }
-        slider.isHidden = false; timeLabel.alignment = .right
-        timeLabel.isHidden = bounds.width < 210
-        if !timeLabel.isHidden {
-            let w = Self.clockWidth(long: longClock)
-            timeLabel.frame = NSRect(x: right - w, y: (h - labelH) / 2, width: w, height: labelH); right -= w + gap
+        let volumeAlpha: CGFloat = showVolume ? 1 : 0
+        if animated {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.2
+                for (v, f) in frames { v.animator().frame = f }
+                volumeSlider.animator().alphaValue = volumeAlpha
+            }
+        } else {
+            for (v, f) in frames { v.frame = f }
+            volumeSlider.alphaValue = volumeAlpha
         }
-        slider.frame = NSRect(x: left, y: 0, width: max(0, right - left), height: h)
     }
     private static func clockWidth(long: Bool) -> CGFloat {
         let sample = long ? "0:00:00 / 0:00:00" : "00:00 / 00:00"
         return ceil((sample as NSString).size(withAttributes: [.font: timeFont]).width) + 4
     }
-    private var iconState = (playing: false, muted: false)
-    private func setIcons(playing: Bool, muted: Bool) {
-        iconState = (playing, muted)
-        playButton.image = sym(playing ? "pause.fill" : "play.fill").withSymbolConfiguration(Self.symbolConfig)
-        muteButton.image = sym(muted ? "speaker.slash.fill" : "speaker.wave.2.fill").withSymbolConfiguration(Self.symbolConfig)
+    private var iconState = (playing: false, volume: "")
+    private func setIcons(playing: Bool, volume: String) {
+        if playing != iconState.playing || iconState.volume.isEmpty {
+            playButton.image = sym(playing ? "pause.fill" : "play.fill").withSymbolConfiguration(Self.symbolConfig)
+        }
+        if volume != iconState.volume { muteButton.image = sym(volume).withSymbolConfiguration(Self.symbolConfig) }
+        iconState = (playing, volume)
     }
-    func update(playing: Bool, muted: Bool, current: Double, duration: Double?) {
-        if playing != iconState.playing || muted != iconState.muted { setIcons(playing: playing, muted: muted) }
+    func update(playing: Bool, muted: Bool, volume: Double, current: Double, duration: Double?) {
+        setIcons(playing: playing, volume: volumeSymbol(volume, muted: muted))
+        if !volumeSlider.isTracking { volumeSlider.value = muted ? 0 : volume }
         let live = duration == nil, long = (duration ?? 0) >= 3600
         if live != isLiveStream || long != longClock { isLiveStream = live; longClock = long; layoutParts() }
         guard let d = duration, current.isFinite else { return }
-        if !isScrubbing { slider.doubleValue = min(1, max(0, current / d)) }
+        if !scrubber.isTracking { scrubber.value = min(1, max(0, current / d)) }
         timeLabel.stringValue = "\(Self.clock(current)) / \(Self.clock(d))"
     }
     private static func clock(_ s: Double) -> String {
@@ -2349,9 +2496,88 @@ final class PlayerControlBar: NSView {
     @objc private func backTapped() { onSkip?(-10) }
     @objc private func forwardTapped() { onSkip?(10) }
     @objc private func muteTapped() { onMute?() }
-    @objc private func sliderMoved() {
-        isScrubbing = NSApp.currentEvent?.type != .leftMouseUp   // continuous slider: last action arrives on mouse-up
-        onSeek?(slider.doubleValue)
+}
+
+// Shown in a player window when a YouTube video can't be played natively: what went wrong (yt-dlp's reason, tidied by
+// PlaybackFailure) and Try Again · Open in Browser · Copy Details — inside Watch's own window, never YouTube's web
+// player. Frame layout only (no Auto Layout floor on how small the window can get); parts drop out as it shrinks, and
+// clicks away from the buttons fall through to the window (drag, menu).
+final class PlayerFailureView: NSView {
+    var onRetry: (() -> Void)?
+    var onOpen: (() -> Void)?
+    var onSignIn: (() -> Void)?
+    private let icon = NSImageView(image: sym("exclamationmark.triangle"))
+    private let title = NSTextField(labelWithString: "Couldn't play this video in Watch")
+    private let reason = NSTextField(wrappingLabelWithString: "")
+    private let signIn = NSButton(title: "Sign In…", target: nil, action: nil)
+    private let retry = NSButton(title: "Try Again", target: nil, action: nil)
+    private let open = NSButton(title: "Open in Browser", target: nil, action: nil)
+    private let copy = NSButton(title: "Copy Details", target: nil, action: nil)
+    private var details = ""
+    private var wantsSignIn = false
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        appearance = NSAppearance(named: .darkAqua)
+        icon.symbolConfiguration = .init(pointSize: 20, weight: .regular); icon.contentTintColor = NSColor.white.withAlphaComponent(0.5)
+        title.font = .systemFont(ofSize: 13, weight: .semibold); title.textColor = NSColor.white.withAlphaComponent(0.9)
+        reason.font = .systemFont(ofSize: 11); reason.textColor = NSColor.white.withAlphaComponent(0.6); reason.maximumNumberOfLines = 3
+        for label in [title, reason] { label.alignment = .center; label.lineBreakMode = .byTruncatingTail }
+        for (b, a) in [(signIn, #selector(signInTapped)), (retry, #selector(retryTapped)), (open, #selector(openTapped)), (copy, #selector(copyTapped))] {
+            b.bezelStyle = .rounded; b.controlSize = .small; b.font = .systemFont(ofSize: 11)
+            b.target = self; b.action = a
+        }
+        signIn.toolTip = "Connect your YouTube account (Preferences) so Watch can play this signed in"
+        for v in [icon, title, reason, signIn, retry, open, copy] as [NSView] { addSubview(v) }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); layoutParts() }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden, let hit = super.hitTest(point) else { return nil }
+        return hit is NSButton ? hit : nil
+    }
+    // `offerSignIn`: YouTube wants a signed-in viewer and no account is connected — Sign In… leads the row.
+    func show(reason text: String, details: String, offerSignIn: Bool = false) {
+        reason.stringValue = text; reason.toolTip = text
+        self.details = details
+        wantsSignIn = offerSignIn
+        retry.keyEquivalent = offerSignIn ? "" : "\r"; signIn.keyEquivalent = offerSignIn ? "\r" : ""
+        copy.title = "Copy Details"
+        isHidden = false
+        layoutParts()
+    }
+
+    private func layoutParts() {
+        let w = bounds.width, h = bounds.height, width = max(0, min(w - 32, 380))
+        let all = [signIn, retry, open, copy]
+        for b in all { b.isHidden = false; b.sizeToFit() }
+        signIn.isHidden = !wantsSignIn
+        func rowWidth() -> CGFloat {
+            let shown = all.filter { !$0.isHidden }
+            return shown.reduce(0) { $0 + $1.frame.width } + 8 * CGFloat(max(0, shown.count - 1))
+        }
+        for b in [copy, open, retry] where rowWidth() > width { b.isHidden = true }   // the least needed go first
+        let showReason = h >= 150, showIcon = h >= 200
+        reason.isHidden = !showReason; icon.isHidden = !showIcon
+        reason.preferredMaxLayoutWidth = width
+        let reasonHeight = showReason ? min(ceil(reason.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: width, height: 1000)).height ?? 14), 44) : 0
+        let total = (showIcon ? 30 : 0) + 18 + (showReason ? 6 + reasonHeight : 0) + 12 + 22
+        var y = ((h + total) / 2).rounded()
+        let x = ((w - width) / 2).rounded()
+        if showIcon { y -= 22; icon.frame = NSRect(x: (w - 22) / 2, y: y, width: 22, height: 22); y -= 8 }
+        y -= 18; title.frame = NSRect(x: x, y: y, width: width, height: 18)
+        if showReason { y -= 6 + reasonHeight; reason.frame = NSRect(x: x, y: y, width: width, height: reasonHeight) }
+        y -= 12 + 22
+        let buttons = all.filter { !$0.isHidden }
+        var bx = ((w - rowWidth()) / 2).rounded()
+        for b in buttons { b.frame = NSRect(x: bx, y: y, width: b.frame.width, height: 22); bx += b.frame.width + 8 }
+    }
+    @objc private func signInTapped() { onSignIn?() }
+    @objc private func retryTapped() { onRetry?() }
+    @objc private func openTapped() { onOpen?() }
+    @objc private func copyTapped() {
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(details, forType: .string)
+        copy.title = "Copied"
     }
 }
 
@@ -2392,12 +2618,14 @@ final class ThumbView: NSImageView {
             DispatchQueue.main.async { Self.cache[s] = img; if self.wanted == s { self.image = img } }
         }.resume()
     }
+    func show(_ img: NSImage) { wanted = nil; image = img }   // an in-memory picture (Now Playing artwork)
 }
 
 // One row style for every list in the panel: thumbnail · title · details line · optional accessory button.
 // `compact` (Recent Links) is one title line with a small thumbnail — links don't need a big picture.
 // `favourite` puts a ★ before the details line and `watched` a ✓ (plus a dimmed thumbnail). `progress` draws a resume
-// bar along the thumbnail's bottom edge. `isHighlighted` is the keyboard selection
+// bar along the thumbnail's bottom edge. `image` shows an in-memory picture instead of loading `thumb`; `square` makes the
+// thumbnail 24×24 (album artwork, in the Now Playing row). `isHighlighted` is the keyboard selection
 // (↑/↓ from the search field); `onMenu` supplies the right-click menu.
 final class BrowseRowView: NSView {
     var onClick: (() -> Void)?
@@ -2406,12 +2634,13 @@ final class BrowseRowView: NSView {
     private var hovering = false
 
     init(thumb: String?, title: String, meta: String, accessory: NSView?, compact: Bool = false,
-         favourite: Bool = false, watched: Bool = false, progress: Double? = nil) {
+         favourite: Bool = false, watched: Bool = false, progress: Double? = nil, image: NSImage? = nil, square: Bool = false) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
         layer?.cornerRadius = 6
-        let t = ThumbView(); t.load(thumb)
+        let t = ThumbView()
+        if let img = image { t.show(img) } else { t.load(thumb) }
         t.imageScaling = .scaleProportionallyUpOrDown
         t.wantsLayer = true; t.layer?.cornerRadius = 4; t.layer?.masksToBounds = true
         t.contentTintColor = .tertiaryLabelColor
@@ -2451,7 +2680,7 @@ final class BrowseRowView: NSView {
         let h = NSStackView(views: views); h.spacing = 8; h.alignment = .centerY; h.distribution = .fill
         h.translatesAutoresizingMaskIntoConstraints = false
         addSubview(h)
-        let (w, ht, inset): (CGFloat, CGFloat, CGFloat) = compact ? (32, 18, 3) : (80, 45, 4)
+        let (w, ht, inset): (CGFloat, CGFloat, CGFloat) = square ? (24, 24, 3) : compact ? (32, 18, 3) : (80, 45, 4)
         NSLayoutConstraint.activate([
             t.widthAnchor.constraint(equalToConstant: w), t.heightAnchor.constraint(equalToConstant: ht),
             h.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4), h.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
@@ -2485,7 +2714,8 @@ final class BrowseRowView: NSView {
 }
 
 // A panel "page" pushed over the main view: History, Playlists, search results, a playlist's videos.
-enum MessageAction { case none, signIn, retry, updateAndRetry }   // the button under a message page
+// The button under a message page. 3.23: the Music tab's Open Music / Allow… / Open System Settings.
+enum MessageAction { case none, signIn, retry, updateAndRetry, openMusic, allowMusic, automationSettings }
 // One YouTube search's results so far: `requested` is how many were asked for, `more` whether YouTube had that many.
 struct SearchPage { var videos: [YTVideo]; var requested: Int; var more: Bool }
 enum BrowsePage {
@@ -2494,17 +2724,25 @@ enum BrowsePage {
     case results(String, SearchPage)                  // a YouTube search: (query, results)
     case playlists([YTPlaylist])
     case message(String, String, action: MessageAction)
+    case shows(String, [PodcastShow])                 // a podcast search: (query, shows) (3.22)
+    case episodes(PodcastShow, [PodcastEpisode])      // a show's episodes, newest first
+    case songs(String, [LibrarySong])                 // a search of your Music library: (query, songs) (3.23)
     var title: String {
         switch self {
         case .loading(let t, _), .videos(let t, _), .message(let t, _, _): return t
-        case .results(let q, _): return "“\(q)”"
+        case .results(let q, _), .shows(let q, _), .songs(let q, _): return "“\(q)”"
         case .playlists: return "Playlists"
+        case .episodes(let show, _): return show.title
         }
     }
 }
-// A page plus how to load it again (Try Again). The fetch returns the yt-dlp task when it can be cancelled.
+// What the field's searches look in: YouTube, podcasts, or your Music library (the tabs above search results). Kept until
+// Watch quits.
+enum SearchService: Int { case youtube, podcasts, music }
+// A page plus how to load it again (Try Again). The fetch returns the yt-dlp task when it can be cancelled. `search` is
+// the query of a search page (its YouTube | Podcasts tabs).
 typealias BrowseFetch = (@escaping (BrowsePage) -> Void) -> YtDlpTask?
-struct BrowseEntry { var page: BrowsePage; let fetch: BrowseFetch? }
+struct BrowseEntry { var page: BrowsePage; let fetch: BrowseFetch?; var search: String? = nil }
 
 // A menu item that runs a closure (row context menus).
 final class ClosureMenuItem: NSMenuItem {
@@ -2552,12 +2790,42 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     var suppressMoveSave = false
     var dragView: DragReceiverView?
     var pendingURLPlays: [String] = []
+    var pendingFiles: [String] = []                  // Finder ▸ Open With before launch finished (3.24)
+    // macOS's Now Playing for Watch's own playback, and pausing Music/Spotify while Watch plays (3.24; systemTick).
+    lazy var systemNowPlaying: SystemNowPlaying = {
+        let s = SystemNowPlaying()
+        s.onCommand = { [weak self] request in self?.systemCommand(request) ?? false }
+        return s
+    }()
+    private var systemTimer: Timer?
+    private(set) var systemSource = OwnPlayback.Source.none
+    private weak var systemPlayer: PlayerWindowController?
+    private var lastPlayed: [ObjectIdentifier: Date] = [:]
+    private var watchWasPlaying = false
+    private(set) var pausedForWatch: String?          // the music app Watch paused, to play again when Watch is done
+    private var musicPlaying: [String: Bool] = [:]    // Music/Spotify's own broadcasts, whatever the Now Playing preference
+    private var playerArtwork: (url: String, data: Data?)?
 
     let windowManager = WindowManager()
     let mediaMonitor = MediaMonitor()
     let downloads = DownloadManager()
     var mediaItems: [MediaItem] = []
     var browsersAwaitingAccess: [Browser] = []
+    // Now Playing: what another app is playing (NowPlaying.swift) — the list's first row; its artwork opens in
+    // `artworkWindow`, which then follows the music. The adapter runs only while the panel or that window shows.
+    // Every app's report comes through (Watch's own included) — isMusicSource decides what the music window follows.
+    let nowPlaying = NowPlayingMonitor(ignoring: [])
+    var musicControl = MusicAppControl()            // Music/Spotify: volume, artwork, commands addressed to that app
+    var electedApp: String?                         // what macOS calls "now playing" — may well be a video
+    let nowPlayingRemote = NowPlayingRemote()       // the artwork window's controls — only on a click
+    var nowPlayingInfo: NowPlayingInfo?
+    var nowPlayingImage: NSImage?               // decoded once per artwork change
+    var nowPlayingRow: NSStackView!
+    var artworkWindow: ArtworkWindowController?
+    // The universal queue under the music window (UpNext.swift) and its drop-down list (QueueDrawer.swift).
+    lazy var upNext: UniversalQueue = makeUpNext()
+    lazy var ownControl: OwnPlaybackControl = { let c = OwnPlaybackControl(); c.queue = self.upNext; return c }()
+    var queueDrawer: QueueDrawer?
     var lastClipboardChangeCount = NSPasteboard.general.changeCount
     var clipboardTimer: Timer?
 
@@ -2579,6 +2847,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     var browseToken = 0
     var browseTask: YtDlpTask?                  // the page's running yt-dlp call; a newer page or Back cancels it
     var searchCache = SearchCache<SearchPage>()
+    var podcastCache = SearchCache<[PodcastShow]>()
+    var searchService = SearchService.youtube
     let liveSearch = LiveSearch()
     var activeSearchQuery: String?
     var downloadsHeader: NSView!
@@ -2613,9 +2883,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         applyHotkey(keyCode: Prefs.hotkeyKeyCode, carbonModifiers: Prefs.hotkeyCarbon)
         registerLoginItem()
         favourites.importPins(from: links)          // once: 3.12's Recent Links pins become favourites
+        VideoLinks.spotifyInstalled = NSWorkspace.shared.urlForApplication(withBundleIdentifier: SpotifyLink.bundleID) != nil
         startClipboardWatch()
         mediaMonitor.onUpdate = { [weak self] items, waiting in
             self?.mediaItems = items; self?.browsersAwaitingAccess = waiting; self?.rebuildMediaSection()
+        }
+        nowPlaying.onUpdate = { [weak self] info in self?.nowPlayingChanged(info) }
+        // Music's and Spotify's own track-change broadcasts keep the music window right while a video holds the slot.
+        for name in NowPlayingInfo.broadcasts.keys {
+            DistributedNotificationCenter.default().addObserver(self, selector: #selector(musicBroadcast(_:)), name: Notification.Name(name), object: nil)
         }
         windowManager.onInfo = { [weak self] url, info in
             self?.links.update(url, with: info); self?.favourites.update(url, with: info); self?.rebuildClipSection()
@@ -2635,15 +2911,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         let queued = pendingURLPlays
         pendingURLPlays.removeAll()
         queued.forEach { play($0) }
+        if !pendingFiles.isEmpty { let files = pendingFiles; pendingFiles = []; openFiles(files) }
         // First launch only: the setup guide (reopen any time from Preferences ▸ Setup Guide…).
         if !Prefs.hasSeenWelcome { Prefs.hasSeenWelcome = true; openWelcome() }
     }
     func applicationWillTerminate(_ n: Notification) {
         liveSearch.cancel(); browseTask?.cancel()
         windowManager.players.forEach { $0.savePosition() }
+        upNext.quitting()
         downloads.stopAll()
+        nowPlaying.stopAll()
     }
     @objc func handleURLEvent(_ e: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        // glasskit-watch://queue?url=…[&url=…][&at=next|later] — onto Up Next under the music window.
+        if let raw = e.paramDescriptor(forKeyword: keyDirectObject)?.stringValue, let comps = URLComponents(string: raw),
+           comps.scheme == "glasskit-watch", comps.host == "queue", statusItem != nil {
+            let urls = (comps.queryItems ?? []).filter { $0.name == "url" }.compactMap(\.value).filter { !$0.isEmpty }
+            let next = comps.queryItems?.first { $0.name == "at" }?.value == "next"
+            enqueue(urls.map { QueueItem(url: $0) }, next ? .next : .later)
+            return
+        }
         guard let raw = e.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
               let comps = URLComponents(string: raw),
               comps.scheme == "glasskit-watch",
@@ -2654,7 +2941,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         else { play(videoURL) }
     }
     @objc func appResignedActive() {
-        if dropdown.isVisible && !Prefs.pinned && !Prefs.detached { stopPanelSearch(); dropdown.orderOut(nil); mediaMonitor.stop() }
+        if dropdown.isVisible && !Prefs.pinned && !Prefs.detached { stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors() }
     }
 
     // MARK: status item + drag-and-drop (B4)
@@ -2667,6 +2954,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             let drag = DragReceiverView(frame: b.bounds)
             drag.autoresizingMask = [.width, .height]
             drag.onDrop = { [weak self] s in self?.play(s) }
+            drag.onDropMany = { [weak self] items in self?.enqueue(items, .later) }   // several, or ⌥-drop: Up Next
             b.addSubview(drag)
             dragView = drag
         }
@@ -2755,6 +3043,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             outer.topAnchor.constraint(equalTo: doc.topAnchor, constant: 6),
             outer.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -10),
         ])
+
+        // Now Playing — another app's media with its artwork; hidden unless something is playing (rebuildNowPlayingRow).
+        nowPlayingRow = NSStackView(); nowPlayingRow.orientation = .vertical; nowPlayingRow.alignment = .leading
+        nowPlayingRow.isHidden = true
+        outer.addArrangedSubview(nowPlayingRow)
+        nowPlayingRow.widthAnchor.constraint(equalTo: outer.widthAnchor).isActive = true
+        outer.setCustomSpacing(8, after: nowPlayingRow)
 
         // Both library tabs list every stored item inside the existing compact scroll area.
         clipTitle = sectionLabel("Matching Links")
@@ -2900,6 +3195,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     // (favourites first) under a line saying what Return will do. Rows: thumbnail (with a resume bar), title,
     // ★/✓ marks, "site · resume/duration · when".
     func rebuildClipSection() {
+        rebuildNowPlayingRow()                      // hidden while the field filters
         let keep = highlighted
         clipSection.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2928,6 +3224,481 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         highlighted = nil
         if browseView.isHidden, let k = keep, k < rows.count { setHighlight(k) }
     }
+    // The list's first row while another app plays something: artwork, title, "Artist · App · Paused" (album in the
+    // tooltip). Click opens the artwork — or, without one, brings that app forward; right-click adds Copy / Save /
+    // Search YouTube. Never part of ↑/↓ (navRows reads clipSection only).
+    func rebuildNowPlayingRow() {
+        nowPlayingRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let filtering = !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard Prefs.showNowPlaying, !filtering, let info = nowPlayingInfo else { nowPlayingRow.isHidden = true; return }
+        nowPlayingRow.isHidden = false
+        let parts: [String?] = [info.artist, ArtworkActions.appName(info.appBundleID), info.isPlaying ? nil : "Paused"]
+        let meta = parts.compactMap { $0 }.joined(separator: " · ")
+        let picture = nowPlayingImage ?? ArtworkActions.appIcon(info.appBundleID) ?? sym("music.note")
+        var open: NSView?
+        if info.artwork != nil {
+            open = ClosureButton(symbol: "arrow.up.left.and.arrow.down.right", tip: "Open Artwork") { [weak self] _ in self?.openArtwork() }
+        }
+        let row = BrowseRowView(thumb: nil, title: info.title, meta: meta, accessory: open, compact: true, image: picture, square: true)
+        let tip: [String?] = [info.title, info.artist, info.album]
+        row.toolTip = tip.compactMap { $0 }.joined(separator: " — ")
+        row.onClick = { [weak self] in
+            if info.artwork == nil { ArtworkActions.showApp(info) } else { self?.openArtwork() }
+        }
+        row.onMenu = { [weak self] in
+            let m = NSMenu()
+            ArtworkActions.menuItems(info, open: { self?.openArtwork() }, fullScreen: { self?.openArtwork(fullScreen: true) },
+                                     search: { self?.searchYouTube(for: $0) }).forEach(m.addItem)
+            return m
+        }
+        nowPlayingRow.addArrangedSubview(row)
+        row.widthAnchor.constraint(equalTo: nowPlayingRow.widthAnchor).isActive = true
+    }
+    // macOS's single "now playing" report. Only music apps (NowPlayingInfo.isMusicSource) reach the row and the music
+    // window: a video — in a browser, a web page, or Watch's own player — never replaces the song. Nothing playing at all
+    // clears the music only when it was the music app that stopped.
+    func nowPlayingChanged(_ info: NowPlayingInfo?) {
+        let previous = electedApp
+        electedApp = info?.appBundleID
+        if let info = info {
+            if info.isMusicSource(ignoring: Self.ownBundleIDs) { setMusic(info) }
+        } else if previous != nil, previous == nowPlayingInfo?.appBundleID {
+            setMusic(nil)
+        }
+        refreshControllable()
+    }
+    static let ownBundleIDs: Set<String> = [Bundle.main.bundleIdentifier ?? "com.jacob.watch", "com.jacob.watch"]
+    private func setMusic(_ info: NowPlayingInfo?) {
+        if let i = info, AppVolume.supported.contains(i.appBundleID) { musicPlaying[i.appBundleID] = i.isPlaying }
+        if info?.artwork != nowPlayingInfo?.artwork { nowPlayingImage = info?.artwork.flatMap { NSImage(data: $0) } }
+        nowPlayingInfo = info
+        rebuildNowPlayingRow()
+        upNext.externalChanged(info)                // a queue waiting for this song to end
+        if artworkWindow?.window.isVisible == true, !upNext.showsOwnItem { artworkWindow?.show(info) }
+        queueDrawer?.reload()
+    }
+    // The music window's buttons dim when what it shows can't be controlled (Watch's own queue items always can).
+    private func refreshControllable() {
+        artworkWindow?.setControllable(upNext.showsOwnItem || canControl(nowPlayingInfo?.appBundleID))
+    }
+    // Music / Spotify said their track or state changed. A new track seen only this way (a video holds the "now playing"
+    // slot) gets its artwork from the app itself when Watch is allowed to ask; otherwise the window's usual grace + icon.
+    @objc func musicBroadcast(_ n: Notification) {
+        if let app = NowPlayingInfo.broadcasts[n.name.rawValue] {    // for Preferences ▸ pause while Watch plays, always
+            musicPlaying[app] = (n.userInfo?["Player State"] as? String) == "Playing"
+        }
+        guard Prefs.showNowPlaying, let app = NowPlayingInfo.broadcasts[n.name.rawValue] else { return }
+        guard let heard = NowPlayingInfo.broadcast(n.userInfo ?? [:], app: app) else {
+            if nowPlayingInfo?.appBundleID == app { setMusic(nil) }         // stopped
+            return
+        }
+        let merged = NowPlayingInfo.merge(heard, onto: nowPlayingInfo)
+        let newTrack = merged.itemKey != nowPlayingInfo?.itemKey
+        setMusic(merged)
+        refreshControllable()
+        guard newTrack, merged.artwork == nil, electedApp != app else { return }
+        musicControl.artwork(app) { [weak self] data in
+            guard let self = self, let data = data, var current = self.nowPlayingInfo, current.itemKey == merged.itemKey, current.artwork == nil else { return }
+            current.artwork = data
+            self.setMusic(current)
+        }
+    }
+    // Music/Spotify take commands addressed to them; other music apps only through the "now playing" slot, i.e. while
+    // they hold it.
+    private func canControl(_ app: String?) -> Bool {
+        guard let app = app else { return false }
+        return AppVolume.supported.contains(app) || app == electedApp || app == UniversalQueue.ownID
+    }
+    private func send(_ request: NowPlayingRequest, to app: String) {
+        if app == UniversalQueue.ownID { upNext.command(request); return }       // the queue's own item: Watch plays it
+        if AppVolume.supported.contains(app) {
+            musicControl.perform(request, bundleID: app) { [weak self] sent in
+                guard !sent, let self = self else { return }
+                if self.electedApp == app { self.nowPlayingRemote.send(request) } else { NSSound.beep() }   // not allowed: the slot, if it's theirs
+            }
+        } else if app == electedApp {
+            nowPlayingRemote.send(request)
+        } else {
+            NSSound.beep()
+        }
+    }
+    // The artwork window takes the panel's spot and the panel hides, as with the first video; it then follows the music.
+    // `fullScreen` (the row's Open Full Screen) goes straight on to macOS full screen.
+    func openArtwork(fullScreen: Bool = false) {
+        guard let info = nowPlayingInfo, info.artwork != nil else { return }
+        let viewer = artworkWindow ?? makeArtworkWindow()
+        presentMusicWindow(viewer, upNext.ownInfo ?? info, takePanelSpot: true)
+        refreshControllable()
+        if fullScreen && !viewer.inFullScreen { viewer.toggleFullScreen() }
+    }
+    // The panel's spot when no video is there (and `takePanelSpot`: the panel then hides); otherwise beside the open
+    // windows — never on top of a video.
+    private func presentMusicWindow(_ viewer: ArtworkWindowController, _ info: NowPlayingInfo, takePanelSpot: Bool) {
+        nowPlaying.want(.viewer, true)              // before the panel lets go, so the adapter keeps running
+        let panelShown = dropdown.isVisible && dropdown.isOnActiveSpace
+        let players = windowManager.players.map { $0.window.frame }
+        viewer.present(info, screen: dropdown.screen ?? statusItem?.button?.window?.screen) { [weak self] size in
+            guard let self = self else { return nil }
+            if panelShown && takePanelSpot {
+                let spot = WindowManager.frame(replacing: self.dropdown.frame, size: size)
+                if !players.contains(where: { $0.intersects(spot) }) { return spot }
+            }
+            return self.windowManager.freeFrame(size: size, anchor: self.statusItem)
+        }
+        if panelShown && takePanelSpot { stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors() }
+        else if panelShown { dropdown.makeKeyAndOrderFront(nil) }      // adding from the panel: keep typing there
+    }
+    private func makeArtworkWindow() -> ArtworkWindowController {
+        let viewer = ArtworkWindowController()
+        viewer.onClose = { [weak self] in
+            self?.nowPlaying.want(.viewer, false)
+            self?.queueDrawer?.hide()
+            self?.upNext.musicWindowClosed()
+        }
+        viewer.onSearch = { [weak self] q in self?.searchYouTube(for: q) }
+        viewer.onQueue = { [weak self] in self?.toggleQueueDrawer() }
+        // Double-click: the music in its app — or, for the queue's own item, the file / page / Spotify.
+        viewer.onOpenSource = { [weak self] info in
+            guard let self = self else { return }
+            if info.appBundleID == UniversalQueue.ownID { self.upNext.openSource(); return }
+            ArtworkActions.showApp(info)
+            self.musicControl.reveal(info.appBundleID)
+        }
+        viewer.musicApp = musicControl
+        viewer.onCommand = { [weak self, weak viewer] request in
+            guard let app = viewer?.info?.appBundleID else { return }
+            self?.send(request, to: app)
+        }
+        // New players open beside the music window, never on it (full screen is its own Space).
+        windowManager.keepClear = { [weak viewer, weak self] in
+            guard let w = viewer?.window, w.isVisible, !w.styleMask.contains(.fullScreen) else { return [] }
+            guard let list = self?.queueDrawer, list.isShown else { return [w.frame] }
+            return [w.frame, list.window.frame]                // and its Up Next list
+        }
+        artworkWindow = viewer
+        return viewer
+    }
+
+    // MARK: Watch in macOS's Now Playing, and Music/Spotify paused while Watch plays (3.24)
+    // Runs once a second while anything of Watch's is open (started by play(), the queue and showQueueItem; stops itself).
+    func ensureSystemTick() {
+        guard systemTimer == nil else { return }
+        systemTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.systemTick() }
+    }
+    func systemTick() {
+        let players = windowManager.players.filter { $0.onStep == nil }    // a window Up Next runs is the queue's own item
+        let now = Date()
+        for p in players where p.isPlaying { lastPlayed[ObjectIdentifier(p)] = now }
+        let own = upNext.ownInfo
+        let states = players.enumerated().map { i, p in
+            OwnPlayback.PlayerState(id: i, playing: p.isPlaying, lastPlayed: lastPlayed[ObjectIdentifier(p)] ?? .distantPast)
+        }
+        let source = OwnPlayback.pick(queueItem: own != nil, queuePlaying: own?.isPlaying == true, players: states,
+                                      musicPlaying: playingMusicApp() != nil)
+        systemSource = source
+        switch source {
+        case .none:          systemPlayer = nil; systemNowPlaying.publish(nil)
+        case .queue:         systemPlayer = nil; systemNowPlaying.publish(own)
+        case .player(let i): systemPlayer = players[i]; systemNowPlaying.publish(playerInfo(players[i]))
+        }
+        // Watch began playing: pause the music app (only if already allowed — this isn't a click). Watch is done: play it again.
+        let watchPlaying = own?.isPlaying == true || players.contains { $0.isPlaying }
+        if watchPlaying && !watchWasPlaying { pauseMusicForWatch(asking: false) }
+        watchWasPlaying = watchPlaying
+        let active = !windowManager.players.isEmpty || upNext.showsOwnItem
+        if let app = pausedForWatch,
+           MusicPause.shouldResume(enabled: Prefs.resumeMusicAfter, paused: app, watchActive: active, appPlaying: musicPlaying[app] == true) {
+            pausedForWatch = nil
+            musicControl.performIfAllowed(.command(.play), bundleID: app) { _ in }
+        }
+        let open = Set(windowManager.players.map { ObjectIdentifier($0) })
+        lastPlayed = lastPlayed.filter { open.contains($0.key) }
+        if windowManager.players.isEmpty && !upNext.showsOwnItem && pausedForWatch == nil {
+            systemTimer?.invalidate(); systemTimer = nil
+            watchWasPlaying = false
+            systemNowPlaying.publish(nil)
+        }
+    }
+    // The music app playing now (its own broadcasts, or the Now Playing reading) — nil when none is.
+    private func playingMusicApp() -> String? {
+        if let info = nowPlayingInfo, info.isPlaying, info.appBundleID != UniversalQueue.ownID,
+           musicPlaying[info.appBundleID] != false { return info.appBundleID }      // its own broadcast is the fresher word
+        return musicPlaying.first { $0.value }?.key
+    }
+    // Preferences ▸ Pause Music or Spotify while Watch plays. `asking`: the user's own click started it, so macOS may ask once.
+    func pauseMusicForWatch(asking: Bool) {
+        let queueUses: Bool = {
+            if case .external = upNext.engine { return true }
+            return upNext.queue?.handBack != nil && upNext.queue?.handBack == playingMusicApp()
+        }()
+        guard let app = MusicPause.toPause(enabled: Prefs.pauseMusicWhilePlaying, playingApp: playingMusicApp(), queueUsesApp: queueUses) else { return }
+        let done: (Bool) -> Void = { [weak self] paused in
+            guard paused, let self = self else { return }
+            self.pausedForWatch = app; self.musicPlaying[app] = false
+            self.ensureSystemTick()
+        }
+        if asking { musicControl.perform(.command(.pause), bundleID: app, completion: done) }
+        else { musicControl.performIfAllowed(.command(.pause), bundleID: app, completion: done) }
+    }
+    // Media keys / Control Center → whatever of Watch's owns Now Playing.
+    private func systemCommand(_ request: NowPlayingRequest) -> Bool {
+        switch systemSource {
+        case .none: return false
+        case .queue: upNext.command(request)
+        case .player:
+            guard let p = systemPlayer else { return false }
+            switch request {
+            case .command(.play):     p.setPaused(false)
+            case .command(.pause):    p.setPaused(true)
+            case .command(.next):     p.nextItem()
+            case .command(.previous): p.previousItem()
+            case .seek(let t):        p.seek(toSeconds: t)
+            }
+        }
+        systemTick()
+        return true
+    }
+    private func playerInfo(_ p: PlayerWindowController) -> NowPlayingInfo {
+        let site = VideoLinks.site(p.sourceURL)
+        var info = NowPlayingInfo(title: p.mediaTitle ?? site, artist: site, album: nil, bundleID: UniversalQueue.ownID, isPlaying: p.isPlaying)
+        info.duration = p.playbackDuration
+        info.elapsed = p.playbackTime.isFinite ? p.playbackTime : 0
+        info.elapsedAt = Date()
+        info.rate = 1
+        info.artwork = artwork(for: p.sourceURL)
+        return info
+    }
+    // A video's picture for Control Center: its thumbnail, fetched once per video.
+    private func artwork(for url: String) -> Data? {
+        if let known = playerArtwork, known.url == url { return known.data }
+        playerArtwork = (url, nil)
+        if let s = links.link(for: url)?.thumbnail ?? VideoLinks.thumbnail(url), let u = URL(string: s), u.scheme?.hasPrefix("http") == true {
+            URLSession.shared.dataTask(with: u) { [weak self] data, _, _ in
+                DispatchQueue.main.async { if self?.playerArtwork?.url == url { self?.playerArtwork = (url, data) } }
+            }.resume()
+        }
+        return nil
+    }
+
+    // MARK: Finder ▸ Open With ▸ Watch (3.24)
+    func application(_ sender: NSApplication, open urls: [URL]) {
+        let files = urls.filter(\.isFileURL).map(\.path)
+        guard !files.isEmpty else { return }
+        if statusItem == nil { pendingFiles += files } else { openFiles(files) }
+    }
+    // One video plays in a window (its folder becomes its Up Next); audio, folders and several files go to Up Next under the
+    // music window.
+    func openFiles(_ paths: [String]) {
+        let items = paths.flatMap { path -> [QueueItem] in
+            var folder: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &folder) else { return [] }
+            if folder.boolValue { return PlayQueue.media(inFolder: URL(fileURLWithPath: path)) }
+            return PlayQueue.mediaKind((path as NSString).pathExtension) != nil ? [QueueItem(url: path)] : []
+        }
+        guard !items.isEmpty else { NSSound.beep(); return }
+        if items.count == 1, items[0].source == .file { play(items[0].url); return }
+        pauseMusicForWatch(asking: true)
+        upNext.playNow(items)
+        showQueue()
+    }
+
+    // MARK: the universal queue — Play Next / Play Later from anywhere, played under the music window (UpNext.swift)
+    private func makeUpNext() -> UniversalQueue {
+        let q = UniversalQueue()
+        q.control = musicControl
+        q.onChange = { [weak self] in self?.queueDrawer?.reload(); self?.refreshControllable(); self?.ensureSystemTick() }
+        q.show = { [weak self] info in self?.showQueueItem(info) }
+        q.showList = { [weak self] in self?.showQueue() }
+        q.resolveEpisode = { [weak self] link, done in
+            guard let self = self else { done(nil); return }
+            self.resolveEpisode(link) { e in
+                // A looked-up episode link names its Recent Links row.
+                if let e = e, self.links.link(for: link) != nil, self.links.link(for: link)?.title == nil {
+                    self.links.update(link, with: LinkInfo(title: e.title, thumbnail: e.artwork, duration: e.duration)); self.rebuildClipSection()
+                }
+                done(e)
+            }
+        }
+        q.openVideo = { [weak self] link, _ in
+            guard let self = self else { return nil }
+            let pc = self.windowManager.open(link, anchor: self.statusItem)
+            if !isLocalMedia(link) { self.recordLink(pc.sourceURL, probe: false) }
+            return pc
+        }
+        return q
+    }
+    // The queue's own item (Watch's audio player, or a video playing beside) in the music window — nil: back to the music app.
+    private func showQueueItem(_ info: NowPlayingInfo?) {
+        guard let info = info else {
+            guard let viewer = artworkWindow else { return }
+            viewer.musicApp = musicControl
+            if viewer.window.isVisible { viewer.show(nowPlayingInfo) }
+            refreshControllable()
+            return
+        }
+        ensureSystemTick()
+        let viewer = artworkWindow ?? makeArtworkWindow()
+        viewer.musicApp = ownControl
+        if viewer.window.isVisible { viewer.show(info) } else { presentMusicWindow(viewer, info, takePanelSpot: false) }
+        viewer.setControllable(true)
+    }
+    // Shows the music window (what the queue or the music app is playing) with the Up Next list under it.
+    func showQueue() {
+        let viewer = artworkWindow ?? makeArtworkWindow()
+        if !viewer.window.isVisible {
+            let first = upNext.queue?.current
+            let info = upNext.ownInfo ?? nowPlayingInfo
+                ?? NowPlayingInfo(title: first?.title ?? "Up Next", artist: first?.subtitle, album: nil, bundleID: UniversalQueue.ownID, isPlaying: false)
+            presentMusicWindow(viewer, info, takePanelSpot: false)
+        }
+        refreshControllable()
+        (queueDrawer ?? makeQueueDrawer()).show(under: viewer.window)
+    }
+    func toggleQueueDrawer() {
+        guard let viewer = artworkWindow, viewer.window.isVisible else { showQueue(); return }
+        (queueDrawer ?? makeQueueDrawer()).toggle(under: viewer.window)
+    }
+    private func makeQueueDrawer() -> QueueDrawer {
+        let d = QueueDrawer()
+        d.queue = { [weak self] in self?.upNext.queue }
+        // No queue yet: the song the music window follows.
+        d.nowPlaying = { [weak self] in
+            guard let info = self?.nowPlayingInfo else { return nil }
+            let source: MediaSource = info.appBundleID == SpotifyLink.bundleID ? .spotify : info.appBundleID == UniversalQueue.musicID ? .music : .audio
+            return QueueItem(url: "", title: info.title, subtitle: info.artist, duration: info.duration, source: source)
+        }
+        d.continueIn = { [weak self] in
+            guard let self = self else { return nil }
+            if let q = self.upNext.queue { return q.handBack.map(ArtworkActions.appName) }
+            guard let app = self.nowPlayingInfo?.appBundleID, AppVolume.supported.contains(app) else { return nil }
+            return ArtworkActions.appName(app)
+        }
+        d.held = { [weak self] in self?.upNext.held ?? false }
+        d.onPlay = { [weak self] id in self?.upNext.jump(to: id) }
+        d.onRemove = { [weak self] ids in self?.upNext.remove(ids) }
+        d.onMove = { [weak self] ids, position in self?.upNext.move(ids, to: position) }
+        d.onInsert = { [weak self] items, position in
+            guard let self = self else { return }
+            if let p = position, self.upNext.isRunning { self.upNext.insert(items, at: p); self.fillDetails(items) }
+            else { self.enqueue(items, .later) }
+        }
+        d.onClear = { [weak self] in self?.upNext.clearAdded() }
+        d.onResume = { [weak self] in self?.upNext.resume() }
+        d.savedCount = { [weak self] in self?.upNext.saved?.items.count }
+        d.onResumeSaved = { [weak self] in self?.upNext.resumeSaved() }
+        d.extraMenu = { [weak self] item in self?.queueItemMenu(item) ?? [] }
+        queueDrawer = d
+        return d
+    }
+    // A queue row's own menu: where it lives, Copy Link, Favourites.
+    private func queueItemMenu(_ item: QueueItem) -> [NSMenuItem] {
+        var items: [NSMenuItem] = []
+        if item.source == .podcast, let page = (item.page ?? (PodcastLinks.isEpisode(item.url) ? item.url : nil)).flatMap(URL.init(string:)) {
+            items.append(ClosureMenuItem("Open in Apple Podcasts") { NSWorkspace.shared.open(page) })
+        } else if item.url.hasPrefix("/") || item.url.hasPrefix("file://") {
+            let path = item.url.hasPrefix("file://") ? (URL(string: item.url)?.path ?? item.url) : item.url
+            items.append(ClosureMenuItem("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) })
+        } else if SpotifyLink.uri(item.url) != nil {
+            items.append(ClosureMenuItem("Open in Spotify") { if let u = URL(string: SpotifyLink.uri(item.url) ?? "") { NSWorkspace.shared.open(u) } })
+        } else if let page = VideoLinks.webURL(item.url) {
+            items.append(ClosureMenuItem("Open in Browser") { NSWorkspace.shared.open(page) })
+        }
+        if !item.url.isEmpty, !item.url.hasSuffix(":") {
+            let link = SpotifyLink.isSpotify(item.url) ? SpotifyLink.webURL(item.url) : item.page ?? item.url
+            items.append(ClosureMenuItem("Copy Link") { [weak self] in
+                let pb = NSPasteboard.general
+                pb.clearContents(); pb.setString(link, forType: .string)
+                self?.lastClipboardChangeCount = pb.changeCount
+            })
+        }
+        if item.source == .web || item.source == .file {
+            let favourite = favourites.contains(item.url)
+            items.append(ClosureMenuItem(favourite ? "Remove from Favourites" : "Add to Favourites") { [weak self] in
+                self?.setFavourite(item.url, !favourite, info: LinkInfo(title: item.title, thumbnail: item.artwork, duration: item.duration))
+            })
+        }
+        return items
+    }
+    // Play Next / Play Later from anywhere (row menus, the + buttons, ⌥Return, drops, the URL scheme). While Music or
+    // Spotify plays (and no queue runs) the items wait for its song to end, then it carries on afterwards; macOS is asked
+    // once — this is the user's own action — for Watch to pause it at that moment.
+    func enqueue(_ items: [QueueItem], _ placement: PlayQueue.Placement) {
+        guard !items.isEmpty else { return }
+        let playingApp = nowPlayingInfo.flatMap { $0.isPlaying ? $0.appBundleID : nil }
+        let route = QueueRoute.pick(queueRunning: upNext.isRunning, playingApp: playingApp)
+        let what = items.count == 1 ? "“\(items[0].title ?? QueueRowView.fallbackTitle(items[0]))”" : "\(items.count) items"
+        let go: (QueueRoute) -> Void = { [weak self] r in
+            guard let self = self else { return }
+            self.upNext.add(items, placement, route: r, current: self.nowPlayingInfo)
+            self.fillDetails(items)
+            self.showQueue()
+            switch r {
+            case .slotIn(let app): self.flash("After this song in \(ArtworkActions.appName(app)): \(what)")
+            case .add:             self.flash(placement == .next ? "Playing next: \(what)" : "Added to Up Next: \(what)")
+            case .start:           self.flash("Playing \(what)")
+            }
+        }
+        if items.contains(where: { $0.source == .spotify }) { musicControl.requestAccess(SpotifyLink.bundleID) { _ in } }
+        guard case .slotIn(let app) = route else { go(route); return }
+        musicControl.requestAccess(app) { [weak self] access in
+            if access == .granted { go(route); return }
+            go(.start)
+            self?.flash("Allow Watch to control \(ArtworkActions.appName(app)) so it can wait for the song")
+        }
+    }
+    // A link from a row or the field: a playlist link queues its videos (one flat read), anything else itself.
+    func enqueueLink(_ url: String, title: String?, info: LinkInfo? = nil, _ placement: PlayQueue.Placement) {
+        if YouTube.isPlaylistLink(url) {
+            flash("Reading the playlist…")
+            YouTube.playlist(url) { [weak self] _, videos in
+                guard let self = self else { return }
+                guard !videos.isEmpty else { self.flash("Couldn't read that playlist"); return }
+                self.enqueue(videos.map { QueueItem(url: $0.url, title: $0.title, subtitle: $0.channel.isEmpty ? nil : $0.channel,
+                                                    artwork: $0.thumbnail, duration: $0.duration) }, placement)
+            }
+            return
+        }
+        enqueue([QueueItem(url: url, title: title ?? info?.title ?? links.link(for: url)?.title,
+                           artwork: VideoLinks.thumbnail(url) ?? info?.thumbnail, duration: info?.duration)], placement)
+    }
+    // Titles and pictures for queued links that arrived bare (a drop, a pasted link): Recent Links, Spotify's oEmbed, yt-dlp.
+    private func fillDetails(_ items: [QueueItem]) {
+        for item in items where item.title == nil {
+            if let known = links.link(for: item.url), known.title != nil {
+                upNext.update(item.id, title: known.title, artwork: VideoLinks.thumbnail(item.url) ?? known.thumbnail); continue
+            }
+            if item.source == .spotify {
+                SpotifyOEmbed.info(item.url) { [weak self] info in self?.upNext.update(item.id, title: info?.title, artwork: info?.thumbnail) }
+            } else if item.source == .podcast, PodcastLinks.isEpisode(item.url) {
+                resolveEpisode(item.url) { [weak self] e in self?.upNext.update(item.id, title: e?.title, artwork: e?.artwork) }
+            } else if item.source == .web {
+                probeLink(item.url) { [weak self] info in self?.upNext.update(item.id, title: info?.title, artwork: VideoLinks.thumbnail(item.url) ?? info?.thumbnail) }
+            }
+        }
+    }
+    // A Spotify link: a song or episode plays in Spotify as the queue's next item; an album, playlist or artist opens there.
+    func playSpotify(_ link: String) {
+        guard SpotifyLink.uri(link) != nil else {
+            if let u = URL(string: SpotifyLink.isSpotify(link) && link.hasPrefix("spotify:") ? link : SpotifyLink.webURL(link)) { NSWorkspace.shared.open(u) }
+            return
+        }
+        let item = QueueItem(url: link)
+        upNext.playNow([item])
+        fillDetails([item])
+        showQueue()
+        if looksLikeURL(link) { recordLink(link, probe: false) }
+    }
+    // "Search YouTube for …" from the Now Playing row or the artwork window: results open in the panel.
+    func searchYouTube(for query: String) {
+        presentPanel()
+        searchField.stringValue = query
+        search(query)
+    }
+    func nowPlayingSettingsChanged() {
+        if !Prefs.showNowPlaying { artworkWindow?.close() }   // its onClose releases the adapter
+        nowPlaying.want(.panel, Prefs.showNowPlaying && dropdown.isVisible)
+        rebuildNowPlayingRow()
+    }
     // Which videos get a ★ / ✓ — read once per redraw.
     struct LibraryMarks {
         var favourites: Set<String>, watched: Set<String>
@@ -2938,9 +3709,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     private func returnHint(for query: String) -> NSTextField {
         let text: String
         switch OmniboxInput.parse(query) {
-        case .play:            text = "Return plays this link."
-        case .playlist:        text = "Return lists this playlist."
-        case .search(let q):   text = "Searching YouTube for “\(q)”… Return searches now."
+        case .play:            text = "Return plays this link · ⌥Return adds it to Up Next."
+        case .playlist:        text = "Return lists this playlist · ⌥Return adds its videos to Up Next."
+        case .podcast:         text = "Return lists this podcast's episodes."
+        case .search(let q):
+            let place = searchService == .podcasts ? "podcasts" : searchService == .music ? "your Music library" : "YouTube"
+            text = "Searching \(place) for “\(q)”… Return searches now."
         case .empty:           text = ""
         }
         let l = hint(text); l.font = .systemFont(ofSize: 11); l.textColor = .tertiaryLabelColor
@@ -2990,19 +3764,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         row.toolTip = url
         return row
     }
-    // A row's trailing buttons: ↗ opens the video's page in the browser (a YouTube video where you left off),
-    // ⬇ downloads. Local files get only ⬇.
+    // A row's trailing buttons: + puts it on Up Next (Play Later; ⌥-click Play Next), ↗ opens the video's page in the
+    // browser (a YouTube video where you left off), ⬇ downloads. Local files get no ↗, Spotify links no ⬇.
     func rowButtons(_ url: String, title: String?) -> NSView {
+        let later = ClosureButton(symbol: "text.badge.plus", tip: "Play Later — ⌥-click: Play Next") { [weak self] _ in
+            self?.enqueueLink(url, title: title, NSEvent.modifierFlags.contains(.option) ? .next : .later)
+        }
         let dl = ClosureButton(symbol: "arrow.down.circle", tip: "Download") { [weak self] b in
             self?.popDownloadMenu(for: url, title: title, from: b)
         }
-        guard VideoLinks.webURL(url) != nil else { return dl }
-        let site = VideoLinks.site(url)
-        let open = ClosureButton(symbol: "arrow.up.right.square", tip: site == "YouTube" ? "Open in YouTube" : "Open on \(site)") { _ in
-            let resume = PlaybackPositions.shared.position(for: VideoLinks.key(url))
-            if let page = VideoLinks.webURL(url, resumeAt: resume) { NSWorkspace.shared.open(page) }
+        var views: [NSView] = [later]
+        if VideoLinks.webURL(url) != nil {
+            let site = VideoLinks.site(url)
+            let open = ClosureButton(symbol: "arrow.up.right.square", tip: site == "YouTube" ? "Open in YouTube" : "Open on \(site)") { _ in
+                let resume = PlaybackPositions.shared.position(for: VideoLinks.key(url))
+                if let page = VideoLinks.webURL(url, resumeAt: resume) { NSWorkspace.shared.open(page) }
+            }
+            views.append(open)
         }
-        let s = NSStackView(views: [open, dl]); s.spacing = 4
+        if !SpotifyLink.isSpotify(url) { views.append(dl) }           // Spotify's audio is the app's (DRM)
+        let s = NSStackView(views: views); s.spacing = 4
         return s
     }
     func rebuildDownloadsSection() {
@@ -3136,8 +3917,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     func linkMenu(_ url: String, title: String?, removable: Bool, info: LinkInfo? = nil, play playAction: (() -> Void)? = nil) -> NSMenu {
         let m = NSMenu()
         m.addItem(ClosureMenuItem("Play") { [weak self] in if let p = playAction { p() } else { self?.play(url) } })
-        let dl = NSMenuItem(title: "Download", action: nil, keyEquivalent: "")
-        dl.submenu = downloadMenu(for: url, title: title); m.addItem(dl)
+        // Up Next under the music window (UpNext.swift): right after what's playing, or after your other additions.
+        m.addItem(ClosureMenuItem("Play Next") { [weak self] in self?.enqueueLink(url, title: title, info: info, .next) })
+        m.addItem(ClosureMenuItem("Play Later") { [weak self] in self?.enqueueLink(url, title: title, info: info, .later) })
+        if !SpotifyLink.isSpotify(url) {
+            let dl = NSMenuItem(title: "Download", action: nil, keyEquivalent: "")
+            dl.submenu = downloadMenu(for: url, title: title); m.addItem(dl)
+        }
         m.addItem(.separator())
         m.addItem(ClosureMenuItem("Copy Link") { [weak self] in
             let pb = NSPasteboard.general
@@ -3196,6 +3982,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         case .empty:            playClipboard()
         case .play(let s):      searchField.stringValue = ""; rebuildClipSection(); play(s)
         case .playlist(let s):  openPlaylist(s, title: "Playlist", root: true)
+        case .podcast(let s):   openPodcast(s, root: true)
         case .search(let q):    search(q)
         }
     }
@@ -3234,6 +4021,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             if let i = highlighted, i < rows.count { liveSearch.cancel(); rows[i].onClick?() } else { submitField() }
             return true
         case #selector(NSResponder.cancelOperation(_:)): escapePressed(); return true
+        case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):   // ⌥Return: a link or file goes to Up Next
+            switch OmniboxInput.parse(searchField.stringValue) {
+            case .play(let link), .playlist(let link):
+                liveSearch.cancel()
+                searchField.stringValue = ""; fieldTextChanged()
+                enqueueLink(link, title: nil, .later)
+            default: submitField()
+            }
+            return true
         default: return false
         }
     }
@@ -3292,13 +4088,242 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         if remember { RecentSearches.shared.add(q); rebuildSearchMenu() }
         if activeSearchQuery == q, let page = browseStack.last?.page {
             switch page {
-            case .loading, .results: return   // Return during live search must not restart it.
-            default: break                   // Explicit Return retries a failed search.
+            case .loading, .results, .shows, .songs: return   // Return during live search must not restart it.
+            default: break                           // Explicit Return retries a failed search.
             }
         }
-        let cached = searchCache.value(for: q).map { BrowsePage.results(q, $0) }
-        openPage("“\(q)”", root: true, initial: cached, note: "Searching YouTube…", searchFetch(q, limit: YouTube.searchLimit))
+        if searchService == .podcasts {
+            let cached = podcastCache.value(for: q).map { BrowsePage.shows(q, $0) }
+            openPage("“\(q)”", root: true, initial: cached, note: "Searching podcasts…", search: q, podcastSearchFetch(q))
+        } else if searchService == .music {
+            openPage("“\(q)”", root: true, note: "Searching your Music library…", search: q, librarySearchFetch(q))
+        } else {
+            let cached = searchCache.value(for: q).map { BrowsePage.results(q, $0) }
+            openPage("“\(q)”", root: true, initial: cached, note: "Searching YouTube…", search: q, searchFetch(q, limit: YouTube.searchLimit))
+        }
         activeSearchQuery = q
+    }
+    // The YouTube | Podcasts tabs above a search's results: the same query, looked up in the other place.
+    @objc func searchServiceChosen(_ sender: NSSegmentedControl) {
+        let service = SearchService(rawValue: sender.selectedSegment) ?? .youtube
+        guard service != searchService, let q = browseStack.last?.search else { return }
+        searchService = service
+        activeSearchQuery = nil
+        search(q, remember: false)
+    }
+    private func searchTabs() -> NSView {
+        let tabs = NSSegmentedControl(labels: ["YouTube", "Podcasts", "Music"], trackingMode: .selectOne, target: self,
+                                      action: #selector(searchServiceChosen(_:)))
+        tabs.selectedSegment = searchService.rawValue
+        tabs.controlSize = .small
+        tabs.refusesFirstResponder = true                    // typing stays in the field
+        tabs.setAccessibilityLabel("Search in")
+        let wrap = NSStackView(views: [tabs]); wrap.edgeInsets = NSEdgeInsets(top: 2, left: 4, bottom: 4, right: 0)
+        return wrap
+    }
+
+    // MARK: podcasts (3.22) — iTunes Search / Lookup and feeds (Podcasts.swift); episodes play in the music window
+    // Boundaries for live service calls; the isolated UI harness substitutes fixture answers.
+    func performPodcastSearch(_ query: String, completion: @escaping ([PodcastShow]?, String) -> Void) {
+        PodcastDirectory.search(query, completion: completion)
+    }
+    func fetchEpisodes(_ link: String, completion: @escaping (PodcastShow?, [PodcastEpisode], String) -> Void) {
+        PodcastDirectory.episodes(link, completion: completion)
+    }
+    // An Apple Podcasts episode link → the episode: its show's lookup, else yt-dlp (which reads older episodes' pages).
+    func resolveEpisode(_ link: String, completion: @escaping (PodcastEpisode?) -> Void) {
+        PodcastDirectory.episode(link) { found in
+            if let e = found { completion(e); return }
+            YtDlp.captureWithError(["-J", "--no-playlist", "--no-warnings", link], timeout: 40) { data, _ in
+                let j = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                guard let j = j, let audio = j["url"] as? String, let title = j["title"] as? String else { completion(nil); return }
+                let ids = PodcastLinks.parse(link)
+                completion(PodcastEpisode(title: title, audioURL: audio, duration: (j["duration"] as? Double) ?? (j["duration"] as? Int).map(Double.init),
+                                          artwork: j["thumbnail"] as? String, show: (j["series"] as? String) ?? (j["uploader"] as? String),
+                                          appleID: ids?.episode, showID: ids?.show))
+            }
+        }
+    }
+    private func podcastSearchFetch(_ q: String) -> BrowseFetch {
+        return { [weak self] done in
+            guard let self = self else { return nil }
+            let token = self.browseToken
+            self.performPodcastSearch(q) { [weak self] shows, e in
+                guard let self = self, token == self.browseToken else { return }
+                guard let shows = shows else {
+                    done(.message("“\(q)”", "Couldn't search podcasts. Check your connection, then try again.\n\n\(e)", action: .retry)); return
+                }
+                self.podcastCache.store(shows, for: q)
+                done(.shows(q, shows))
+            }
+            return nil
+        }
+    }
+    // A show's episodes: an Apple Podcasts show link or a feed.
+    func openPodcast(_ link: String, title: String = "Podcast", root: Bool) {
+        openPage(title, root: root, note: "Loading episodes…") { [weak self] done in
+            self?.fetchEpisodes(link) { show, episodes, e in
+                guard let show = show else {
+                    done(.message(title, "Couldn't read this podcast. Check your connection, then try again.\n\n\(e)", action: .retry)); return
+                }
+                done(.episodes(show, episodes))
+            }
+            return nil
+        }
+    }
+    static func showLink(_ show: PodcastShow) -> String? {
+        show.appleID.map { "https://podcasts.apple.com/podcast/id\($0)" } ?? show.feedURL
+    }
+    // Play an episode now, in the music window, with Up Next carrying on after it.
+    func playEpisode(_ episode: PodcastEpisode) {
+        liveSearch.cancel()
+        pauseMusicForWatch(asking: true)
+        upNext.playNow([episode.queueItem()])
+        showQueue()
+    }
+    // An Apple Podcasts episode link (the field, Recent Links, the URL scheme): Up Next looks it up and plays it.
+    func playEpisodeLink(_ link: String) {
+        recordLink(link, probe: false)                        // its title and picture arrive with the lookup (makeUpNext)
+        pauseMusicForWatch(asking: true)
+        upNext.playNow([QueueItem(url: link, source: .podcast)])
+        showQueue()
+    }
+    private func showRow(_ show: PodcastShow) -> BrowseRowView {
+        let row = BrowseRowView(thumb: show.artwork, title: show.title, meta: show.author ?? "Podcast", accessory: nil, square: true)
+        let link = Self.showLink(show)
+        row.toolTip = link
+        row.onClick = { [weak self] in if let l = link { self?.openPodcast(l, title: show.title, root: false) } }
+        row.onMenu = { [weak self] in
+            let m = NSMenu()
+            m.addItem(ClosureMenuItem("Show Episodes") { if let l = link { self?.openPodcast(l, title: show.title, root: false) } })
+            if let id = show.appleID, let u = URL(string: "https://podcasts.apple.com/podcast/id\(id)") {
+                m.addItem(ClosureMenuItem("Open in Apple Podcasts") { NSWorkspace.shared.open(u) })
+            }
+            if let l = link { m.addItem(ClosureMenuItem("Copy Link") { self?.copyLink(l) }) }
+            return m
+        }
+        return row
+    }
+    private static let episodeDate: DateFormatter = {
+        let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .none; f.doesRelativeDateFormatting = true; return f
+    }()
+    private func episodeRow(_ e: PodcastEpisode, _ marks: LibraryMarks) -> BrowseRowView {
+        let item = e.queueItem(), key = item.resumeKey
+        let meta = [e.published.map { Self.episodeDate.string(from: $0) } ?? "", formatDuration(e.duration)].filter { !$0.isEmpty }.joined(separator: " · ")
+        var progress: Double?
+        if let p = PlaybackPositions.shared.position(for: key), let d = e.duration, d > 0 { progress = p / d }
+        let later = ClosureButton(symbol: "text.badge.plus", tip: "Play Later — ⌥-click: Play Next") { [weak self] _ in
+            self?.enqueue([e.queueItem()], NSEvent.modifierFlags.contains(.option) ? .next : .later)
+        }
+        var buttons: [NSView] = [later]
+        if let page = e.page.flatMap(URL.init(string:)) {
+            buttons.append(ClosureButton(symbol: "arrow.up.right.square", tip: "Open in Apple Podcasts") { _ in NSWorkspace.shared.open(page) })
+        }
+        buttons.append(ClosureButton(symbol: "arrow.down.circle", tip: "Download") { [weak self] b in
+            self?.popDownloadMenu(for: e.audioURL, title: e.title, from: b)
+        })
+        let accessory = NSStackView(views: buttons); accessory.spacing = 4
+        let row = BrowseRowView(thumb: e.artwork, title: e.title, meta: meta, accessory: accessory, watched: marks.watched.contains(key),
+                                progress: progress, square: true)
+        row.toolTip = e.page ?? e.audioURL
+        row.onClick = { [weak self] in self?.playEpisode(e) }
+        row.onMenu = { [weak self] in self?.episodeMenu(e) }
+        return row
+    }
+    func episodeMenu(_ e: PodcastEpisode) -> NSMenu {
+        let m = NSMenu(), key = e.queueItem().resumeKey
+        m.addItem(ClosureMenuItem("Play") { [weak self] in self?.playEpisode(e) })
+        m.addItem(ClosureMenuItem("Play Next") { [weak self] in self?.enqueue([e.queueItem()], .next) })
+        m.addItem(ClosureMenuItem("Play Later") { [weak self] in self?.enqueue([e.queueItem()], .later) })
+        let dl = NSMenuItem(title: "Download", action: nil, keyEquivalent: "")
+        dl.submenu = downloadMenu(for: e.audioURL, title: e.title); m.addItem(dl)
+        m.addItem(.separator())
+        m.addItem(ClosureMenuItem("Copy Link") { [weak self] in self?.copyLink(e.page ?? e.audioURL) })
+        if let page = e.page.flatMap(URL.init(string:)) { m.addItem(ClosureMenuItem("Open in Apple Podcasts") { NSWorkspace.shared.open(page) }) }
+        m.addItem(.separator())
+        let played = WatchedVideos.shared.isWatched(key)
+        m.addItem(ClosureMenuItem(played ? "Mark as Unplayed" : "Mark as Played") { [weak self] in
+            if played { WatchedVideos.shared.unmark(key) } else { WatchedVideos.shared.mark(key) }
+            PlaybackPositions.shared.clear(key)
+            self?.libraryChanged()
+        })
+        return m
+    }
+    func copyLink(_ link: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents(); pb.setString(link, forType: .string)
+        lastClipboardChangeCount = pb.changeCount            // copying from Watch isn't a newly copied link
+    }
+
+    // MARK: your Music library (3.23) — the Music tab (MusicLibrary.swift); songs play in Music through Up Next
+    // Boundary for the AppleScript search; the isolated UI harness substitutes fixture answers.
+    func performLibrarySearch(_ query: String, completion: @escaping (LibraryAnswer) -> Void) {
+        musicControl.searchLibrary(query, completion: completion)
+    }
+    private func librarySearchFetch(_ q: String) -> BrowseFetch {
+        return { [weak self] done in
+            guard let self = self else { return nil }
+            let token = self.browseToken
+            self.performLibrarySearch(q) { [weak self] answer in
+                guard let self = self, token == self.browseToken else { return }
+                let title = "“\(q)”"
+                switch answer {
+                case .songs(let songs): done(.songs(q, songs))
+                case .notRunning:       done(.message(title, "Open Music to search your library.", action: .openMusic))
+                case .needsAccess:      done(.message(title, "Allow Watch to search your Music library — macOS asks once.", action: .allowMusic))
+                case .denied:
+                    done(.message(title, "Watch isn't allowed to use Music. Turn on Music for Watch in System Settings ▸ Privacy & Security ▸ Automation.",
+                                  action: .automationSettings))
+                case .failed:           done(.message(title, "Music didn't answer. Try again.", action: .retry))
+                }
+            }
+            return nil
+        }
+    }
+    // Open Music (in the background) for the Music tab, then search again once it answers.
+    @objc func openMusicForSearch() {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: MusicLibrary.bundleID) else { NSSound.beep(); return }
+        let options = NSWorkspace.OpenConfiguration(); options.activates = false
+        NSWorkspace.shared.openApplication(at: url, configuration: options) { _, _ in }
+        var tries = 0
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
+            tries += 1
+            let running = !NSRunningApplication.runningApplications(withBundleIdentifier: MusicLibrary.bundleID).isEmpty
+            guard running || tries >= 20 else { return }
+            timer.invalidate()
+            if running { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self?.reloadPage() } }
+        }
+    }
+    // The user's click: macOS asks once whether Watch may use Music; then the search runs again.
+    @objc func allowMusicForSearch() {
+        musicControl.requestAccess(MusicLibrary.bundleID) { [weak self] access in
+            if access == .granted { self?.reloadPage() } else { self?.flash("Watch can't search Music without permission") }
+        }
+    }
+    @objc func openAutomationSettings() {
+        if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") { NSWorkspace.shared.open(u) }
+    }
+    private func songRow(_ song: LibrarySong) -> BrowseRowView {
+        let meta = [song.artist ?? "", song.album ?? "", formatDuration(song.duration)].filter { !$0.isEmpty }.joined(separator: " · ")
+        let later = ClosureButton(symbol: "text.badge.plus", tip: "Play Later — ⌥-click: Play Next") { [weak self] _ in
+            self?.enqueue([song.queueItem], NSEvent.modifierFlags.contains(.option) ? .next : .later)
+        }
+        let row = BrowseRowView(thumb: nil, title: song.title, meta: meta, accessory: later, image: sym("music.note"), square: true)
+        row.onClick = { [weak self] in self?.playLibrarySong(song) }
+        row.onMenu = { [weak self] in
+            let m = NSMenu()
+            m.addItem(ClosureMenuItem("Play") { self?.playLibrarySong(song) })
+            m.addItem(ClosureMenuItem("Play Next") { self?.enqueue([song.queueItem], .next) })
+            m.addItem(ClosureMenuItem("Play Later") { self?.enqueue([song.queueItem], .later) })
+            return m
+        }
+        return row
+    }
+    // A library song now: Music plays it as Up Next's item, and carries on with its own Up Next after the list.
+    func playLibrarySong(_ song: LibrarySong) {
+        liveSearch.cancel()
+        upNext.playNow([song.queueItem])
+        showQueue()
     }
     // One boundary for live service calls; the isolated UI harness substitutes delayed fixture results.
     func performSearch(_ query: String, limit: Int, completion: @escaping ([YTVideo]?, String) -> Void) -> YtDlpTask {
@@ -3390,12 +4415,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     func presentPanel() { if !(dropdown.isVisible && dropdown.isOnActiveSpace) { togglePanel() } }
     // Push a page that shows a spinner until `fetch` delivers its content (`initial`, e.g. cached results, shows
     // at once instead). A newer page or Back cancels the running fetch and drops its late result.
-    private func openPage(_ title: String, root: Bool, initial: BrowsePage? = nil, note: String = "Loading…", _ fetch: @escaping BrowseFetch) {
+    private func openPage(_ title: String, root: Bool, initial: BrowsePage? = nil, note: String = "Loading…", search: String? = nil,
+                          _ fetch: @escaping BrowseFetch) {
         liveSearch.cancel()
         activeSearchQuery = nil
         browseTask?.cancel(); browseTask = nil
         if root { browseStack = [] }
-        browseStack.append(BrowseEntry(page: initial ?? .loading(title, note: note), fetch: fetch))
+        browseStack.append(BrowseEntry(page: initial ?? .loading(title, note: note), fetch: fetch, search: search))
         browseToken += 1
         renderBrowse()
         if initial == nil { runFetch(fetch) }
@@ -3463,6 +4489,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
                 add(row)
             }
         }
+        if browseStack.last?.search != nil { add(searchTabs(), fill: false) }
         switch page {
         case .loading(_, let note):
             let sp = NSProgressIndicator(); sp.style = .spinning; sp.controlSize = .small; sp.startAnimation(nil)
@@ -3479,6 +4506,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             case .signIn:         button = NSButton(title: Prefs.youtubeConnected ? "YouTube Account…" : "Sign In to YouTube…", target: self, action: #selector(youtubeAccountButton))
             case .retry:          button = NSButton(title: "Try Again", target: self, action: #selector(reloadPage))
             case .updateAndRetry: button = NSButton(title: "How to Update Watch…", target: self, action: #selector(updateAndReloadPage))
+            case .openMusic:      button = NSButton(title: "Open Music", target: self, action: #selector(openMusicForSearch))
+            case .allowMusic:     button = NSButton(title: "Allow…", target: self, action: #selector(allowMusicForSearch))
+            case .automationSettings: button = NSButton(title: "Open System Settings", target: self, action: #selector(openAutomationSettings))
             }
             if let b = button { b.bezelStyle = .rounded; wrap.addArrangedSubview(b) }
             add(wrap)
@@ -3494,6 +4524,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
                 let wrap = NSStackView(views: [more]); wrap.edgeInsets = NSEdgeInsets(top: 6, left: 4, bottom: 4, right: 0)
                 add(wrap, fill: false)
             }
+        case .shows(let q, let shows):
+            if shows.isEmpty { add(hint("No podcasts found for “\(q)”."), fill: false) }
+            shows.forEach { add(showRow($0)) }
+        case .episodes(_, let episodes):
+            if episodes.isEmpty { add(hint("This podcast has no episodes Watch can play."), fill: false) }
+            episodes.forEach { add(episodeRow($0, marks)) }
+        case .songs(let q, let songs):
+            if songs.isEmpty { add(hint("No songs in your library match “\(q)”."), fill: false) }
+            songs.forEach { add(songRow($0)) }
         case .playlists(let ps):
             browseAction.isHidden = ps.isEmpty
             if ps.isEmpty { add(hint("No playlists found."), fill: false) }
@@ -3533,7 +4572,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         else { dropdown.level = .floating }
     }
     @objc func togglePanel() {
-        if dropdown.isVisible && dropdown.isOnActiveSpace { stopPanelSearch(); dropdown.orderOut(nil); mediaMonitor.stop(); return }
+        if dropdown.isVisible && dropdown.isOnActiveSpace { stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors(); return }
         // Every open anchors under the menu-bar icon. A drag-off detaches only until the panel is hidden.
         Prefs.detached = false
         suppressMoveSave = true
@@ -3546,8 +4585,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         mainScroll.contentView.scroll(to: .zero); mainScroll.reflectScrolledClipView(mainScroll.contentView)
         dropdown.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         dropdown.makeFirstResponder(searchField)      // type to search or filter right away
-        mediaMonitor.start()
+        startPanelMonitors()
     }
+    // Only while the panel shows: browser-tab polling and the Now Playing adapter.
+    func startPanelMonitors() {
+        mediaMonitor.start()
+        if Prefs.showNowPlaying { nowPlaying.want(.panel, true) }
+    }
+    func stopPanelMonitors() { mediaMonitor.stop(); nowPlaying.want(.panel, false) }
     // Pressing the hotkey plays a copied video link directly; otherwise it toggles the panel.
     @objc func hotkeyPressed() {
         if Prefs.hotkeyPlaysClipboard, let s = NSPasteboard.general.string(forType: .string), looksLikeURL(s) { play(s); return }
@@ -3574,7 +4619,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         if case .loading? = browseStack.last?.page { browseStack.removeAll(); activeSearchQuery = nil }
         renderBrowse(keepScroll: true)
     }
-    @objc func minimizeToMenuBar() { Prefs.detached = false; stopPanelSearch(); dropdown.orderOut(nil); mediaMonitor.stop() }
+    @objc func minimizeToMenuBar() { Prefs.detached = false; stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors() }
     @objc func togglePin() { Prefs.pinned.toggle(); applyLevel() }
 
     // MARK: playback entry point — a window opens immediately and resolves its own stream (see PlayerWindowController.load)
@@ -3584,14 +4629,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         liveSearch.cancel()
         let input = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }
+        if SpotifyLink.isSpotify(input) { playSpotify(input); return }       // the Spotify app plays it, as Up Next's item
+        if PodcastLinks.isEpisode(input) { playEpisodeLink(input); return }  // Watch plays the episode's audio in the music window
         let local = isLocalMedia(input)
         guard local || looksLikeURL(input) else { flash("Not a recognizable video link"); return }
         // The first video turns the panel into the player: it opens on the panel's spot and the panel hides
         // (the menu-bar icon brings it back). With players already open, new ones tile beside them.
         let panelShown = dropdown.isVisible && dropdown.isOnActiveSpace
+        let musicFrame = artworkWindow?.window.isVisible == true ? artworkWindow?.window.frame : nil
         let takeOver = panelShown && windowManager.players.isEmpty
+            && !(musicFrame.map { windowManager.takeFrame(replacing: dropdown.frame).intersects($0) } ?? false)
         let pc = windowManager.open(input, anchor: statusItem, queue: queue, replacing: takeOver ? dropdown.frame : nil)
-        if takeOver { stopPanelSearch(); dropdown.orderOut(nil); mediaMonitor.stop() }
+        if takeOver { stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors() }
+        pauseMusicForWatch(asking: true)                       // your own click: macOS may ask once
+        ensureSystemTick()
         if !local { recordLink(pc.sourceURL, probe: false) }   // the player reports title/thumbnail via onInfo
     }
     // Puts a video link on top of Recent Links. `probe` asks yt-dlp for its title, thumbnail and duration when
@@ -3600,6 +4651,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         links.add(url)
         rebuildClipSection()
         guard probe, links.link(for: url)?.title == nil else { return }
+        if SpotifyLink.isSpotify(url) {                       // yt-dlp can't read Spotify; its public oEmbed can
+            SpotifyOEmbed.info(url) { [weak self] info in
+                guard let self = self, let info = info else { return }
+                self.links.update(url, with: info); self.rebuildClipSection()
+            }
+            return
+        }
         probeLink(url) { [weak self] info in
             guard let self = self, let info = info else { return }
             self.links.update(url, with: info); self.rebuildClipSection()

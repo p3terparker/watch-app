@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise build/install replacement safety without touching user apps."""
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -111,6 +112,31 @@ class WatchHelperSafetyTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     watch_helpers.fetch('helper', {'sha256': 'not-matching', 'url': 'https://invalid.test'})
                 network.assert_not_called()
+
+    def test_dylib_own_install_name_allowed(self):
+        listing = ('fixture:\n\t' + watch_helpers.ADAPTER_ID + ' (compatibility version 0.1.0)\n'
+                   '\t/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation (compatibility version 300.0.0)')
+        results = [SimpleNamespace(stdout='arm64 x86_64'), SimpleNamespace(stdout=listing), SimpleNamespace(stdout='cmd LC_BUILD_VERSION\n minos 13.0')]
+        with patch.object(watch_helpers, 'run', side_effect=results):
+            watch_helpers.inspect_binary(Path('/fixture'), own_id=watch_helpers.ADAPTER_ID)
+
+    def test_other_rpath_library_rejected(self):
+        with self.assertRaises(ValueError): self.inspect(library='@rpath/Other.framework/Other')
+
+    def test_pinned_sources_do_not_invalidate_helper_cache(self):
+        manifest = json.loads(watch_helpers.LOCK.read_text())
+        self.assertEqual(set(watch_helpers.helper_inputs(manifest)), {'versions', 'downloads'})
+        self.assertRegex(manifest['sources'][watch_helpers.ADAPTER]['commit'], '^[0-9a-f]{40}$')
+
+    def test_cached_source_must_be_the_pinned_commit(self):
+        commit = 'a' * 40
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / f'fixture-{commit}.tar').write_bytes(b'not a git archive')
+            with patch.object(watch_helpers, 'CACHE', root), patch.object(watch_helpers, 'run') as run:
+                with self.assertRaises(ValueError):
+                    watch_helpers.fetch_source('fixture', {'commit': commit, 'url': 'https://invalid.test'})
+                run.assert_not_called()
 
     def test_matching_download_reused_without_network(self):
         with tempfile.TemporaryDirectory() as temp:

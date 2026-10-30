@@ -40,19 +40,22 @@ enum OmniboxInput: Equatable {
     case empty
     case play(String)        // a link or a local media file
     case playlist(String)    // a YouTube playlist link: listed in the panel
+    case podcast(String)     // an Apple Podcasts show link or a podcast feed: its episodes, listed in the panel (3.22)
     case search(String)      // anything else: a YouTube search
 
     static func parse(_ raw: String, fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> OmniboxInput {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return .empty }
         if text.hasPrefix("file://") { return .play(text) }
+        if text.hasPrefix("spotify:") { return .play(text) }     // a Spotify URI: played by the Spotify app (UpNext.swift)
         if text.hasPrefix("/") || text.hasPrefix("~/") {
             let path = (text as NSString).expandingTildeInPath
             if fileExists(path) { return .play(path) }
         }
         let link = looksLikeURL(text) ? text : schemeless(text)
         guard let url = link else { return .search(text) }
-        return VideoLinks.isYouTubePlaylist(url) ? .playlist(url) : .play(url)
+        if VideoLinks.isYouTubePlaylist(url) { return .playlist(url) }
+        return PodcastLinks.isShow(url) || PodcastLinks.isFeed(url) ? .podcast(url) : .play(url)
     }
 
     // "youtu.be/abc", "www.youtube.com/watch?v=…", "vimeo.com/123" → an https link. It has to look like a link to

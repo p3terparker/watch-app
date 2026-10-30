@@ -2,6 +2,29 @@
 
 ## Watch
 
+> **There is no common "app volume" — Music/Spotify need AppleScript, and that means an Automation prompt** *(Watch · 2026-10-28)*
+> MediaRemote (and the adapter) can play, pause, skip and seek, but has no per-app volume; the system output volume
+> would move everything, Watch's own videos included. Music and Spotify expose `sound volume` (0–100) to AppleScript,
+> which needs Automation access per app. Check it with `AEDeterminePermissionToAutomateTarget(ask: false)` when the
+> controls appear (never prompts); only the user's own volume drag may ask (`ask: true`), and only on its release — a
+> system prompt arriving mid-drag swallows the mouse-up and leaves the slider stuck "tracking". Address the app by bundle
+> id and only while it's running (see the "Where is …?" entry). Browsers have no such property: no volume control there.
+
+> **Now Playing: MediaRemote answers only Apple-signed processes since macOS 15.4** *(Watch · 2026-10-28)*
+> **Problem:** reading what Music/Spotify/a browser is playing (with artwork) has no public API; calling the private
+> `MRMediaRemoteGetNowPlayingInfo` from Watch returns nothing on macOS 15.4+. AppleScript to Music/Spotify works but
+> needs an Automation prompt per app and misses browsers/Podcasts (3.3 removed those probes for exactly that).
+> **Fix:** bundle **mediaremote-adapter** (pinned commit): `/usr/bin/perl` — Apple-signed, so entitled — loads
+> `MediaRemoteAdapter.framework` and streams JSON lines. Run only `stream --no-diff`, only while the panel or the artwork
+> window shows, with a scrubbed environment (no `PERL5OPT`/`PERL5LIB`/`DYLD_*`). **Never run the adapter's `test`** (it
+> registers a fake Now Playing client that can disturb other apps). `send`/`seek` control the other app's playback, so
+> they run only from a click on the artwork window's controls — one short adapter run per click, never automatically.
+> Use `--micros`: without it the adapter serializes `timestamp` as a whole-second date string, too coarse to keep a
+> timeline in step. Its first line is often `{}` before the real state, so "nothing playing" is
+> debounced. Watch's own web view can be the Now Playing client — ignore its bundle id as either the client or the parent.
+> If the app is force-quit, an orphaned perl exits on its next write (SIGPIPE). If Apple closes the loophole, the
+> adapter exits/streams nothing, the monitor gives up after its back-off, and the row just doesn't appear.
+
 > **Live search must invalidate at the keystroke, not when the debounce fires** *(Watch · 2026-10-26)*
 > A prior search can complete during the 350 ms pause and render results for text no longer in the field.
 > `fieldTextChanged` immediately increments `browseToken`, cancels the task, and clears its page; both
@@ -36,6 +59,7 @@
 > `loadHTMLString(…, baseURL: https://www.youtube.com/)`, built with the **IFrame Player API** under a
 > desktop-Safari UA. Some videos/networks still throw 15x (YouTube flagging the session — reproducible in
 > plain Safari, not a Watch bug); Watch **auto-falls back to a yt-dlp-resolved direct stream in AVPlayer**.
+> *(3.19 build 51: Watch no longer loads the embed or the watch page for YouTube at all — see the bot-check entry below.)*
 
 > **Unfocused player window stutters during playback** *(Watch · 2026-06-22)*
 > **Cause:** macOS **App Nap** throttles a background/unfocused app.
@@ -186,3 +210,48 @@
 Never run yt-dlp `-U` or Homebrew updates against a bundled executable: mutating it invalidates the app signature. Watch updates helpers through whole-app replacement. Testing with a developer PATH can hide missing FFmpeg/Deno; use `MediaTools` and the clean-HOME relocated fixture in `Tests/bundled.py`. Pin helper/source hashes, reject non-system dylibs, sign child executables before the app, and validate the mounted DMG. Deno 2.9.8 has no `--license` option; extract supplied notice files from the pinned source archive instead.
 
 The resizable first-run guide must update each wrapping label's `preferredMaxLayoutWidth` to the stack's current width. Keeping the initial fixed width makes short labels silently lose their second line at smaller sizes. `GuideStackView.layout` and the small-guide/last-action fixture cover this.
+
+## Watch 3.19 (51) — YouTube's bot check, and macOS's single "now playing" slot
+
+**A YouTube web page is never a fallback.** When yt-dlp failed, 3.18–3.19 (50) loaded the IFrame embed and then the signed-out youtube.com watch page in the player. That looked like Watch "lost" its controls, click zones and quality switching, showed ads and YouTube's UI, and its media session took over macOS Now Playing (the music window showed the video's thumbnail). The usual failure was YouTube's "Sign in to confirm you're not a bot" (also age and members checks), not a stale yt-dlp: the same bundled yt-dlp resolved public videos fine from GitHub's Mac. Now a YouTube failure shows `PlayerFailureView` with yt-dlp's reason and logs it (`~/Library/Logs/Watch/playback.log`). With a connected YouTube Account it first retries once with that browser's cookies (`PlaybackFailure.wantsSignIn` → `YouTube.cookieArgs`). Without one, the card offers Sign In…. Never send cookies on a first attempt, and never test with personal cookies. Other sites still fall back to their page, which is the only way to show them.
+
+**Window-size quality needs more than one rendition.** One fixed H.264 stream can't follow the window. `StreamLadder.renditions` adds YouTube's lower H.264 MP4s to the bridge's master playlist, and the player sets `AVPlayerItem.preferredMaximumResolution` from the video area on every resize. Live HLS adapts by itself. `Tests/panel.py` checks the switch with local fixture renditions shown in a real `PlayerVideoView` (180p in a 240×135 pt window, 360p at 880×495 pt): AVFoundation weighs the size of the layer showing the video, so an AVPlayer with no layer never switches up and proves nothing.
+
+**MediaRemote reports one app: whatever macOS elected as "now playing".** A browser tab or a Watch player playing a video takes that slot from Music. Only music sources may reach the music window (`NowPlayingInfo.isMusicSource`: never a browser, a `com.apple.WebKit…` process or Watch). Music and Spotify are followed through their own distributed notifications even while they don't hold the slot. The adapter's `send` goes to whoever holds the slot, so Music and Spotify are commanded by AppleScript addressed to their bundle id (Automation asked only on the user's click). Other apps' buttons dim when they don't hold it.
+
+**Don't remove basics silently.** UX_SPEC's "Always works" list (click zones, keys, resize, native YouTube, separate windows) is checked by `Tests/PanelMain.swift` on a real fixture video. Run it (CI does) before shipping a preview.
+
+## Watch 3.20 — one click, two meanings
+
+**A view where a click and a double-click do different things must wait before acting on the click.** `PlayerSurfaceView` reports a click as soon as the button comes up, and the second click of a double-click arrives later with `clickCount` 2. In the music window a click plays/pauses and a double-click opens the app, so acting at once would pause the music on the first click of every double-click. `clicked` schedules play/pause after a short delay and `multiClicked` cancels it. Space stays instant. The video player doesn't need this: its double-clicks act where a single click does nothing (sides, top) or harmlessly repeat it.
+
+**3.25: the wait is the music window's own, not the system's.** The delay was `NSEvent.doubleClickInterval` + 0.05 s (about 0.55 s by default), which felt slow. AppKit's `clickCount` always follows the system interval (0.5 s by default), so shortening only our wait would let a click 0.4 s after the first still arrive as "2" and open the app. The run is therefore re-timed by Watch: `MusicClicks.press(at:first:)` (pure, `Sources/PlayerZones.swift`, tested) counts a click into the run only if the one before came within `MusicZone.window(system:)` = `min(system interval, 0.3 s)`; the delay is that window + 0.02 s (≈ 0.32 s). A click AppKit calls a repeat but that is too late is handled as a fresh single click (it plays/pauses; it never opens the app or skips); a click AppKit calls a first click (`onClick`) always starts a run, and an earlier click still waiting plays/pauses at once rather than being swallowed by it. Timestamps: the first click's mouse-down `NSEvent.timestamp`, later ones `ProcessInfo.systemUptime` when handled (the same clock). Tests must drive a real run — `click(...)` then `multiClick(...)` back to back — since a lone `multiClick` is now (correctly) a single click.
+
+**3.25: hover reveal needs hysteresis and a dwell.** The controls grow the caption band by their own height and lift the text, so a reveal zone of the unrevealed band would flicker the controls off and on as the band moves under the pointer. `ArtworkLayout.revealZone(window:revealed:)` is larger once revealed (the grown band + the same reach), and the controls wait `hideDelay` before going; a short `revealDwell` stops a sweep across the bottom from flashing them. Pointer events stop while the timeline/volume is dragged, so the hide re-arms itself until `controls.isInteracting` is false. GUI checks drive `pointerMoved(at:)` directly and wait for the state (`revealControls`), never a fixed pause.
+
+## Watch 3.22 — podcasts: one episode, many links; a directory that forgets
+
+Apple Podcasts links to the same episode come in many shapes (with or without the country, the slug, `itunes.apple.com`),
+so resume positions and ✓ for podcasts are keyed by the episode id (`podcast:<id>` in `PlaybackPositions.key`), never by the
+link text. The iTunes Lookup API lists only a show's newest 200 episodes: an older episode's link is resolved through
+yt-dlp instead (`AppDelegate.resolveEpisode`). Build the Search URL's term by hand (`PodcastLinks.searchURL`), so "&" or "+"
+in a search can't change the query. The GUI harness on GitHub's Mac runs on a 1024×768 screen: placement checks must
+leave the windows room (a full screen makes windows cascade by design).
+
+## Watch 3.23 — library search: never a prompt while typing
+
+The Music tab searches as you type, so `MusicAppControl.searchLibrary` must never ask macOS for Automation: it runs only when
+Music is running and `AEDeterminePermissionToAutomateTarget(ask: false)` already says yes, and reports `.notRunning` /
+`.needsAccess` / `.denied` otherwise. The page's Open Music and Allow… buttons are the only things that launch Music or
+ask. Anything typed goes into the script only through `MusicLibrary.escaped` (quotes, backslashes, control characters), and
+only a validated 16-hex-digit persistent ID ever reaches the play script.
+
+## Watch 3.24 — publishing Now Playing takes the media keys
+
+Once Watch sets `MPNowPlayingInfoCenter`'s info, macOS sends the media keys to Watch — even while Music plays — until Watch
+clears it. So `SystemNowPlaying.publish(nil)` (info nil, state stopped, every command target removed) runs whenever nothing of
+Watch's should hold them: nothing of Watch's open, or only paused Watch players while a music app plays
+(`OwnPlayback.pick`). Watch's own MediaRemote reading then sees Watch as the "now playing" app; it's ignored there
+(`AppDelegate.ownBundleIDs`), so the music window keeps following Music through its broadcasts. Pausing Music for Watch's
+playback is not a click unless `play()` started it: it uses `performIfAllowed` (never prompts).
+

@@ -1,32 +1,29 @@
 #!/usr/bin/env python3
-"""Verify the final read-only Watch DMG and preserve a versioned deliverable."""
+"""Verify the final read-only Watch DMG (dist/Watch-<version>.dmg, named by package.sh)."""
 import argparse
 import hashlib
 import json
 from pathlib import Path
 import plistlib
-import shutil
 import subprocess
 import tempfile
 import watch_helpers
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--canonical', action='store_true', help='Verify Watch.dmg in place without making a versioned copy')
+# Kept so existing instructions still work: the package already carries its version, so there is no copy to make.
+parser.add_argument('--canonical', action='store_true', help='Verify the packaged DMG in place (the default)')
 args = parser.parse_args()
 
 ROOT = Path(__file__).resolve().parent.parent
 info = plistlib.loads((ROOT / 'Info.plist').read_bytes())
 version = info['CFBundleShortVersionString']
-source = ROOT / 'dist/Watch.dmg'
-versioned = source if args.canonical else ROOT / f'dist/Watch-{version}.dmg'
+versioned = ROOT / f'dist/Watch-{version}.dmg'
+if not versioned.is_file():
+    raise SystemExit(f'{versioned} not found: run ./package.sh first')
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 def run(args):
     return subprocess.run([str(a) for a in args], check=True, capture_output=True, text=True).stdout.strip()
-if not args.canonical:
-    if versioned.exists() and sha(source) != sha(versioned):
-        raise RuntimeError('Different versioned installer already exists; preserve it')
-    shutil.copy2(source, versioned)
 run(['hdiutil', 'verify', versioned])
 with tempfile.TemporaryDirectory(prefix='watch-package-verify-') as temporary:
     mount = Path(temporary) / 'mounted'; mount.mkdir()

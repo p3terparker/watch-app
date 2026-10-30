@@ -209,6 +209,28 @@ let scattered = [CGRect(x: 900, y: 600, width: 400, height: 225),   // top right
                  CGRect(x: 800, y: 90, width: 400, height: 225)]    // bottom right
 expect(Tiling.readingOrder(scattered, columns: 2) == [2, 0, 1, 3], "top row left to right, then the next row")
 expect(Tiling.readingOrder(scattered, columns: 1) == [2, 0, 1, 3], "one column: top to bottom")
+// The Up Next list under the music window: below, above, else the window moves up for it; shrinks on a short screen.
+let small = CGRect(x: 0, y: 0, width: 1024, height: 743)       // GitHub's Mac: 1024×768 less the menu bar
+func drawer(_ parent: CGRect, _ height: CGFloat, move: Bool = true) -> (list: CGRect, parent: CGRect) {
+    DrawerLayout.place(parent: parent, height: height, minHeight: 120, width: max(300, parent.width), gap: 6, in: small, moveParent: move)
+}
+var placed = drawer(CGRect(x: 273, y: 400, width: 477, height: 300), 200)
+expect(placed.list == CGRect(x: 273, y: 194, width: 477, height: 200) && placed.parent.minY == 400, "room below: under the window")
+placed = drawer(CGRect(x: 100, y: 50, width: 300, height: 300), 200)
+expect(placed.list == CGRect(x: 100, y: 356, width: 300, height: 200) && placed.parent.minY == 50, "room only above: over the top")
+placed = drawer(CGRect(x: 273, y: 164, width: 477, height: 477), 200)
+expect(placed.parent == CGRect(x: 273, y: 206, width: 477, height: 477) && placed.list == CGRect(x: 273, y: 0, width: 477, height: 200),
+       "no room either side: the window moves up just enough (\(placed))")
+placed = drawer(CGRect(x: 0, y: 100, width: 600, height: 500), 300)
+expect(placed.parent.minY == 243 && placed.list == CGRect(x: 0, y: 0, width: 600, height: 237), "a short screen: the list shrinks to the room left (\(placed))")
+placed = drawer(CGRect(x: 273, y: 164, width: 477, height: 477), 200, move: false)
+expect(placed.parent.minY == 164 && placed.list == CGRect(x: 273, y: 0, width: 477, height: 158), "while dragging: never moves the window (\(placed))")
+for parent in [CGRect(x: 273, y: 400, width: 477, height: 300), CGRect(x: 100, y: 50, width: 300, height: 300),
+               CGRect(x: 273, y: 164, width: 477, height: 477), CGRect(x: 0, y: 100, width: 600, height: 500), CGRect(x: 500, y: 0, width: 240, height: 240)] {
+    let r = drawer(parent, 200)
+    expect(!r.list.intersects(r.parent) && small.contains(r.list) && small.contains(r.parent), "list and window both on screen, apart: \(parent) → \(r)")
+}
+expect(drawer(CGRect(x: 900, y: 400, width: 200, height: 200), 200).list.minX == 724, "kept on screen sideways")
 // Player click zones: top third + bottom middle resize, centre plays/pauses, lower left/right thirds skip.
 let player = CGSize(width: 440, height: 247)
 func zone(_ x: CGFloat, _ yFromTop: CGFloat) -> PlayerZone { PlayerZone.at(CGPoint(x: x, y: player.height - yFromTop), in: player) }
@@ -219,6 +241,48 @@ expect(zone(420, 123) == .skipForward && zone(420, 240) == .skipForward, "right 
 expect(zone(220, 240) == .resize, "bottom middle resizes")
 expect(zone(146, 123) == .skipBack && zone(147, 123) == .playPause, "column edges split at a third of the width")
 expect(zone(220, 82) == .resize && zone(220, 83) == .playPause, "row edges split at a third of the height")
+// The music window: only double-clicks have zones — ∓10 s in strips at the far edges (15% of the width, at least 36 pt,
+// at most a third), the rest opens the source.
+let musicSide = CGSize(width: 300, height: 300)
+expect(MusicZone.strip(width: 300) == 45 && MusicZone.strip(width: 200) == 36 && MusicZone.strip(width: 600) == 90, "strip widths")
+expect(MusicZone.strip(width: 90) == 30, "never more than a third of a tiny window")
+expect(MusicZone.at(CGPoint(x: 0, y: 150), in: musicSide) == .skipBack && MusicZone.at(CGPoint(x: 44.9, y: 299), in: musicSide) == .skipBack,
+       "the left strip skips back, top to bottom")
+expect(MusicZone.at(CGPoint(x: 45, y: 150), in: musicSide) == .main && MusicZone.at(CGPoint(x: 254.9, y: 150), in: musicSide) == .main,
+       "everything between the strips opens the source")
+expect(MusicZone.at(CGPoint(x: 255, y: 0), in: musicSide) == .skipForward && MusicZone.at(CGPoint(x: 300, y: 150), in: musicSide) == .skipForward,
+       "the right strip skips forward")
+expect(MusicZone.at(CGPoint(x: 75, y: 150), in: musicSide) == .main, "where a video window would skip, the music window opens the source")
+expect(MusicZone.at(CGPoint(x: 10, y: 10), in: .zero) == .main, "no size: no strips")
+// 3.25: the music window times its click runs itself (0.3 s), not by AppKit's clickCount (the system's, usually 0.5 s).
+expect(MusicZone.doubleClickWindow == 0.3 && MusicZone.clickMargin == 0.02, "the double-click window and the toggle margin")
+expect(MusicZone.window(system: 0.5) == 0.3 && MusicZone.window(system: 5) == 0.3, "the default 0.5 s is cut to 0.3 s")
+expect(MusicZone.window(system: 0.2) == 0.2 && MusicZone.window(system: 0.3) == 0.3, "a faster system setting is kept")
+expect(MusicZone.window(system: 0) == 0.3 && MusicZone.window(system: -1) == 0.3, "a nonsense interval falls back to 0.3 s")
+expect(MusicZone.window(system: 0.5) + MusicZone.clickMargin < 0.35, "so a single click waits about 0.32 s, not the old 0.55 s")
+var musicRun = MusicClicks()
+expect(musicRun.window == 0.3 && musicRun.count == 0, "a new run is empty, with the 0.3 s window")
+expect(musicRun.press(at: 100, first: true) == 1 && musicRun.count == 1, "a lone click is a single click")
+expect(musicRun.press(at: 100.25) == 2, "a second click within the window makes a double-click")
+expect(musicRun.press(at: 100.5) == 3, "each click is timed from the one before, so a run keeps counting")
+expect(musicRun.press(at: 100.9) == 1, "a click after the window is a fresh single, though AppKit (0.5 s) would call it a repeat")
+expect(musicRun.press(at: 101) == 2, "…and the next quick click joins that new run")
+expect(musicRun.press(at: 101.05, first: true) == 1, "a click AppKit counts as a first click starts a run, whatever the clock says")
+expect(musicRun.press(at: 101.1) == 2, "…which the next click can join")
+expect(musicRun.press(at: 50) == 1, "a clock that went backwards starts over")
+var edgeRun = MusicClicks(window: 0.25)
+expect(edgeRun.press(at: 10, first: true) == 1 && edgeRun.press(at: 10.25) == 2 && edgeRun.press(at: 10.5) == 3, "a click exactly at the window still joins")
+expect(edgeRun.press(at: 10.8125) == 1, "a hair later does not")
+var stackRun = MusicClicks()
+var stackCounts: [Int] = []
+for t: Double in [200, 200.125, 200.25, 200.375, 200.5] { stackCounts.append(stackRun.press(at: t, first: t == 200)) }
+expect(stackCounts == [1, 2, 3, 4, 5], "a quick run counts up, one skip per click (\(stackCounts))")
+var slowRun = MusicClicks()
+var slowCounts: [Int] = []
+for t: Double in [300, 300.5, 301, 301.5, 302] { slowCounts.append(slowRun.press(at: t)) }
+expect(slowCounts == [1, 1, 1, 1, 1], "clicks half a second apart are never a double-click (\(slowCounts))")
+slowRun.reset()
+expect(slowRun.count == 0 && slowRun.press(at: 302.125) == 1, "after a reset the next click is a single, even a moment after the last")
 expect(PlayerZone.at(CGPoint(x: 500, y: -5), in: player) == .skipForward, "points just outside clamp to the nearest zone")
 expect(PlayerZone.at(.zero, in: .zero) == .resize, "an empty view has no play/skip zones")
 
@@ -314,4 +378,13 @@ live.cancel()
 scheduled.forEach { $0.perform() }
 expect(!queries.contains("cancel"), "navigation or submit cancels scheduled work")
 checkMediaTools()
-print("Watch downloads + positions + links + search + tiling + zones + library: \(checks) checks passed")
+checkNowPlaying()
+checkArtworkStyle()
+checkPlaybackControls()
+checkMusicSources()
+checkStreams()
+checkQueue()
+checkPodcasts()
+checkMusicLibrary()
+checkSystemPlayback()
+print("Watch downloads + positions + links + search + tiling + zones + library + now playing: \(checks) checks passed")

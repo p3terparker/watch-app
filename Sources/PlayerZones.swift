@@ -26,3 +26,46 @@ enum PlayerZone: Equatable {
         }
     }
 }
+
+// The music window's clicks (3.20): a single click anywhere plays/pauses, so only double-clicks have zones — narrow strips
+// at the far left/right edges skip ∓10 s, and anywhere else opens the source in its app. A strip is 15% of the width but
+// at least 36 pt (never more than a third). Points are AppKit view coordinates. Pure, so `test.sh` covers it.
+enum MusicZone: Equatable {
+    case skipBack, skipForward, main
+    static let stripFraction: CGFloat = 0.15, minStrip: CGFloat = 36
+    // 3.25: two clicks make a double-click only within this of each other — tighter than the system's interval (0.5 s by
+    // default). A single click plays/pauses once the window and `clickMargin` have passed (≈ 0.32 s, was ≈ 0.55 s).
+    static let doubleClickWindow: TimeInterval = 0.3, clickMargin: TimeInterval = 0.02
+
+    // The system's double-click interval, shortened to `doubleClickWindow` (a user who set a faster one keeps it).
+    static func window(system interval: TimeInterval) -> TimeInterval { interval > 0 ? min(interval, doubleClickWindow) : doubleClickWindow }
+    static func strip(width: CGFloat) -> CGFloat { min(width / 3, max(minStrip, width * stripFraction)) }
+    static func at(_ p: CGPoint, in size: CGSize) -> MusicZone {
+        guard size.width > 0 else { return .main }
+        let s = strip(width: size.width)
+        if p.x < s { return .skipBack }
+        if p.x >= size.width - s { return .skipForward }
+        return .main
+    }
+}
+
+// A run of clicks in the music window (3.25), timed by Watch rather than by AppKit's `clickCount`, which follows the system's
+// longer double-click interval. A click joins the run only if the one before came at most `window` earlier; any later click is a
+// fresh single click, so a slow second click never opens the app. `first`: AppKit itself counts it as the first click (the
+// interval passed or the pointer moved), so it starts a run whatever the clock says. Fed timestamps (seconds on any steady
+// clock, e.g. `NSEvent.timestamp`), so it is pure and `test.sh` covers it.
+struct MusicClicks {
+    var window: TimeInterval
+    private(set) var count = 0                         // the run's length so far: 1 = single, 2 = double, 3 stacks…
+    private var last: TimeInterval = 0
+    init(window: TimeInterval = MusicZone.doubleClickWindow) { self.window = window }
+
+    // The run's length including this click.
+    mutating func press(at time: TimeInterval, first: Bool = false) -> Int {
+        let joins = !first && count > 0 && time >= last && time - last <= window
+        count = joins ? count + 1 : 1
+        last = time
+        return count
+    }
+    mutating func reset() { count = 0 }
+}

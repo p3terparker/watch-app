@@ -1,0 +1,80 @@
+# Turns a build that has already passed the tests into the stable release, using the exact installer that was tested
+# (nothing is rebuilt). Run it from the Actions tab.
+#
+# It publishes "v<version>" as the latest release, with the notes from docs/releases/v<version>.md, then deletes the
+# pre-release it came from and any old "vX.Y-preview" releases, so the Releases page ends up with the stable releases
+# and at most one current build.
+name: Promote to stable
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Pre-release to promote (current-build, or an old vX.Y-preview tag)
+        required: true
+        default: current-build
+      dry_run:
+        description: Only print what would happen
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SRC: ${{ inputs.tag }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Promote
+        run: |
+          set -euo pipefail
+
+          gh release view "$SRC" --json isPrerelease,targetCommitish,body,assets > src.json
+          [ "$(jq -r .isPrerelease src.json)" = true ] || { echo "$SRC is not a pre-release"; exit 1; }
+
+          dmg=$(jq -r '[.assets[].name | select(test("^Watch-[0-9.]+\\.dmg$"))][0] // empty' src.json)
+          [ -n "$dmg" ] || { echo "$SRC has no Watch-<version>.dmg"; exit 1; }
+          version=${dmg#Watch-}; version=${version%.dmg}
+          tag="v${version}"
+          target=$(jq -r .targetCommitish src.json)
+
+          notes_src="docs/releases/${tag}.md"
+          [ -f "$notes_src" ] || { echo "$notes_src is missing: write the release notes first"; exit 1; }
+          if gh release view "$tag" > /dev/null 2>&1; then echo "$tag already exists"; exit 1; fi
+
+          mkdir dl
+          gh release download "$SRC" --pattern "$dmg" --dir dl
+          sha=$(sha256sum "dl/$dmg" | cut -d' ' -f1)
+          expected=$(jq -r .body src.json | grep -oE '[0-9a-f]{64}' | head -n 1 || true)
+          if [ "$sha" != "$expected" ]; then
+            echo "The installer's SHA-256 ($sha) doesn't match the one on $SRC (${expected:-none})"
+            exit 1
+          fi
+
+          {
+            cat "$notes_src"
+            # shellcheck disable=SC2016 # the backticks are Markdown
+            printf '\nSHA-256 for `%s`:\n\n```\n%s\n```\n' "$dmg" "$sha"
+          } > notes.md
+
+          old=$(gh release list --limit 200 --json tagName,isPrerelease \
+                  --jq '.[] | select(.isPrerelease and (.tagName | test("-preview$"))) | .tagName')
+          remove=$(printf '%s\n' "$SRC" $old | sort -u)
+
+          echo "Publish $tag as the latest release: $dmg ($sha), tagged at commit $target"
+          echo "Then delete:"
+          echo "$remove" | sed 's/^/  /'
+          if [ "$DRY_RUN" = true ]; then echo "Dry run: nothing changed."; exit 0; fi
+
+          gh release create "$tag" "dl/$dmg" --target "$target" --latest --title "Watch ${version}" --notes-file notes.md
+          for t in $remove; do
+            gh release delete "$t" --yes --cleanup-tag
+          done
+          echo "Published https://github.com/${GH_REPO}/releases/tag/${tag}"

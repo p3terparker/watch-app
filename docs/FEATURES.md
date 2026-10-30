@@ -1,234 +1,164 @@
-# Watch — v3.18 · Beta *(reworked)*
-**Plays almost any video, from anywhere — and downloads it.** Hotkey **⌥⌘Y**.
+# Watch 3.25
 
-**Features**
-- The dropdown is a **control panel** with **one field** at the top — *Search YouTube or paste a link* — that
-  stays put while results show. **Typing searches YouTube after a 350 ms pause**; **Return** searches immediately, plays a pasted link (with or without `https://`, or a
-  local file path), or lists a playlist link; Return in an **empty** field plays the copied link. **⬇** beside it
-  downloads the field's link (or the copied one). **Typing filters Favourites and Recent Links instantly**
-  ("Matching Links", favourites first, until the automatic search starts). Editing cancels the old request; late results cannot replace the current query. Links and paths still require Return; typing never auto-plays. **↑/↓ + Return** pick a row (Recent Links or results); **Esc** clears
-  the field, then goes back, then hides the panel. The field is focused whenever the panel opens. The magnifier's
-  menu lists **explicitly submitted recent searches** (never links or each typing pause) with **Clear Recent Searches**.
-- **Recent Links** — video links you copy or play, newest first: a **small thumbnail**, the title, and *site ·
-  duration · how long ago*; a video you stopped part‑way shows where you left off (**12:34 / 45:10**) and a red
-  **resume bar** on its thumbnail, a live stream shows LIVE. Each video appears **once**, whatever link shape it was copied as
-  (youtu.be, watch?v=, `t=`…) — copying or playing it again moves it to the top. **↗ Open in YouTube** (or "Open on
-  <site>") opens the video's page in your browser — a YouTube video at the point you left off — and **⬇** downloads;
-  **right‑click** → Play · Download ▸ · Copy Link · Open in Browser · **Add to Favourites** · **Mark as Watched /
-  Unwatched** · **Remove from Recent Links**. ••• → **Clear Recent Links…** (asks first) leaves Favourites and watched
-  marks alone. **The full list (up to 100 recent links) is available immediately**: scroll inside the same
-  320×250 panel, with no expand button. Favourites also start fully listed. **Only video links are captured:** YouTube videos/playlists and direct media files straight away; links
-  from other video sites (Vimeo, Twitch, TikTok, SoundCloud, X, Reddit, Instagram, …) once yt‑dlp finds a single
-  video there; everything else you copy (docs, repos, articles) is ignored and never fetched.
-- **Favourites** — the list's second tab (**Recent Links | ★ Favourites**; the panel remembers which you used last).
-  Add a video from any row's right‑click menu (Recent Links, search results, History, playlists) or from a player's
-  "…" menu — **Add to Favourites** / **Remove from Favourites**. A yellow ★ marks favourites wherever they appear.
-  Clicking one plays it with **your Favourites as Up Next**, so Autoplay/Shuffle/Repeat work through them. A
-  favourite playlist link opens as its playlist. (Favourites replace 3.12's "Pin" for Recent Links: links you'd
-  pinned were moved into Favourites.)
-- **Watched videos are marked:** once you've seen 90% of a video (or reached its last 15 s, or it played to the end),
-  a ✓ appears before its details and its thumbnail dims — in Recent Links, Favourites, search results, History and
-  playlist pages — and it's dimmed in the player's **Up Next ▸** list. Right‑click → **Mark as Watched / Mark as
-  Unwatched** sets it by hand (either one also forgets the resume point, so the video starts from the top).
-- Below: live **download progress** and the videos currently open in your **browser tabs** (Safari + Chromium
-  browsers, via AppleScript + in‑page JS) with **Open All** — that section only appears when a tab actually has a
-  video. The panel is **short** (320×250); anything that doesn't fit scrolls.
-- **YouTube browsing (from Tube):** search results, **History** and **Playlists** open as a page inside the panel
-  under the field (‹ or Esc to go back) with thumbnail rows — click to play in Watch, ↗ to open it on YouTube, ⬇ for
-  download options, right‑click for the row menu (incl. **Add to Favourites**); videos you've partly watched show their
-  resume bar, watched ones a ✓, favourites a ★. History and Playlists
-  live in the **••• menu** (and the icon's right‑click menu), not on the main page. Playlist rows open the
-  playlist or ⬇ download it whole; the Playlists page has **Download All**.
-- **Sturdier search:** **Show More Results** at the bottom asks YouTube for another page (up to 90); a search
-  that hangs gives up after 25 s; a new search or Back **stops the one still running**; results are remembered for
-  10 minutes, so Back and repeat searches are instant. A failed search offers **Try Again**, or **Update yt‑dlp &
-  Try Again** when the error looks like YouTube changed under an old yt‑dlp.
-- **YouTube sign‑in is in Preferences ▸ YouTube Account:** a status line plus **Sign In… / Sign Out / Check**. Sign In…
-  opens a step‑by‑step assistant (pick browser → sign in there → allow access → Connect). Also here: the browser
-  (Auto / Safari / Chrome), an optional account email, and the Chrome profile.
-- **Native playback, no embed errors:** a player window opens instantly with a spinner, yt‑dlp resolves the
-  stream, and everything plays in **AVKit** (tiny hover controls, seeking):
-  - **YouTube up to 1080p60** — YouTube's separate H.264 video + AAC audio files are bridged into an in‑memory
-    **HLS playlist** (byte ranges from each file's `sidx` index), so playback starts in ~2 s and seeks instantly.
-  - **Live streams** (YouTube Live, Twitch, …) play from their **HLS manifest** with adaptive quality.
-  - Other yt‑dlp sites use their best HLS/MP4 stream; local files (path or drag‑drop) play directly.
-  - Fallback chain: next stream plan (e.g. 360p muxed) → YouTube IFrame embed → the page itself.
-- **Downloads, in‑app:** ⬇ on any player window (or its "…" menu), next to the paste field, or on any search/
-  History/playlist row. The menu is split into **Video** and **Audio**: **Original** video (the source file type
-  and codecs, untouched — e.g. WebM/VP9/Opus), **MP4 (Highest Quality)** (top resolution, e.g. 4K; kept as‑is when
-  it's H.264/HEVC, otherwise converted to HEVC on the Mac's hardware encoder at the source bit rate so it plays in
-  QuickTime), **Original Audio** (source stream, no re‑encode) and **MP3 (Source Bit Rate)** (encoded at the
-  source audio's bit rate, rounded up to a legal MP3 rate). **More ▸** keeps compatible H.264 MP4 (≤1080p), 1080/
-  720/480p caps and M4A; whole playlists go into their own folder, plus an **Advanced Formats** list of exact
-  yt‑dlp formats. Up to 3 run at once; the rest wait as **Queued**; live streams can be **recorded**
-  (Stop finalizes the file). Progress shows in the panel's **Downloads** list — click a finished row to reveal
-  it in Finder. Files go to the Preferences download folder (default `~/Downloads`), or — with **Preferences ▸
-  Ask where to save each download** — to a folder you pick for each download.
-- **Up Next — Next / Previous and playback modes (menu items, not on‑screen buttons):** every player window
-  keeps a list it can walk with **Previous ⌘←** and **Next ⌘→** in the "…" (and right‑click) menu, which also
-  shows what's coming (**Next: ‹title›**) and the whole list under **Up Next ▸** (click any row to jump; ✓ marks
-  what's playing). Where the list comes from: whatever you clicked it from — **search results, History, a
-  playlist** — the **playlist a `…&list=…` link carries**, **what youtube.com itself would play next** for a video
-  opened on its own (its autoplay pick, then the sidebar recommendations, topped up as you go), or the **other
-  media files in a local file's folder**. Four toggles sit under it: **Autoplay** (play the next thing when a video
-  ends — on by default), **Repeat All** (loop the list), **Repeat One** (loop this video) and **Shuffle** (random
-  order around whatever is playing, which keeps playing; turning it off restores the real order). They're per window, and a new window starts with your last choice.
-  Pasting a **playlist link** now plays it straight away — the list is read flat first, so nothing waits for yt‑dlp
-  to resolve every entry.
-- **App icon is a play button** (red rounded square, white ▶); the menu‑bar icon is unchanged.
-- **No surprise permission popups:** Watch only talks to browsers that are **running** and have already
-  granted access; **Preferences ▸ Allow Browser Access…** asks macOS once per running browser. Browser‑tab detection can be turned off in Preferences. Terminal is no longer scripted.
-- **Drag a video file or link onto the menu‑bar icon** to play it; drop one onto a player to **replace** it.
-- **The first video takes the panel's place:** it opens right where the panel was (at the usual player size) and
-  the panel hides — click the menu‑bar icon to bring it back. With a player already open, new videos open beside it.
-- **Videos resume where you left off** — YouTube (by video, whatever the link looks like), other sites and local
-  files — and a **"Resumed at 12:34 · Start Over"** chip says so for a few seconds (click it to play from the
-  beginning). Resuming lands on the exact spot (within half a second). A link with `t=` starts there instead; a video
-  you watched to the end (or barely started) starts over. The YouTube embed fallback saves its place too.
-- **Playlists carry on where you were:** opening a playlist link again (pasted, from Recent Links or Favourites, or
-  via the URL scheme) starts at the video you were on — or the next one, if you'd finished it — with a
-  **"Playlist: 8 of 20 · Start from the Top"** chip to go back to the beginning.
-- **The control panel always opens under the menu‑bar icon.** Dragging it off keeps it open until you hide it.
-- **Player windows remember the last one's position and size** (across launches). The first window reopens
-  where the last one was; more windows open **beside** the existing ones at that size, never overlapping, and
-  existing windows stay put. **Tile Windows** (in a player's menu and the panel's ••• menu, whenever 2+ players are
-  open) sorts them all into a grid that fills that screen — each as large as fits at 16:9, keeping their
-  top‑to‑bottom, left‑to‑right order; double‑click a tiled window to get its old size back. App Nap is disabled
-  while something plays.
-- **Minimal player chrome:** only a "…" button at the top, and it appears only while the cursor is over the
-  window. Its menu (also on **right‑click** anywhere on the video) starts with **Close** and **Pin**, then Tile
-  Windows (2+ players), **Add to Favourites**, Up Next, playback modes, downloads, and copy/open link. A **20 pt control bar** (⟲10 ·
-  play/pause · ⟳10 · scrubber · time · mute) fades in at the bottom on hover, set in from the edges so it never
-  competes with the window's resize corners. **Drag anywhere** to move the window. **Click zones:** click the
-  middle to play/pause; double‑click the left or right side (below the top third) to skip back/forward 10 s —
-  keep clicking to skip further; double‑click the top third or the bottom middle to return to the size the window
-  had before its last resize (every manual resize updates it, so double‑clicking again toggles back). The window shrinks to **68×38** without letterboxing. Space =
-  play/pause, ←/→ = ±5 s, ⌘←/⌘→ = previous/next in Up Next.
-- **Clipboard‑plays‑on‑hotkey** (Preferences toggle, default on).
-- **URL scheme handoff:** `glasskit-watch://play?url=<percent-encoded-video-url>` plays a link from any app or script.
+Plays almost any video and downloads it. Hotkey **⌥⌘Y**.
 
-**Installation and included tools**
-- A self-contained universal DMG includes yt-dlp (Python/EJS included), FFmpeg, ffprobe and Deno. No Homebrew, Python or Terminal setup. Requires macOS 13+; real Intel/older-system acceptance is still pending.
-- First launch offers Start Watching, optional Connect YouTube and local helper checks. Media tools update by replacing Watch with a newer installer; helpers never self-modify the signed app.
-- Browser-tab detection requires **"Allow JavaScript from Apple Events"** in that browser's Develop/View menu. Optional account connection may require Keychain or Full Disk Access approval.
-- This personal preview is ad-hoc signed, not Apple-notarized. The installer guide describes the macOS Privacy & Security approval; a seamless public installer still needs Developer ID signing/notarization.
+## The panel
 
-**Known limitations**
-- Detection is scoped to browser tabs (no MediaRemote on this macOS). Local‑app rows (Music, Spotify, TV,
-  QuickTime, VLC) were removed in 3.3 — they caused Automation prompts and couldn't be played anyway.
-- Some sites block yt‑dlp from certain networks (e.g. Vimeo 403) — those fall back to loading the page.
-- In‑window YouTube quality caps at 1080p (H.264); 1440p/4K are VP9/AV1 only.
-- Up Next's **recommendations aren't personalized** — they're read from the public watch page, not your signed‑in
-  account (playlists and History still use your sign‑in). If YouTube reshapes that page, Next simply has nothing
-  to go to until it's taught the new shape; lists you played from keep working.
+Click the menu-bar icon (or press the hotkey) and a small panel drops down under it, 320×250. Drag it away and it stays open until you hide it.
 
-**Changelog**
-- **3.18** — Standalone Watch App repository under MIT, with its own build/test/package commands and no sibling-project dependencies. Fully bundled installer retained; existing preferences and URL handlers remain compatible.
-- **3.17** — **Self-contained installer:** pinned universal media tools, no system-tool fallback, no-Terminal first-run guide with local checks and recovery, optional YouTube connection, included notices/sources. Whole-app updates replace helper self-updates.
-- **3.16** — **Full lists at the same size:** Recent Links and Favourites start fully listed and scroll inside the existing 320×250 panel; All/Less and automatic expansion resizing are removed. **Live search:** typing searches after 350 ms, Return searches immediately without duplicate requests, edits cancel obsolete work, and clear/Escape returns home. Links, local paths and unfinished input-method composition do not auto-search or play.
-- **3.15** — **Watched marks:** videos you've finished (90%, the last 15 s, or played to the end) get a ✓ and a dimmed
-  thumbnail in every list, and are dimmed in Up Next ▸; right‑click **Mark as Watched / Unwatched**. **Favourites:** a
-  second tab beside Recent Links (**★ Favourites**), filled from any row's right‑click menu or a player's "…" menu;
-  playing one queues the rest as Up Next. They replace Recent Links pins (existing pins moved over). **Playback
-  location:** a **"Resumed at 12:34 · Start Over"** chip shows when a video picks up where you left it; resuming now
-  lands on the exact second (it could snap several seconds early); **playlist links carry on at the video you were
-  on**; the YouTube embed fallback saves its position.
-- **3.14** — **Click zones:** click the middle of a video to play/pause; double‑click its left/right side to skip
-  10 s (more clicks, more skips); double‑click the top third or bottom middle to resize. **Playback bar:** bigger (20 pt),
-  inset away from the resize corners, with **⟲10 / ⟳10** buttons; hour‑long times no longer get cut off. Skips now
-  land where they should (they used to snap to the nearest keyframe, sometimes seconds off).
-- **3.13** — **Player menu tidied:** Close and Pin are the top two items; **Picture in Picture removed** (player
-  windows already float). **Tile Windows** — with several players open, one click sorts them into a grid filling the
-  screen (largest 16:9 size that fits, current order kept), from any player's menu or the panel's ••• menu.
-- **3.12** — **Recent Links slimmed down:** thumbnails are now small (32×18, was 64×36). **Pin links** from the
-  right‑click menu (Recent Links rows and search/History/playlist results): pinned links sit on top, skip the cap and
-  survive Clear. **↗ Open in YouTube** beside every row's ⬇ (YouTube videos open at your resume point; other sites
-  open their page).
-- **3.11** — **One field instead of two:** search and paste merged into a single field pinned under the header
-  (Return searches or plays; empty = the copied link; ↑/↓/Return/Esc keyboard control; recent searches in the
-  magnifier menu). **Recent Links redesigned:** thumbnail rows with site, duration, age and a resume bar; one entry
-  per video (link shapes merged); right‑click to remove, ••• → Clear Recent Links…; typing filters them. **Only
-  video links are captured** — other copied URLs are no longer recorded or fetched with yt‑dlp. **Search:** Show
-  More Results, a 25 s timeout, superseded searches stopped, 10‑minute result cache, Try Again / Update yt‑dlp &
-  Try Again on failure. The hide button's icon is now a menu‑bar arrow.
-- **3.10** — **Resume playback:** every video reopens where you left it (saved every few seconds, on pause, on
-  close and on quit; finished videos start over; `t=` links still win). **Shorter panel:** same width, 250 pt tall
-  instead of 520, with the two newest copied links; **All ▾** extends the panel downward to list the rest (the "Play Clipboard
-  Link" button is gone — Play with an empty field does it). **The first video replaces the panel** instead of
-  opening a separate window elsewhere.
-- **3.9** — MP3 downloads probe source bitrate once. Missing/invalid probe results now use the existing best-VBR fallback instead of repeatedly probing. Download queue extracted for isolated regression checks, including cancellation during a probe.
-- **3.8** — **Up Next.** Player windows gained **Previous ⌘← / Next ⌘→ / Up Next ▸** and **Autoplay · Repeat All ·
-  Repeat One · Shuffle**, all in the "…" / right‑click menu. The list is the panel page a video was played from
-  (search results, History, a playlist), the playlist a `list=` link carried, **what youtube.com would play next**
-  for a lone video — read from the watch page's own autoplay pick and sidebar, since yt‑dlp can't list
-  recommendations and `RD…` mixes only exist for music — or the folder a local file sits in. Autoplay is **on** by
-  default. Pasting a playlist link now starts playing immediately (flat read first) instead of waiting for yt‑dlp
-  to resolve the whole playlist.
-- **3.7.1** — **Tube retired.** Watch no longer reads Tube's `com.jacob.tube` preferences as a fallback for YouTube
-  sign‑in; those settings were copied into Watch's own preferences, and Tube was removed from the suite.
-- **3.7** — **Download choices reworked:** the menu is split into **Video** (Original source format · MP4 highest
-  quality, hardware‑converted to HEVC only when the top stream is VP9/AV1) and **Audio** (Original · MP3 at the
-  source bit rate); older presets moved under **More ▸**. The player window's menu offers the same four. New
-  **Preferences ▸ Ask where to save each download** (a folder picker per download; one for Download All).
-  Rows show **Converting…** while ffmpeg re‑encodes. New **play‑button app icon** (included `AppIcon.icns`).
-- **3.6** — **Tube's features folded into Watch, keeping the panel minimal:** a YouTube search bar above the
-  paste bar; search results, **History** and **Playlists** (••• menu) open as in‑panel pages with thumbnail rows
-  (click = play natively, ⬇ = download menu); playlist open / download / Download All. **YouTube sign‑in moved to
-  Preferences** (cookie browser, account, profile, Sign In…, Check). The **browser‑tabs section disappears
-  entirely** when nothing is open (its access button moved to Preferences). Download menu gains 1080/720/480p, MP3,
-  whole‑playlist and Advanced Formats; downloads queue (max 3 concurrent). **Welcome / setup guide** on first
-  launch (reopen: Preferences ▸ Setup Guide…): live yt‑dlp/ffmpeg check and a copy‑paste Homebrew walkthrough,
-  so the DMG can go to friends. The DMG's Read Me now covers the Gatekeeper step and yt‑dlp. **YouTube
-  sign‑in assistant** (Welcome step 4, Preferences ▸ Sign In…, or the History/Playlists pages when signed out):
-  pick Chrome or Safari, open YouTube sign‑in there, get help with the Chrome keychain prompt or Safari's Full
-  Disk Access, then Connect. Preferences shows a signed‑in status with **Sign In / Sign Out / Check**. Sign Out
-  only disconnects Watch. The panel's **••• menu now drops down from the button** (it used to pop up at the
-  panel's bottom corner), and the Welcome window is forced to the front on first launch. **Double‑click to resize
-  returns to the previous size.** It used to go back to the size from the double-click before (often two resizes
-  back); now every manual resize updates the size it returns to.
-- **3.5** — The control panel **always opens under the menu‑bar icon** (it had been reopening at a stale
-  "detached" frame near the bottom of the screen). Only a real mouse drag detaches it now. **Player windows
-  remember the last window's position and size**, and new ones open beside the existing ones without
-  rearranging them.
-- **3.4** — **Tiny players:** the minimum size dropped from 256×144 to 68×38 (still 16:9, about 1.6× the
-  cursor's height). AVPlayerView's built‑in controls forced the view to stay ≥130 pt tall, which blocked
-  shrinking and letterboxed the video, so it's gone. Video now renders on a bare `AVPlayerLayer` with a custom
-  14 pt hover bar at the bottom. Only the **"…"** button is left at the top, and it hides unless you're hovering
-  (⬇ and ✕ moved into its menu, **Close** is at the top, and **Picture in Picture** joins them). **Right‑click**
-  opens the same menu. **Drag anywhere** moves the window. **Double‑click** swaps to the size
-  saved at the previous double‑click. AVKit's full‑screen button and volume slider are gone; there's a mute
-  toggle instead.
-- **3.3** — **Popups fixed:** browser‑tab detection no longer names apps that aren't installed (that popped
-  "Where is Brave Browser?"‑style choosers) or probes Music/Spotify/TV/QuickTime/VLC (Automation prompts);
-  it only reads running browsers that already granted access, with a one‑click "Show videos from…" button
-  instead of automatic prompts, plus a Preferences toggle. Launch‑at‑login no longer re‑registers every launch.
-  **Seamless playback:** every link now plays natively in AVKit — YouTube HD (≤1080p60) via a DASH→HLS bridge,
-  live streams via their HLS manifest — with an instant window + spinner; the IFrame embed is only a fallback.
-  **Downloads:** in‑app video (MP4) / audio (M4A) downloads and live recording with progress in the panel;
-  yt‑dlp updates run in‑app. yt‑dlp is launched directly (argument array, no shell).
-- **3.2** — Added `glasskit-watch://play?url=...` URL-scheme handling for Tube. Watch registers the scheme
-  in `Info.plist`, receives `kAEGetURL`, and routes the decoded URL into the same `play(_:)` pipeline used
-  by paste, clipboard, drag-and-drop, and media rows.
-- **3.1** — **YouTube reliability:** the player is now built with YouTube's **IFrame Player API** under a
-  desktop‑Safari user‑agent, and **auto‑falls back to a yt‑dlp‑resolved direct stream in AVPlayer** when the
-  embed errors or stalls (some videos/networks still throw YouTube's 15x embed errors — the fallback makes it
-  play anyway, ~360p). **⌘V** now pastes into the panel's link field (added the missing Edit menu); **⌘D**
-  duplicates the front player window. **Multi‑window sizing fix:** extra players keep the small single‑window
-  size in a non‑overlapping grid instead of stretching full‑screen. **Drop‑to‑replace:** dropping a link/file
-  on a player window swaps its media in place (dropping on the menu‑bar icon still opens a new window).
-- **3.0** — Full rework from a YouTube‑only mini‑player into an any‑video player: resolution pipeline
-  (YouTube iframe / AVPlayer for everything else), a `WindowManager` with automatic tiling for multiple
-  open players, the media‑monitor control panel (browser tabs + local‑app allowlist), drag‑and‑drop onto
-  the menu‑bar icon, and clipboard link history + clipboard‑plays‑on‑hotkey. Verified live: panel
-  open/anchor, local‑file → AVPlayer playback, multi‑window tiling, and real browser‑tab/local‑app
-  detection. YouTube embed playback itself depends on YouTube not flagging the network/session — this is
-  outside the app's control and unrelated to the code (confirmed by reproducing the same embed error in
-  plain Safari on the same network).
-- **2.0.1** — Fixed embed **error 153** (“video player configuration error”): the player is now hosted in
-  an `<iframe>` on a youtube.com origin instead of loading `/embed/` as a top‑level page. Clean placeholder
-  when no video is loaded; **Quit** in the icon menu is no longer greyed out.
-- **2.0** — Rebuilt as a menu‑bar **mini‑player** that mirrors your browser’s current video.
-- **1.x** — A tabbed in‑window YouTube browser (native window tabs, drag‑out, copy links, yt‑dlp).
+- **One field** at the top: *Search YouTube or paste a link*. It stays put while results show, and it's focused whenever the panel opens.
+- **Typing searches YouTube** after a 350 ms pause. **Return** searches right away, plays a pasted link (with or without `https://`, or a local file path), or lists a playlist link. Return in an empty field plays whatever link you last copied. Links and paths never start playing just from typing.
+- While you type, Favourites and Recent Links are filtered instantly ("Matching Links", favourites first) until the search results arrive. Editing cancels the old search, so a late answer can't replace the current one.
+- **↑/↓ + Return** pick a row. **Esc** clears the field, then goes back, then hides the panel.
+- The magnifier menu lists your recent searches (only ones you submitted, never links) and has **Clear Recent Searches**.
+- **⬇** next to the field downloads the field's link, or the copied one.
+- Below the field: download progress, and any videos open in your browser tabs with **Open All**. That section only shows up when a tab actually has a video.
+- **•••** has History, Playlists, Tile Windows and Clear Recent Links.
 
----
+### Search
 
+- Results come as thumbnail rows: click to play, **↗** to open on YouTube, **⬇** for download options, **+** to add to Up Next, right-click for the full menu.
+- Results have **YouTube | Podcasts | Music** tabs. The tab you pick stays selected for your next searches.
+- **Show More Results** loads another page, up to 90.
+- A search that hangs gives up after 25 seconds. A new search, or Back, stops the one still running. Results are cached for 10 minutes, so Back and repeat searches are instant.
+- A failed search offers **Try Again**. When the error looks like YouTube changed under an old yt-dlp, there's also a button that explains how to update Watch.
+
+## Recent links, favourites and watched marks
+
+**Recent Links** are the video links you copy or play, newest first, up to 100, all in the same scrolling panel. Each row has a small thumbnail, the title, and site · duration · age. A video you stopped partway shows where you left off (12:34 / 45:10) and a red resume bar. Live streams say LIVE.
+
+- Each video appears once, whatever link shape it came from (youtu.be, watch?v=, a `t=` link). Copying it again moves it to the top.
+- Only video links are kept: YouTube videos and playlists, direct media files, and links from other sites once yt-dlp finds a single video there. Anything else you copy (docs, repos, articles) is ignored and never fetched.
+- **↗** opens the video's page in your browser, at your resume point for YouTube. **⬇** downloads.
+- Right-click: Play · Download ▸ · Copy Link · Open in Browser · Add to Favourites · Mark as Watched / Unwatched · Play Next · Play Later · Remove from Recent Links.
+- **Clear Recent Links…** (in •••) asks first and leaves Favourites and watched marks alone.
+
+**Favourites** is the second tab (Recent Links | ★ Favourites). Add a video from any row's right-click menu or a player's "…" menu. A yellow ★ marks favourites wherever they appear. Clicking one plays it with your favourites as Up Next. A favourite playlist opens as its playlist.
+
+**Watched marks.** Once you've seen 90% of a video, reached its last 15 seconds, or played it to the end, it gets a ✓ and a dimmed thumbnail in Recent Links, Favourites, search results, History and playlist pages, and it's dimmed in Up Next. Right-click → Mark as Watched / Unwatched sets it by hand and also forgets the resume point.
+
+**Playlists carry on** where you were. Open a playlist link again and it starts at the video you were on, or the next one if you'd finished it, with a "Playlist: 8 of 20 · Start from the Top" chip.
+
+## YouTube sign-in (optional)
+
+Search and most public videos work without it. Sign-in is under **Preferences ▸ YouTube Account**: a status line plus **Sign In… / Sign Out / Check**. Sign In… walks you through it (pick a browser, sign in there, allow access, Connect). You can also set the browser (Auto / Safari / Chrome), an account email and the Chrome profile. It unlocks **History** and **Playlists**, and videos that ask you to sign in. Sign Out only disconnects Watch.
+
+## Playing videos
+
+A player window opens right away with a spinner while yt-dlp finds the stream. Everything plays in AVKit.
+
+- **YouTube up to 1080p60.** The separate H.264 video and AAC audio files are stitched into an in-memory HLS playlist (using byte ranges from each file's `sidx` index), so playback starts in about 2 seconds and seeking is instant.
+- **Quality follows the window.** YouTube's lower H.264 renditions (360/480/720p) go into the same playlist, and the player caps the picture at the window's size, so a small window plays 480p and a big one switches up to 1080p as you resize. The "…" menu shows what you're getting ("Playing at 720p").
+- **Live streams** (YouTube Live, Twitch and so on) play from their HLS manifest and adapt their own quality.
+- **Other sites** use their best HLS or MP4 stream. **Local files** (a path, or drag and drop) play directly.
+- **When a stream fails**, Watch tries the next plan (another rendition, then 360p muxed). A YouTube video that still won't play shows why in the window, never YouTube's own page, with **Sign In… / Try Again / Open in Browser / Copy Details**. If YouTube asks Watch to prove it isn't a bot and an account is connected, Watch retries once with that sign-in. Slow answers show "Still loading…" for up to 60 seconds. Failures are logged to `~/Library/Logs/Watch/playback.log`. Other sites fall back to loading their page.
+- **Resume.** Videos reopen where you left them (YouTube by video id, other sites, local files), within half a second. A "Resumed at 12:34 · Start Over" chip shows for a few seconds. A link with `t=` starts there instead, and a video you finished or barely started starts over.
+
+## Player windows
+
+- Windows are minimal: a "…" button at the top that only shows while the pointer is over the window, and a thin 20 pt control bar at the bottom on hover (⟲10 · play/pause · ⟳10 · scrubber · time · volume), set in from the corners so it doesn't fight the resize handles. Hover the speaker for a volume slider.
+- **Drag anywhere** to move. The window can shrink to 68×38 without letterboxing.
+- **Click zones.** Click the middle to play/pause. Double-click the left or right side (below the top third) to skip back or forward 10 seconds; keep clicking to skip further. Double-click the top third or the bottom middle to return to the window's size before its last resize (every manual resize updates it, so a second double-click toggles back).
+- **Keys:** Space play/pause · ←/→ ±5 s · ↑/↓ volume · ⌘←/⌘→ previous/next in Up Next.
+- The "…" menu (also on right-click) starts with **Close** and **Pin**, then Tile Windows (with 2+ players), Add to Favourites, Up Next, playback modes, downloads, and copy/open link.
+- **Positions.** The first window reopens where the last one was. More windows open beside the existing ones (and the music window), never on top of them while there's room, otherwise they cascade. **Tile Windows** sorts all players into a grid that fills the screen, each as big as fits at 16:9, keeping their order.
+- **The first video takes the panel's place** and the panel hides; click the menu-bar icon to bring it back.
+- **Drop a link or file** on a player to replace what it's playing, or on the menu-bar icon to open a new one.
+- App Nap is turned off while something plays.
+
+## Music, podcasts and Now Playing
+
+While Music, Spotify, Podcasts or another audio app plays (or is paused), the list starts with a **Now Playing** row: artwork, the title, and *artist · app*. Click it (or **⤢**) to open the artwork in a floating window.
+
+- The window follows the music: the next track's artwork cross-fades in without taking focus. **Only music changes it.** A video, in a browser tab or a Watch player, never replaces the song.
+- Hover anywhere for the caption and "…". Rest the pointer on the caption, or just above it, and one row of controls slides in: **⏮ ⏯ ⏭**, a timeline with elapsed and remaining time (drag to seek), **shuffle**, **repeat**, and a volume slider. In a small window, the elapsed time drops out first, then shuffle and repeat, then the slider.
+- For Music and Spotify, shuffle, repeat and volume set **that app's own** settings (Music's repeat goes off → all → this song; Spotify's is on/off). macOS asks once, on your first click. Other music apps are controlled only while they hold the system's Now Playing slot, otherwise the buttons dim.
+- Watch only acts on another app when you click. It reads Now Playing information only while the panel or the artwork window is open.
+- **Clicks:** a click anywhere plays or pauses (after about a third of a second, so a double-click doesn't also toggle). A quick double-click (within 0.3 s) opens the music in its app. A double-click near the far left or right edge skips 10 seconds. Space, ←/→ and F work too.
+- Right-click or "…": **Copy · Save…** (the original image, named *Artist – Album*) · **Open in Preview** · **Search YouTube for this song** · **Show ‹App›**. Esc closes.
+- **Full screen** (**F**, **⌃⌘F**, or the menu): the artwork sits over a gradient of its own colours, or black (…▸ Full-Screen Background). The title, "…" and pointer fade after a couple of idle seconds.
+- Turn the row off with **Preferences ▸ Show what's playing in other apps**.
+
+**Podcasts.** Search Apple's podcast directory from the Podcasts tab (no account). Pick a show, or paste an Apple Podcasts show link or a feed, to see its episodes newest first, with date, length, a resume bar and ✓. Episodes play in the music window, resume where you left off, and get a ✓ when finished (right-click to Mark as Played). **+** adds one to Up Next, **↗** opens it in Apple Podcasts, **⬇** downloads it. Pasted episode links work the same and show up in Recent Links.
+
+**Your Music library.** The Music tab searches songs in the Music app (names, artists, albums). Click one to play it in Music, or **+** to add it to Up Next. Watch only looks while Music is open and you've allowed it; otherwise the tab offers **Open Music** or **Allow…**.
+
+## Up Next
+
+Every player window has a list it can walk through with **Previous (⌘←)** and **Next (⌘→)** in the "…" menu, which also shows **Next: ‹title›** and the whole list under **Up Next ▸** (click a row to jump). Where the list comes from:
+
+- the page you clicked the video from (search results, History, a playlist, Favourites);
+- the playlist a `list=` link carries;
+- for a lone video, what youtube.com itself would play next (its autoplay pick, then the sidebar recommendations, topped up as you go);
+- for a local file, the other media files in its folder.
+
+Under it are **Autoplay** (on by default), **Repeat All**, **Repeat One** and **Shuffle**. They're per window, and a new window starts with your last choice. Pasting a playlist link plays it straight away.
+
+**The shared queue.** The music window has a list that drops down under it (the **≡** button, **⌥⌘U**, or its menu). It shows **Now Playing**, **Playing Next**, the rest, **Then: Continue in Music/Spotify**, and a collapsed **History**.
+
+- Add with **Play Next** / **Play Later** from any row's right-click menu, or its **+** button (⌥-click = Play Next); **⌥Return** in the field; several files or links dropped on the menu-bar icon (or one with ⌥); drops on the list itself; or `glasskit-watch://queue?url=…`.
+- It mixes YouTube and other sites (they open in a video window beside the music window when their turn comes), audio files and direct audio links (played by Watch in the music window, with their own tags and artwork), podcast episodes, and Spotify songs and episodes (played by the Spotify app; Spotify albums and playlists just open in Spotify).
+- If Music or Spotify is playing when you add something, Watch waits for the current song to end, pauses that app, plays your items, and when the list runs out the app carries on with its own queue. (Apple doesn't let other apps see Music's queue.) macOS asks once for Watch to control that app.
+- Drag rows to reorder, ⌫ removes, double-click or Return plays a row, **Clear** removes what you added. If you pick something else in Music or Spotify yourself, Watch lets go and the list shows **Resume**.
+- The queue is kept when you close the music window or quit: the list offers **Up Next from before ▸ Resume**.
+
+**Video windows** can show their own list too: **⌥⌘U** or **Show Up Next List** in the "…" menu. It's that window's list (playlist, search results, folder or YouTube's next videos); drag to reorder, ⌫ removes, double-click plays, and you can drop videos, files or links on it to play them next in that window.
+
+## Downloads
+
+⬇ is on every player window (and its "…" menu), beside the field, and on every search, History and playlist row.
+
+- **Video:** **Original** (the source file type and codecs, untouched, e.g. WebM/VP9/Opus) or **MP4 (Highest Quality)** (top resolution, e.g. 4K; kept as is when it's H.264 or HEVC, otherwise converted to HEVC on the Mac's hardware encoder at the source bit rate so QuickTime can play it).
+- **Audio:** **Original Audio** (no re-encode) or **MP3 (Source Bit Rate)** (the source's bit rate, rounded up to a valid MP3 rate).
+- **More ▸** has compatible H.264 MP4 (≤1080p), 1080/720/480p caps, M4A, and an **Advanced Formats** list of exact yt-dlp formats. Whole playlists go into their own folder, and the Playlists page has **Download All**.
+- Up to 3 downloads run at once; the rest wait as **Queued**. Rows show **Converting…** while FFmpeg re-encodes. Live streams can be **recorded**; Stop finalizes the file.
+- Progress is in the panel's **Downloads** list; click a finished row to reveal it in Finder. Files go to the folder set in Preferences (default `~/Downloads`), or, with **Ask where to save each download** on, to a folder you pick each time.
+
+## Around macOS
+
+- **Media keys and Control Center.** Whatever Watch plays (a video window, or a song, file or podcast in the music window) shows in Now Playing with its picture, and the media keys, AirPods and headphone buttons play/pause, skip and scrub it. When only Music or Spotify is playing, the keys stay theirs.
+- **Music pauses for your videos.** If Music or Spotify is playing when you start something in Watch, Watch pauses it, and plays it again when you close Watch's videos. Both are on by default in Preferences ▸ General.
+- **Finder ▸ Open With ▸ Watch.** A video plays in a window; audio files, folders or several files go to Up Next. Watch never makes itself the default app.
+- **Hotkey** ⌥⌘Y opens the panel. If a video link is on your clipboard and **Clipboard plays on hotkey** is on (the default), it plays that link instead.
+- **URL scheme.** `glasskit-watch://play?url=<percent-encoded link>` plays a link from any app or script; `glasskit-watch://queue?url=…` adds one to Up Next.
+- **Browser tabs.** Watch lists videos playing in Safari, Chrome, Brave, Edge and Arc, using AppleScript and in-page JavaScript. It only talks to browsers that are running and have already allowed it. **Preferences ▸ Allow Browser Access…** asks macOS once per running browser, and detection can be switched off there. Each browser also needs "Allow JavaScript from Apple Events" (Develop or View menu).
+
+## What's in the app
+
+yt-dlp (with Python and EJS), FFmpeg, ffprobe and Deno are bundled, so there's no setup. They update when you replace Watch with a newer release. On first launch a short guide offers **Start Watching**, an optional YouTube connection, and a check of the bundled tools (rerun it under Preferences ▸ Setup Guide).
+
+## Limits
+
+- Browser-tab detection covers browsers only. Music, Spotify, TV, QuickTime and VLC rows were removed in 3.3 because they triggered Automation prompts. The Now Playing row shows what those apps play, with artwork, without Automation, but doesn't play it in Watch.
+- Some sites block yt-dlp from certain networks (Vimeo sometimes returns a 403). Those fall back to loading the page.
+- In-window YouTube caps at 1080p (H.264). 1440p and 4K are VP9 or AV1 only; download them instead.
+- Up Next's recommendations aren't personalised. They're read from the public watch page, not your account, so if YouTube reshapes that page, Next has nothing to go to until Watch is updated. Lists you played from keep working.
+- Now Playing relies on a workaround (the system's perl loading the bundled mediaremote-adapter) for the limit macOS 15.4 put on reading Now Playing information. If a later macOS closes it, the row stops appearing.
+- Music library search only covers songs in your library, not the Apple Music catalogue, and lists the first 50 matches.
+- Podcasts: paid (Apple Podcasts Subscriptions) and private feeds aren't playable. A show page lists the newest 200 episodes. Apple Podcasts' own library and listening history aren't read.
+- Builds are ad hoc signed and not notarized (see the README for the first-launch steps).
+
+## Changelog
+
+- **3.25.** Now Playing artwork window with its own controls, podcasts, Music library search, one Up Next queue under the music window (and a list in each video window), media keys and Control Center, Finder's Open With, YouTube always plays natively with a proper error card, quality that follows the window size, a volume slider in video windows, and windows that open beside each other. Builds 3.19 to 3.24 were development steps toward this and were never released on their own. See [the release notes](releases/v3.25.md).
+- **3.18.** First release from this repository, under MIT, with its own build, test and package scripts.
+- **3.17.** Self-contained installer: pinned universal yt-dlp, FFmpeg, ffprobe and Deno inside the app, a first-run guide, optional YouTube connection, bundled notices and sources. Tools update by replacing the app.
+- **3.16.** Recent Links and Favourites list in full inside the same 320×250 panel. Live search: typing searches after 350 ms, Return searches at once without duplicating the request, edits cancel obsolete work.
+- **3.15.** Watched marks, Favourites (replacing Recent Links pins), a "Resumed at…" chip, and playlists that carry on where you left off. Resume lands within half a second instead of snapping to a keyframe.
+- **3.14.** Click zones on the player, a bigger playback bar with ⟲10 / ⟳10, skips that land where they should.
+- **3.13.** Player menu starts with Close and Pin. Picture in Picture removed (players already float). Tile Windows added.
+- **3.12.** Smaller thumbnails in Recent Links, pins, and ↗ Open in YouTube on every row.
+- **3.11.** Search and paste merged into one field. Recent Links redesigned as thumbnail rows, one per video, and only video links are kept. Sturdier search: Show More, a 25 s timeout, a 10-minute cache, Try Again.
+- **3.10.** Every video resumes where you left it. A shorter panel, and the first video takes the panel's place.
+- **3.9.** MP3 downloads probe the source bit rate once.
+- **3.8.** Up Next for player windows: Previous/Next and Autoplay, Repeat All, Repeat One and Shuffle.
+- **3.7.1.** Tube retired; its settings were copied into Watch.
+- **3.7.** Download choices reworked into Video (Original / MP4 highest quality) and Audio (Original / MP3). Ask where to save each download. New app icon.
+- **3.6.** Tube's features folded in: YouTube search, History and Playlists in the panel, sign-in under Preferences, more download formats and a queue, a welcome guide.
+- **3.5.** The panel always opens under the menu-bar icon. Player windows remember their position and size.
+- **3.4.** Tiny players (down to 68×38) on a bare AVPlayerLayer with a custom hover bar.
+- **3.3.** No more surprise permission popups from browser detection. Every link plays natively in AVKit, with an instant window. In-app downloads and live recording.
+- **3.2.** `glasskit-watch://play` URL scheme.
+- **3.1.** More reliable YouTube playback, ⌘V into the field, ⌘D to duplicate a player, drop-to-replace.
+- **3.0.** Rebuilt from a YouTube-only mini player into an any-video player with a control panel, multiple tiled windows, drag and drop, and link history.
+- **2.x and 1.x.** A menu-bar mini player that mirrored your browser's current video, and before that a tabbed in-window YouTube browser.

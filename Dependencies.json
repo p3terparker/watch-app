@@ -46,5 +46,12 @@
       "url": "https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz",
       "sha256": "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e"
     }
+  },
+  "sources": {
+    "mediaremote-adapter": {
+      "url": "https://github.com/ungive/mediaremote-adapter",
+      "commit": "0e82bf1c44ec39554fbfc402ec88a48c6ae2a0fd",
+      "license": "BSD-3-Clause"
+    }
   }
 }
