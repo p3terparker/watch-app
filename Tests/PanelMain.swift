@@ -552,14 +552,19 @@ vertical.dragAxis = .vertical
 var verticalDrags: [(CGFloat, Bool)] = []
 vertical.onDrag = { verticalDrags.append(($0, $1)) }
 viewer.window.contentView!.addSubview(vertical)
-vertical.mouseDown(with: mouse(.leftMouseDown, vertical, NSPoint(x: 10, y: 10), clicks: 1))
-vertical.mouseDragged(with: mouse(.leftMouseDragged, vertical, NSPoint(x: 30, y: 11), clicks: 1))
+// A button's own coordinates are flipped (y grows downward), so the events are built from window points: "up" is up on screen.
+let pressedAt = vertical.convert(NSPoint(x: 10, y: 10), to: nil)
+let movedUp = { (dy: CGFloat, dx: CGFloat) -> NSPoint in vertical.convert(NSPoint(x: pressedAt.x + dx, y: pressedAt.y + dy), from: nil) }
+vertical.mouseDown(with: mouse(.leftMouseDown, vertical, movedUp(0, 0), clicks: 1))
+vertical.mouseDragged(with: mouse(.leftMouseDragged, vertical, movedUp(1, 20), clicks: 1))
 check(verticalDrags.isEmpty, "sideways movement doesn't start a vertical drag")
-vertical.mouseDragged(with: mouse(.leftMouseDragged, vertical, NSPoint(x: 10, y: 22), clicks: 1))
-check(verticalDrags.count == 1 && verticalDrags[0].0 > 8 && verticalDrags[0].0 < 16 && !verticalDrags[0].1,
-      "moving up 12 pt starts a drag of about +12 (\(verticalDrags))")
-vertical.mouseUp(with: mouse(.leftMouseUp, vertical, NSPoint(x: 10, y: 22), clicks: 1))
-check(verticalDrags.count == 2 && verticalDrags[1].1 && abs(verticalDrags[1].0 - (verticalDrags.first?.0 ?? 0)) < 0.01,
+vertical.mouseDragged(with: mouse(.leftMouseDragged, vertical, movedUp(12, 0), clicks: 1))
+check(verticalDrags.count == 1 && abs(verticalDrags[0].0 - 12) < 0.01 && !verticalDrags[0].1,
+      "moving up 12 pt on screen starts a drag of +12 (\(verticalDrags))")
+vertical.mouseDragged(with: mouse(.leftMouseDragged, vertical, movedUp(-6, 0), clicks: 1))
+check(verticalDrags.count == 2 && abs(verticalDrags[1].0 + 6) < 0.01, "moving down below the press is negative (\(verticalDrags))")
+vertical.mouseUp(with: mouse(.leftMouseUp, vertical, movedUp(-6, 0), clicks: 1))
+check(verticalDrags.count == 3 && verticalDrags[2].1 && abs(verticalDrags[2].0 + 6) < 0.01,
       "…and ends finished on release at the same distance (\(verticalDrags))")
 vertical.removeFromSuperview()
 // Once up, a larger zone keeps them, so the band growing and the text lifting can't make them flicker.
