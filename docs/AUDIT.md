@@ -1,5 +1,27 @@
 # Watch verification
 
+## 3.25 (57) — music window hover and clicks, 2026-10-30 (preview; hands-on acceptance pending)
+
+Music window only (`ArtworkWindowController`); video windows and full screen are unchanged. The playback controls no longer show
+whenever the pointer is over the window: they come up after a 0.08 s dwell in `ArtworkLayout.revealZone` (the 64 pt caption band
+plus a 40 pt reach, ≤ 30% of a small window's height), keep a larger zone once up (the grown band + the reach, so the lift can't
+make them flicker), ease in over 0.25 s (ease-out) and go 0.4 s after the pointer leaves that zone or the window (0.3 s
+ease-in-out; never mid-drag). The caption and "…" still show on hovering anywhere and now fade on the same 0.4 s. Clicks are timed
+by Watch (`MusicClicks`, `MusicZone.window(system:)` = `min(system interval, 0.3 s)`) instead of AppKit's `clickCount`: a single
+click plays/pauses after window + 0.02 s (≈ 0.32 s, was ≈ 0.55 s), a second click joins only within the window of the previous
+one, a late one is a fresh single click (it never opens the app or skips), and an earlier click still waiting plays/pauses at once
+instead of being swallowed by the next. No preference keys, bundle ID, hotkey or URL handlers changed.
+
+### Verification
+
+- Authored without a local Swift toolchain; GitHub Actions on macOS compiles and tests it.
+- CI results: pending (recorded below once the run has finished).
+- Manual (pending, needs a real Mac): the feel of the reveal (dwell, reach, ease in/out, the delay on leaving) with a mouse and a
+  trackpad, at the default window size and a small one; that sweeping across the bottom doesn't flash the controls; dragging the
+  timeline/volume out of the zone keeps them until release; the click timing (single click ≈ a third of a second, a quick
+  double-click opening Music/Spotify and skipping at the edges, a slower second click acting as another click); full screen
+  unchanged; a system double-click interval set faster than 0.3 s is respected.
+
 ## 3.24 (56) — part of your Mac, 2026-10-30 (preview; hands-on acceptance pending)
 
 Watch's own playback in macOS's Now Playing with media keys / Control Center / headphone commands

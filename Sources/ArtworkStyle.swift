@@ -66,6 +66,20 @@ enum ArtworkLayout {
     static let controlsHeight: CGFloat = 26                     // one row: buttons, timeline, shuffle/repeat, volume
     static let windowBand: CGFloat = 64                         // the window's caption band; + controlsHeight when revealed
     static let minTimeline: CGFloat = 48
+    // 3.25: the controls come up when the pointer is over the caption band or this far above it, so they are there as it moves
+    // toward the text. On a small window the reach is capped at a share of its height.
+    static let revealReach: CGFloat = 40, maxReachShare: CGFloat = 0.3
+
+    // Where the pointer reveals the controls (`revealed` false) or keeps them showing (true): full width, from the bottom edge
+    // up to the caption band plus the reach. Once revealed the band has grown by the controls' row (the text lifts), and the
+    // zone grows with it — so the lift itself can't take the pointer out of it and make them flicker. Unflipped coordinates
+    // (y up), like the window's surface; empty for an empty window.
+    static func revealZone(window: CGSize, revealed: Bool) -> CGRect {
+        guard window.width > 0, window.height > 0 else { return .zero }
+        let band = windowBand + (revealed ? controlsHeight : 0)
+        let reach = min(revealReach, window.height * maxReachShare)
+        return CGRect(x: 0, y: 0, width: window.width, height: min(window.height, band + reach))
+    }
 
     // The controls' row at `width`. When it can't all fit, parts drop out in this order: the elapsed time, shuffle/repeat,
     // the volume slider (the speaker stays), the remaining time, ⏮/⏭ — the timeline (when there's a length) and ⏯ stay.

@@ -254,6 +254,35 @@ expect(MusicZone.at(CGPoint(x: 255, y: 0), in: musicSide) == .skipForward && Mus
        "the right strip skips forward")
 expect(MusicZone.at(CGPoint(x: 75, y: 150), in: musicSide) == .main, "where a video window would skip, the music window opens the source")
 expect(MusicZone.at(CGPoint(x: 10, y: 10), in: .zero) == .main, "no size: no strips")
+// 3.25: the music window times its click runs itself (0.3 s), not by AppKit's clickCount (the system's, usually 0.5 s).
+expect(MusicZone.doubleClickWindow == 0.3 && MusicZone.clickMargin == 0.02, "the double-click window and the toggle margin")
+expect(MusicZone.window(system: 0.5) == 0.3 && MusicZone.window(system: 5) == 0.3, "the default 0.5 s is cut to 0.3 s")
+expect(MusicZone.window(system: 0.2) == 0.2 && MusicZone.window(system: 0.3) == 0.3, "a faster system setting is kept")
+expect(MusicZone.window(system: 0) == 0.3 && MusicZone.window(system: -1) == 0.3, "a nonsense interval falls back to 0.3 s")
+expect(MusicZone.window(system: 0.5) + MusicZone.clickMargin < 0.35, "so a single click waits about 0.32 s, not the old 0.55 s")
+var musicRun = MusicClicks()
+expect(musicRun.window == 0.3 && musicRun.count == 0, "a new run is empty, with the 0.3 s window")
+expect(musicRun.press(at: 100, first: true) == 1 && musicRun.count == 1, "a lone click is a single click")
+expect(musicRun.press(at: 100.25) == 2, "a second click within the window makes a double-click")
+expect(musicRun.press(at: 100.5) == 3, "each click is timed from the one before, so a run keeps counting")
+expect(musicRun.press(at: 100.9) == 1, "a click after the window is a fresh single, though AppKit (0.5 s) would call it a repeat")
+expect(musicRun.press(at: 101) == 2, "…and the next quick click joins that new run")
+expect(musicRun.press(at: 101.05, first: true) == 1, "a click AppKit counts as a first click starts a run, whatever the clock says")
+expect(musicRun.press(at: 101.1) == 2, "…which the next click can join")
+expect(musicRun.press(at: 50) == 1, "a clock that went backwards starts over")
+var edgeRun = MusicClicks(window: 0.25)
+expect(edgeRun.press(at: 10, first: true) == 1 && edgeRun.press(at: 10.25) == 2 && edgeRun.press(at: 10.5) == 3, "a click exactly at the window still joins")
+expect(edgeRun.press(at: 10.8125) == 1, "a hair later does not")
+var stackRun = MusicClicks()
+var stackCounts: [Int] = []
+for t: Double in [200, 200.125, 200.25, 200.375, 200.5] { stackCounts.append(stackRun.press(at: t, first: t == 200)) }
+expect(stackCounts == [1, 2, 3, 4, 5], "a quick run counts up, one skip per click (\(stackCounts))")
+var slowRun = MusicClicks()
+var slowCounts: [Int] = []
+for t: Double in [300, 300.5, 301, 301.5, 302] { slowCounts.append(slowRun.press(at: t)) }
+expect(slowCounts == [1, 1, 1, 1, 1], "clicks half a second apart are never a double-click (\(slowCounts))")
+slowRun.reset()
+expect(slowRun.count == 0 && slowRun.press(at: 302.125) == 1, "after a reset the next click is a single, even a moment after the last")
 expect(PlayerZone.at(CGPoint(x: 500, y: -5), in: player) == .skipForward, "points just outside clamp to the nearest zone")
 expect(PlayerZone.at(.zero, in: .zero) == .resize, "an empty view has no play/skip zones")
 

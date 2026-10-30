@@ -1,4 +1,4 @@
-# Watch — v3.24 · Beta *(reworked)*
+# Watch — v3.25 · Beta *(reworked)*
 **Plays almost any video, from anywhere — and downloads it.** Hotkey **⌥⌘Y**.
 
 **Features**
@@ -16,8 +16,8 @@
   track's artwork cross‑fades in without ever taking focus. **Only music changes it:** a video — in a browser tab or a
   Watch player — never replaces the song (videos keep their own windows), and Music/Spotify's own track‑change
   broadcasts keep it right even while a video holds macOS's single "now playing" slot. **Clicks:** a **click anywhere**
-  plays/pauses (a brief ⏸/▶ shows; it waits out the double‑click interval so a double‑click doesn't also toggle),
-  a **double‑click** opens the music **in its app** (Music shows the song, Spotify/Podcasts/others come forward, launched
+  plays/pauses (a brief ⏸/▶ shows; it waits about a third of a second so a double‑click doesn't also toggle),
+  a quick **double‑click** (within 0.3 s) opens the music **in its app** (Music shows the song, Spotify/Podcasts/others come forward, launched
   again if they quit), and only a **double‑click near the far left/right edge** (15% of the width, at least 36 pt) goes
   back/forward 10 s (keep clicking to go further); Space, ←/→ (±5 s), F.
   Right‑click or "…" →
@@ -26,13 +26,14 @@
   menu, or the row's **Open Full Screen**: the artwork fills the middle of the screen over a
   **gradient of its own colours** — or **black** (… ▸ Full‑Screen Background, remembered) — with the title and artist
   under it; they, the "…" and the pointer fade after a couple of idle seconds. It still follows the music; Esc leaves full screen.
-  **Playback controls:** as soon as the pointer is **anywhere over the window**, the caption and **one row** of quiet
-  controls appear under the title — **⏮ ⏯ ⏭** on the left, a thin timeline with elapsed / remaining time (drag to
+  **Playback controls:** hovering **anywhere over the window** shows the caption and "…"; resting the pointer **on the
+  caption or just above it** (the bottom of the window, with a little reach upwards) brings up **one row** of quiet
+  controls under the title — **⏮ ⏯ ⏭** on the left, a thin timeline with elapsed / remaining time (drag to
   seek), **🔀 shuffle** and **🔁 repeat**, and for Music and Spotify a small **volume** slider that sets that app's own
   volume (macOS asks once, the first time you drag it). **Shuffle and repeat are the app's own** (never Watch's): lit
   while on; Music's repeat goes off → all → this song, Spotify's is on/off; macOS asks once, on the first click. In a
-  small window the elapsed time gives way first, then shuffle/repeat, then the volume slider (the speaker stays). They
-  stay while the pointer is over the window and fade about a second after it leaves.
+  small window the elapsed time gives way first, then shuffle/repeat, then the volume slider (the speaker stays). They ease
+  in after a short dwell, stay while the pointer is near the caption, and ease out about 0.4 s after it moves away.
   Music and Spotify are controlled directly (addressed to that app, so a click can never pause a video instead; macOS
   asks once, on the first click); other music apps only while they hold the "now playing" slot (otherwise the buttons
   dim). Watch only acts on another app when you click — it reads macOS's Now Playing information only while the panel
@@ -213,9 +214,13 @@
 - **3.21** — **Up Next:** one queue under the music window for videos, audio files/links and Spotify songs, with Play Next
   / Play Later everywhere, ⌥Return, drops, a `queue` URL, editing (drag, ⌫, Clear), History, and slotting into Music or
   Spotify at a song's end, then handing back. Spotify links are played by the Spotify app and kept in Recent Links.
+- **3.25** — **Music window hover and clicks:** the playback controls come up only when the pointer rests on the caption or
+  just above it (not over the whole window), ease in and out, and go a moment after the pointer leaves; a single click
+  plays/pauses after about 0.32 s instead of 0.55 s, a double‑click must be quick (within 0.3 s) to open the app, and a
+  slower second click is just another click. Video windows unchanged.
 - **3.20** — **Music window controls:** one row under the title (⏮ ⏯ ⏭ · timeline · shuffle · repeat · volume), with
   **shuffle and repeat** that set Music's/Spotify's own settings; the controls appear on hovering anywhere over the window
-  and fade a second after leaving; **click anywhere** plays/pauses, **double‑click** opens the music in its app, and
+  and fade a second after leaving (3.25 narrowed this to the caption); **click anywhere** plays/pauses, **double‑click** opens the music in its app, and
   ∓10 s moved to narrow strips at the far edges. Full screen is on F / ⌃⌘F / the menu. Video windows unchanged.
 - **3.19** — **Now Playing artwork:** a Now Playing row for whatever another app is playing, opening its artwork in a
   floating window that follows the music (Copy · Save · Open in Preview · Search YouTube · Show ‹App›), with a full-screen

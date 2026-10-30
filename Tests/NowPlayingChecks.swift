@@ -206,6 +206,7 @@ func checkArtworkStyle() {
     expect(small.caption.size.width == 558 && small.art.size.width == 558, "small art is scaled up to the same spot")
     expect(ArtworkLayout.fullScreen(artwork: .zero, in: screen).art.size == CGSize(width: 558, height: 558), "unknown shape: square")
     checkControlRow()
+    checkRevealZone()
 }
 
 // The music window's one row of controls: ⏮ ⏯ ⏭ from the left, elapsed · timeline · remaining, shuffle · repeat, volume at
@@ -247,6 +248,46 @@ func checkControlRow() {
     let denied = row(376, volume: .icon)
     expect(denied.volume == nil && denied.volumeIcon != nil, "not allowed: the speaker alone")
     expect(row(376, long: true).elapsed!.width > wide.elapsed!.width, "hour-long tracks get wider times")
+}
+
+// 3.25: where the pointer reveals (and then keeps) the music window's controls — the caption band plus a short reach above it,
+// larger once revealed so the lift can't make them flicker.
+func checkRevealZone() {
+    let band = ArtworkLayout.windowBand, reach = ArtworkLayout.revealReach, row = ArtworkLayout.controlsHeight
+    let window = CGSize(width: 320, height: 320)
+    let reveal = ArtworkLayout.revealZone(window: window, revealed: false), keep = ArtworkLayout.revealZone(window: window, revealed: true)
+    func reveals(_ x: CGFloat, _ y: CGFloat) -> Bool { reveal.contains(CGPoint(x: x, y: y)) }
+    func keeps(_ x: CGFloat, _ y: CGFloat) -> Bool { keep.contains(CGPoint(x: x, y: y)) }
+    expect(reveal == CGRect(x: 0, y: 0, width: 320, height: band + reach), "reveal zone: the caption band and the reach, full width (\(reveal))")
+    expect(band + reach == 104, "the numbers: 64 pt of band and 40 pt of reach")
+    expect(keep == CGRect(x: 0, y: 0, width: 320, height: 130), "revealed: 90 + 40 (\(keep))")
+    expect(reveals(160, 0) && reveals(0, 30) && reveals(319, 30), "the caption itself reveals them, edge to edge")
+    expect(reveals(160, band + 1) && reveals(160, 103.5), "and the reach above the caption: they come up as the pointer approaches it")
+    expect(!reveals(160, 104) && !reveals(160, 200) && !reveals(160, 319), "higher up the artwork, nothing")
+    expect(!reveals(-1, 30) && !reveals(320, 30), "nothing outside the window")
+    expect(keeps(160, 114) && keeps(160, 129.5) && !keeps(160, 130), "revealed, the keep zone reaches higher than the zone that revealed them")
+    expect(keep.minX == reveal.minX && keep.minY == reveal.minY && keep.width == reveal.width, "the keep zone starts where the reveal zone does")
+    expect(keep.height - reveal.height == row, "and grows by exactly the controls' row")
+    expect(keeps(160, band + row - 1) && keep.height >= band + row + reach, "the grown band, lifted text and all, is inside it")
+    // Wider or taller windows change nothing but the width.
+    let big = ArtworkLayout.revealZone(window: CGSize(width: 600, height: 600), revealed: false)
+    expect(big == CGRect(x: 0, y: 0, width: 600, height: band + reach), "a big window: the same height, the full width")
+    // Small windows: the reach is at most 30% of the height, and the zone never leaves the window.
+    let small = CGSize(width: 120, height: 120)
+    expect(ArtworkLayout.revealZone(window: small, revealed: false).height == band + 36, "a 120 pt window: the reach shrinks to 36 pt")
+    expect(ArtworkLayout.revealZone(window: small, revealed: true) == CGRect(x: 0, y: 0, width: 120, height: 120), "and the keep zone is the whole window")
+    let tiny = CGSize(width: 100, height: 50)
+    expect(ArtworkLayout.revealZone(window: tiny, revealed: false) == CGRect(x: 0, y: 0, width: 100, height: 50), "a window shorter than the band: all of it")
+    for h: CGFloat in [120, 180, 240, 320, 480, 600] {
+        let size = CGSize(width: 300, height: h)
+        let r = ArtworkLayout.revealZone(window: size, revealed: false), k = ArtworkLayout.revealZone(window: size, revealed: true)
+        let allowed = min(reach, h * ArtworkLayout.maxReachShare)
+        expect(r.height - band <= allowed + 0.001, "the reach stays within its share of the height at \(h) pt")
+        expect(k.height >= r.height && k.height <= h && r.height <= h, "keep ⊇ reveal ⊆ window at \(h) pt")
+    }
+    let none = ArtworkLayout.revealZone(window: .zero, revealed: false)
+    expect(none == CGRect.zero && !none.contains(CGPoint.zero), "no window: no zone")
+    expect(ArtworkLayout.revealZone(window: CGSize(width: 300, height: 0), revealed: true) == CGRect.zero, "no height: no zone")
 }
 
 // The artwork window's playback controls: timing from the stream, the requests they send, the app volume scripts.

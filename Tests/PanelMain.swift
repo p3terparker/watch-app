@@ -284,6 +284,15 @@ func waitFor(_ seconds: TimeInterval, _ done: () -> Bool) -> Bool {
     while !done() && Date() < end { pump(0.05) }
     return done()
 }
+// The music window's controls come up after a short dwell on the caption (3.25): hover there and wait for them, then for their
+// animation to settle (snapshots).
+func revealControls(_ window: ArtworkWindowController?) -> Bool {
+    guard let window = window else { return false }
+    window.pointerMoved(at: NSPoint(x: window.surface.bounds.midX, y: 30))
+    let shown = waitFor(3) { window.controlsRevealed && window.controls.alphaValue > 0.9 }
+    pump(ArtworkWindowController.revealDuration + 0.1)
+    return shown
+}
 let square = artwork(600, 600), wide = artwork(640, 360)
 check(panel.nowPlayingRow.isHidden, "no Now Playing row while nothing plays")
 panel.nowPlayingChanged(nowPlayingFixture("Fixture Song", square)); layout()
@@ -339,16 +348,37 @@ panel.nowPlayingChanged(nowPlayingFixture("Third Song", nil))
 check(viewer.pictureData == wide, "a track without artwork keeps the old picture for a moment")
 pump(ArtworkWindowController.placeholderDelay + 0.3)
 check(viewer.pictureData == nil, "then the app's icon stands in")
-// Playback controls: revealed by resting on the caption; they send requests only when clicked (recorded here).
+// Playback controls (3.25): hovering anywhere shows the caption, but the controls come up only after a short dwell on the caption
+// or just above it, and go a moment after the pointer leaves; they send requests only when clicked (recorded here).
 let appRouting = viewer.onCommand               // AppDelegate's: Music/Spotify addressed by AppleScript (fixtureMusic here)
 var sent: [NowPlayingRequest] = []
 viewer.onCommand = { sent.append($0) }
 var timedSong = nowPlayingFixture("Timed Song", square)
 timedSong.duration = 200; timedSong.elapsed = 50; timedSong.elapsedAt = Date(); timedSong.rate = 1
 panel.nowPlayingChanged(timedSong); pump(0.5)
-var area = viewer.window.contentView!.bounds
-viewer.pointerMoved(at: NSPoint(x: area.midX, y: area.maxY - 20)); pump(0.4)
-check(viewer.controlsRevealed && viewer.controls.alphaValue > 0.9, "hovering anywhere over the window reveals the controls at once")
+let area = viewer.window.contentView!.bounds
+let revealZone = ArtworkLayout.revealZone(window: area.size, revealed: false), keepZone = ArtworkLayout.revealZone(window: area.size, revealed: true)
+check(revealZone.height > ArtworkLayout.windowBand && keepZone.height > revealZone.height && keepZone.maxY + 10 < area.height,
+      "the window leaves room above the reveal and keep zones (\(area.size), \(revealZone), \(keepZone))")
+viewer.pointerMoved(at: nil); _ = waitFor(2) { !viewer.chromeVisible && !viewer.controlsRevealed }     // start with the pointer away
+viewer.pointerMoved(at: NSPoint(x: area.midX, y: area.maxY - 20))
+check(viewer.chromeVisible, "hovering anywhere over the window shows the caption and the buttons")
+pump(ArtworkWindowController.revealDwell + 0.3)
+check(!viewer.controlsRevealed && viewer.controls.alphaValue < 0.05, "…but not the playback controls: the pointer isn't on the caption (\(viewer.controls.alphaValue))")
+viewer.pointerMoved(at: NSPoint(x: area.midX, y: revealZone.maxY + 6))
+pump(ArtworkWindowController.revealDwell + 0.3)
+check(!viewer.controlsRevealed, "just beyond the reach above the caption: still not")
+viewer.pointerMoved(at: NSPoint(x: area.midX, y: 28)); viewer.pointerMoved(at: NSPoint(x: area.midX, y: area.maxY - 20))
+pump(ArtworkWindowController.revealDwell + 0.3)
+check(!viewer.controlsRevealed, "a quick sweep across the caption, gone before the dwell, doesn't flash the controls")
+timedSong.elapsedAt = Date(); panel.nowPlayingChanged(timedSong)     // the timeline check below counts from here, not from before the waits
+let approach = Date()
+viewer.pointerMoved(at: NSPoint(x: area.midX, y: revealZone.maxY - 4))
+check(!viewer.controlsRevealed, "just above the caption they wait out a short dwell first")
+check(waitFor(3) { viewer.controlsRevealed && viewer.controls.alphaValue > 0.9 }, "…then come up, as the pointer approaches the text")
+check(Date().timeIntervalSince(approach) >= ArtworkWindowController.revealDwell - 0.02, "…not before the dwell")
+check(viewer.chromeVisible, "the caption stays")
+pump(ArtworkWindowController.revealDuration + 0.1)
 check(!viewer.controls.volume.isHidden && abs(viewer.controls.volume.value - 0.4) < 0.001, "Music's own volume shows its level")
 check(abs(viewer.controls.timeline.value - 0.25) < 0.02, "timeline at the reported position")
 // One row under the caption: ⏮ ⏯ ⏭ from the left, the timeline, then Music's own shuffle/repeat and its volume.
@@ -381,14 +411,29 @@ viewer.controls.timeline.onChange?(0.5, true)
 check(sent.last == .seek(100), "letting go of the timeline halfway seeks to half the length")
 viewer.controls.volume.onChange?(0.7, true)
 check(fixtureMusic.sets.last == 0.7, "the volume slider sets the app's own volume")
-viewer.pointerMoved(at: NSPoint(x: area.midX, y: area.maxY - 20)); pump(0.3)
-check(viewer.controlsRevealed, "they stay while the pointer is anywhere over the window")
-viewer.pointerMoved(at: nil); pump(0.3)
-check(viewer.controlsRevealed, "leaving the window doesn't snap them away")
-viewer.pointerMoved(at: NSPoint(x: 20, y: 20)); pump(ArtworkWindowController.exitGrace + 0.2)
-check(viewer.controlsRevealed, "coming back within the grace keeps them")
-viewer.pointerMoved(at: nil); pump(ArtworkWindowController.exitGrace + 0.4)
-check(!viewer.controlsRevealed, "they fade a moment after the pointer leaves")
+// Once up, a larger zone keeps them, so the band growing and the text lifting can't make them flicker.
+viewer.pointerMoved(at: NSPoint(x: area.midX, y: revealZone.maxY + 10)); pump(ArtworkWindowController.hideDelay + 0.3)
+check(viewer.controlsRevealed, "they stay while the pointer is in the larger keep zone, above where it revealed them")
+// Leaving the keep zone takes them away after a moment (not at once); the caption stays while the pointer is over the window.
+let leftZone = Date()
+viewer.pointerMoved(at: NSPoint(x: area.midX, y: keepZone.maxY + 10))
+check(viewer.controlsRevealed, "moving off doesn't snap them away")
+check(waitFor(ArtworkWindowController.hideDelay + 3) { !viewer.controlsRevealed }, "they go a moment after the pointer leaves the keep zone")
+check(Date().timeIntervalSince(leftZone) >= ArtworkWindowController.hideDelay - 0.05, "…after the delay, not before")
+check(waitFor(2) { viewer.controls.alphaValue < 0.05 }, "the controls fade out")
+check(viewer.chromeVisible, "the caption stays while the pointer is over the window")
+// Back on the caption they return; leaving and coming straight back keeps them (the wait is cancelled).
+check(revealControls(viewer), "back on the caption: the controls return")
+viewer.pointerMoved(at: nil); viewer.pointerMoved(at: NSPoint(x: 20, y: 20)); pump(ArtworkWindowController.hideDelay + 0.3)
+check(viewer.controlsRevealed && viewer.chromeVisible, "coming back before the delay is up keeps them")
+viewer.pointerMoved(at: NSPoint(x: area.midX, y: keepZone.maxY + 10)); viewer.pointerMoved(at: NSPoint(x: 20, y: 20)); pump(ArtworkWindowController.hideDelay + 0.3)
+check(viewer.controlsRevealed, "…also from above them")
+// Leaving the window takes the caption and the controls together, after the delay.
+let leftWindow = Date()
+viewer.pointerMoved(at: nil)
+check(viewer.controlsRevealed && viewer.chromeVisible, "leaving the window doesn't snap them away")
+check(waitFor(ArtworkWindowController.hideDelay + 3) { !viewer.controlsRevealed && !viewer.chromeVisible }, "caption and controls go a moment after the pointer leaves the window")
+check(Date().timeIntervalSince(leftWindow) >= ArtworkWindowController.hideDelay - 0.05, "…after the delay, not before")
 // Videos never take over the music window: a browser tab, a page's WebKit media process or Watch's own player holding
 // macOS's single "now playing" slot leaves the song, its picture and its controls where they were.
 for (bundle, parent) in [("com.google.Chrome", nil), ("com.apple.WebKit.GPU", "com.apple.Safari"), ("com.apple.WebKit.GPU", nil),
@@ -402,43 +447,70 @@ for (bundle, parent) in [("com.google.Chrome", nil), ("com.apple.WebKit.GPU", "c
 check(texts(panel.nowPlayingRow).contains("Timed Song"), "and the panel's Now Playing row")
 check(!viewer.controls.playPause.dimmed, "Music stays controllable while a video holds the slot")
 // A click goes to Music itself (AppleScript to its bundle id), so it can never pause the video holding the slot. It waits
-// out the double-click interval first, so a double-click's first click doesn't play/pause.
+// out the music window's own short double-click window first (MusicZone, 3.25), so a double-click's first click doesn't
+// play/pause.
 viewer.onCommand = appRouting
 let centre = NSPoint(x: viewer.surface.bounds.midX, y: viewer.surface.bounds.midY)
+check(viewer.clickDelay <= MusicZone.doubleClickWindow + MusicZone.clickMargin + 0.001 && viewer.clickDelay < NSEvent.doubleClickInterval + 0.05,
+      "the single-click delay is short, under the old interval + 0.05 s (\(viewer.clickDelay))")
+let firstClick = Date()
 click(viewer.surface, at: centre)
 check(fixtureMusic.performed.isEmpty, "a single click waits to be sure it isn't a double-click")
-pump(viewer.clickDelay + 0.15)
-check(fixtureMusic.performed.count == 1 && fixtureMusic.performed.last?.request == .command(.play) && fixtureMusic.performed.last?.app == "com.apple.Music",
-      "then it plays/pauses Music itself: \(fixtureMusic.performed)")
+check(waitFor(viewer.clickDelay + 3) { fixtureMusic.performed.count == 1 }, "…then it plays/pauses")
+check(Date().timeIntervalSince(firstClick) >= viewer.clickDelay - 0.05, "…not before the window is over")
+check(fixtureMusic.performed.last?.request == .command(.play) && fixtureMusic.performed.last?.app == "com.apple.Music",
+      "it plays/pauses Music itself: \(fixtureMusic.performed)")
 viewer.onCommand = { sent.append($0) }
-// The music window's clicks (MusicZone) and the player's keys.
+// The music window's clicks (MusicZone, MusicClicks) and the player's keys.
 sent = []
-// Waits for the click rather than a fixed pause: a busy runner can be late on the delayed single click (3.23 run 1).
+// Waits for each click's result rather than a fixed pause: a busy runner can be late on the delayed single click (3.23 run 1).
 click(viewer.surface, at: centre); _ = waitFor(viewer.clickDelay + 2) { !sent.isEmpty }
 check(sent == [.command(.pause)] && viewer.info?.isPlaying == false, "a click in the middle pauses: \(sent)")
 let corner = NSPoint(x: 6, y: viewer.surface.bounds.height - 6)
-click(viewer.surface, at: corner); pump(viewer.clickDelay + 0.15)
+click(viewer.surface, at: corner); _ = waitFor(viewer.clickDelay + 2) { sent.count == 2 }
 check(sent.last == .command(.play) && viewer.info?.isPlaying == true, "a click anywhere — even a corner — plays")
-click(viewer.surface, at: NSPoint(x: centre.x, y: 12)); pump(viewer.clickDelay + 0.15)
+click(viewer.surface, at: NSPoint(x: centre.x, y: 12)); _ = waitFor(viewer.clickDelay + 2) { sent.count == 3 }
 check(sent.count == 3 && sent.last == .command(.pause), "and pauses again (the bottom edge too)")
 var openedSources: [String] = []
 viewer.onOpenSource = { openedSources.append($0.appBundleID) }
-click(viewer.surface, at: centre); multiClick(viewer.surface, at: centre, clicks: 2); pump(viewer.clickDelay + 0.15)
-check(openedSources == ["com.apple.Music"] && sent.count == 3, "a double-click opens the song in Music, without playing/pausing (\(sent))")
-pump(ArtworkWindowController.seekHold + 0.1)            // the timeline seek above no longer counts
+// A real double-click is a click and then another within the window.
+click(viewer.surface, at: centre); multiClick(viewer.surface, at: centre, clicks: 2)
+check(openedSources == ["com.apple.Music"], "a double-click within the window opens the song in Music")
+pump(viewer.clickDelay + 0.15)
+check(sent.count == 3, "…without playing/pausing (\(sent))")
+// A second click after the window is a fresh single click, though AppKit (its interval is longer) would call it a double-click:
+// it plays/pauses and never opens the app.
 let side = viewer.surface.bounds.size
 let leftSide = NSPoint(x: side.width * 0.05, y: side.height * 0.4), rightSide = NSPoint(x: side.width * 0.95, y: side.height * 0.4)
 check(MusicZone.at(leftSide, in: side) == .skipBack && MusicZone.at(rightSide, in: side) == .skipForward, "fixture points sit in the edge strips")
+func seekCount() -> Int { sent.filter { if case .seek = $0 { return true }; return false }.count }
+let beforeSlow = sent.count
+click(viewer.surface, at: centre)
+check(waitFor(viewer.clickDelay + 2) { sent.count == beforeSlow + 1 }, "a single click plays/pauses once the window has passed")
+multiClick(viewer.surface, at: centre, clicks: 2)
+check(openedSources.count == 1, "a second click after the window does not open the app")
+check(waitFor(viewer.clickDelay + 2) { sent.count == beforeSlow + 2 }, "…it is a single click of its own and plays/pauses (\(sent))")
+let seeksBefore = seekCount()
+click(viewer.surface, at: rightSide)
+check(waitFor(viewer.clickDelay + 2) { sent.count == beforeSlow + 3 }, "an edge click plays/pauses too")
+multiClick(viewer.surface, at: rightSide, clicks: 2)
+check(waitFor(viewer.clickDelay + 2) { sent.count == beforeSlow + 4 } && seekCount() == seeksBefore, "a slow second click on an edge is a single click, not a skip (\(sent))")
+// Two single clicks in a row, far apart (AppKit counts each as a first click): the first isn't swallowed by the second.
+click(viewer.surface, at: leftSide); click(viewer.surface, at: rightSide)
+check(waitFor(viewer.clickDelay + 2) { sent.count == beforeSlow + 6 }, "two separate clicks play/pause twice (\(sent))")
+pump(viewer.clickDelay + 0.15)
+check(sent.count == beforeSlow + 6 && seekCount() == seeksBefore && openedSources.count == 1, "…and nothing more")
+pump(ArtworkWindowController.seekHold + 0.1)            // the timeline seek above no longer counts
 let from = viewer.info?.position(at: Date()) ?? -100
 func seeked(_ expected: Double) -> Bool { if case .seek(let t)? = sent.last { return abs(t - expected) < 0.001 }; return false }
-multiClick(viewer.surface, at: rightSide, clicks: 2)
+click(viewer.surface, at: rightSide); multiClick(viewer.surface, at: rightSide, clicks: 2)
 check(seeked(from + 10), "double-click the right edge: +10 s (\(from) → \(String(describing: sent.last)))")
 multiClick(viewer.surface, at: rightSide, clicks: 3)
 check(seeked(from + 20), "the next click of the run stacks: +10 s more")
-multiClick(viewer.surface, at: leftSide, clicks: 2)
+click(viewer.surface, at: leftSide); multiClick(viewer.surface, at: leftSide, clicks: 2)
 check(seeked(from + 10), "double-click the left edge: back 10 s")
 let inward = NSPoint(x: side.width * 0.25, y: side.height * 0.4)
-multiClick(viewer.surface, at: inward, clicks: 2)
+click(viewer.surface, at: inward); multiClick(viewer.surface, at: inward, clicks: 2)
 check(seeked(from + 10) && openedSources.count == 2, "a quarter of the way in, a double-click opens the source instead of skipping")
 check(fixtureMusic.revealed.isEmpty, "the harness never reaches a real app")
 key(viewer.surface, 124, "\u{F703}")
@@ -447,13 +519,13 @@ key(viewer.surface, 123, "\u{F702}")
 check(seeked(from + 10), "← -5 s")
 key(viewer.surface, 49, " ")
 check(sent.last == .command(.play) && viewer.info?.isPlaying == true, "space plays")
+let sentSoFar = sent.count
 // Another audio app takes over the window; its controls work only while it holds the slot (they'd reach the video otherwise).
 let episode = NowPlayingInfo(title: "Fixture Episode", artist: "Fixture Show", album: nil, bundleID: "com.apple.podcasts", isPlaying: true,
                              artwork: square, artworkMIME: "image/png")
 panel.nowPlayingChanged(episode); pump(0.5)
 check(viewer.info?.title == "Fixture Episode", "Podcasts does take over the music window")
-area = viewer.window.contentView!.bounds
-viewer.pointerMoved(at: NSPoint(x: area.midX, y: 30)); pump(0.5)
+check(revealControls(viewer), "resting on the caption reveals the controls")
 check(viewer.controlsRevealed && viewer.controls.volumeIcon.isHidden && viewer.controls.volume.isHidden, "no volume for an app Watch can't set")
 check(viewer.controls.timeline.isHidden, "no length: no timeline")
 check(!viewer.controls.playPause.dimmed, "controllable while it holds the slot")
@@ -462,8 +534,9 @@ tab.bundleID = "com.google.Chrome"
 panel.nowPlayingChanged(tab); pump(0.1)
 check(viewer.info?.title == "Fixture Episode" && viewer.controls.playPause.dimmed, "a video taking the slot leaves Podcasts showing, controls dimmed")
 check(viewer.controls.shuffle.isHidden && viewer.controls.repeatButton.isHidden, "no shuffle/repeat for an app Watch can't script")
-viewer.pointerMoved(at: nil); pump(ArtworkWindowController.exitGrace + 0.4)
-check(!viewer.controlsRevealed && sent.count == 9, "leaving the window hides them; nothing was sent without a click (\(sent.count))")
+viewer.pointerMoved(at: nil)
+check(waitFor(ArtworkWindowController.hideDelay + 3) { !viewer.controlsRevealed } && sent.count == sentSoFar,
+      "leaving the window hides them; nothing was sent without a click (\(sent.count) vs \(sentSoFar))")
 panel.nowPlayingChanged(nil)
 check(!panel.nowPlayingRow.isHidden && viewer.info?.title == "Fixture Episode", "the video stopping doesn't clear the music")
 panel.nowPlayingChanged(episode); panel.nowPlayingChanged(nil)
@@ -626,7 +699,7 @@ if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
           "at the song's end Watch pauses Music on its next song, rewound: \(fixtureMusic.performed)")
     check(up.engine == .native && musicWindow.info?.appBundleID == UniversalQueue.ownID, "the file plays in Watch, shown in the music window")
     check(waitFor(6) { (musicWindow.info?.position(at: Date()) ?? 0) > 0.5 && musicWindow.info?.isPlaying == true }, "Watch's own player is playing it")
-    musicWindow.pointerMoved(at: NSPoint(x: 20, y: 20)); pump(0.3)
+    check(revealControls(musicWindow), "resting on the caption reveals Watch's own item's controls")
     check(musicWindow.controls.shuffle.isHidden && !musicWindow.controls.volume.isHidden, "Watch's own item: no shuffle/repeat (those are the apps'), Watch's volume")
     viewerSnapshot("music-window-own-item")
     _ = waitFor(3) { musicWindow.info?.isPlaying == true }
@@ -717,7 +790,7 @@ if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
     panel.systemTick()
     check(panel.systemSource == .queue && panel.systemNowPlaying.published?.title == "Fixture Episode",
           "macOS's Now Playing (Control Center, media keys) shows the episode: \(panel.systemNowPlaying.published?.title ?? "nothing")")
-    musicWindow?.pointerMoved(at: NSPoint(x: 20, y: 20)); pump(0.3)
+    check(revealControls(musicWindow), "resting on the caption reveals the episode's controls")
     _ = waitFor(3) { musicWindow?.info?.isPlaying == true }
     musicWindow?.controls.playPause.performClick(nil)
     check(waitFor(3) { musicWindow?.info?.isPlaying == false } && (PlaybackPositions.shared.position(for: "podcast:1000000000001") ?? 0) >= 20,

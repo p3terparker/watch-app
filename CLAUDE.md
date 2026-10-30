@@ -1,6 +1,6 @@
 # Watch App
 
-A "plays almost any video" menu-bar player. **Current: v3.24.**
+A "plays almost any video" menu-bar player. **Current: v3.25.**
 Binary `Watch` · bundle `com.jacob.watch` · hotkey **⌥⌘Y** ·
 frameworks: Cocoa, WebKit, Carbon, ServiceManagement, **AVKit, AVFoundation, MediaPlayer**.
 
@@ -78,17 +78,18 @@ Music/Spotify commands by AppleScript to that app, `MusicAppControl`) and uses t
 music window open beside each other, never on top (cascade only when the screen is full). Pure parts in `Sources/StreamSupport.swift` (tested). UX_SPEC's **Always works** list
 is checked by `Tests/panel.py` with an FFmpeg-made fixture video and fixture renditions.
 **3.20 (music window only):** the controls are **one row** under the caption (`ArtworkLayout.controlRow`, pure + tested:
-⏮ ⏯ ⏭ · elapsed · timeline · remaining · 🔀 🔁 · volume, dropping parts in a fixed order when narrow), shown on hovering
-**anywhere** over the window and fading `exitGrace` (1 s) after it leaves. 🔀/🔁 set **Music's/Spotify's own** shuffle and
+⏮ ⏯ ⏭ · elapsed · timeline · remaining · 🔀 🔁 · volume, dropping parts in a fixed order when narrow), shown while the pointer
+is on the caption or just above it (3.25; 3.20 showed them on hovering anywhere over the window). 🔀/🔁 set **Music's/Spotify's own** shuffle and
 repeat (`AppVolume.modesScript`/`shuffleScript`/`repeatScript`, `AppRepeat`, `AppModes`; `MusicAppControl.modes`/`setMode`,
 same Automation rules as the volume). Clicks use `MusicZone` (`Sources/PlayerZones.swift`): a click anywhere = play/pause
-after `clickDelay` (the double-click interval), double-click = `openSource` (bring the app forward / launch it; Music reveals
-the track when already allowed), double-click in far-edge strips (15%, ≥36 pt) = ∓10 s. Full screen only via F/⌃⌘F/menu.
+after `clickDelay` (3.25: ≈ 0.32 s; 3.20 waited the whole system double-click interval), double-click = `openSource` (bring the
+app forward / launch it; Music reveals the track when already allowed), double-click in far-edge strips (15%, ≥36 pt) = ∓10 s.
+Full screen only via F/⌃⌘F/menu.
 Pushes whose commit message contains `[no preview]` are built and tested but don't replace the preview (`build.yml`).
 **Versioning:** one version number per **phase** — the batch of changes asked for together — not per change: every push of
 that phase keeps the number (each passing one replaces that version's preview); bump it only when a new phase starts or
 the user says it's a new version. (3.20–3.24 were one phase numbered per change; they stay as published.) The installer is
-named with the release number: `package.sh` makes `dist/Watch-<version>.dmg` (e.g. `Watch-3.24.dmg`).
+named with the release number: `package.sh` makes `dist/Watch-<version>.dmg` (e.g. `Watch-3.25.dmg`).
 **3.21 — Up Next under the music window:** `PlayQueue`/`QueueItem` (+ `MediaSource`, `SpotifyLink`) moved to
 `Sources/Queue.swift` with Play Next/Later insertion, edits, sections and `handBack` (tested); `Sources/Handoff.swift` has the
 pure song-boundary reducer and `QueueRoute` (tested). `UniversalQueue` (`Sources/UpNext.swift`) plays the current item in
@@ -124,6 +125,14 @@ saved (`PlayQueue.snapshot`/`QueueSnapshot`, key `upNextQueue`) and offered back
 music window closes or Watch relaunches; a list played to its end is forgotten. Finder ▸ Open With ▸ Watch
 (`CFBundleDocumentTypes`, Alternate rank; `application(_:open:)` → `openFiles`): one video plays in a window, audio, folders and
 several files go to Up Next.
+**3.25 — music window hover and clicks (music window only):** the caption, "…" and ≡ still show on hovering anywhere, but the
+**playback controls** come up only when the pointer rests (`revealDwell` 0.08 s) on the caption band or the 40 pt above it
+(`ArtworkLayout.revealZone`, pure + tested; `reveal` zone, then a larger `keep` zone once they're up so the lift can't make them
+flicker), ease in (0.25 s) and go `hideDelay` (0.4 s) after the pointer leaves that zone or the window (0.3 s ease-in-out; never
+mid-drag). Full screen is unchanged. Clicks are timed by Watch, not AppKit's `clickCount`: `MusicClicks` (`Sources/PlayerZones.swift`,
+tested) joins a click to a run only within `MusicZone.doubleClickWindow` (`min(system interval, 0.3 s)`) of the previous one, so a
+single click plays/pauses after ≈ 0.32 s (was ≈ 0.55 s), a double-click opens the app only if quick, and a slow second click is a
+fresh single click. Video windows keep the 3.14 zones and timings.
 
 **Gotchas (see GOTCHAS.md):** never AppleScript an app by name unless it's running (uninstalled names pop a
 "Where is …?" chooser) and never send Apple Events without checking `AEDeterminePermissionToAutomateTarget`

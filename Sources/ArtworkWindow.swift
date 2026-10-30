@@ -86,9 +86,10 @@ enum ArtworkActions {
 
 // The Now Playing artwork in a floating, borderless window styled like the players. It follows the music: each
 // update replaces the picture (a short cross-fade) and the caption without ordering the window front or taking
-// focus. Hovering anywhere shows the caption, "…" and the playback controls; right-click shows the same menu; Esc or ⌘W
-// closes. Clicks (MusicZone): a single click anywhere plays/pauses, a double-click opens the source in its app, and only
-// double-clicks in narrow strips at the far left/right edges skip ∓10 s.
+// focus. Hovering anywhere shows the caption and "…"; resting on the caption, or just above it, brings up the playback
+// controls (ArtworkLayout.revealZone), which go a moment after the pointer leaves; right-click shows the same menu; Esc or ⌘W
+// closes. Clicks (MusicZone, MusicClicks): a single click anywhere plays/pauses, a double-click within 0.3 s opens the source in
+// its app, and only double-clicks in narrow strips at the far left/right edges skip ∓10 s.
 // Full screen (⌃⌘F or F, or the menu) is macOS full screen on its own Space: the artwork centred over
 // a gradient of its own colours or black (Full-Screen Background ▸, `Prefs.artworkColourBackground`) with the caption
 // under it; the caption, "…" and the pointer hide after a few idle seconds. Esc leaves full screen.
@@ -98,10 +99,18 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     static let minSide: CGFloat = 240, maxSide: CGFloat = 600
     static let placeholderDelay: TimeInterval = 1.5    // Music often sends a new track's artwork just after its title
     static let idleDelay: TimeInterval = 2.5           // full screen: caption, "…" and pointer hide after this
-    static let exitGrace: TimeInterval = 1             // caption and controls fade this long after the pointer leaves
+    static let exitGrace: TimeInterval = 1             // full screen: caption and controls fade this long after the pointer leaves
+    // Windowed hover (3.25): the controls wait a short dwell in the reveal zone, so sweeping across the bottom doesn't flash them,
+    // ease in, and go a little after the pointer has left the (larger) keep zone or the window — long enough to feel fluid, not so
+    // long they linger. The caption and "…" fade on the same delay.
+    static let revealDwell: TimeInterval = 0.08
+    static let hideDelay: TimeInterval = 0.4
+    static let revealDuration: TimeInterval = 0.25, hideDuration: TimeInterval = 0.3
     static let seekHold: TimeInterval = 2              // show a seek's target until the app reports it (or this long)
+    // The run of clicks in flight: the music window's own, tighter double-click window (MusicZone, ≤ 0.3 s).
+    private(set) var clickRun = MusicClicks(window: MusicZone.window(system: NSEvent.doubleClickInterval))
     // A single click waits this long before playing/pausing, so a double-click's first click doesn't toggle too.
-    var clickDelay: TimeInterval = NSEvent.doubleClickInterval + 0.05
+    var clickDelay: TimeInterval { clickRun.window + MusicZone.clickMargin }
     // Double-click in the middle: the source in its app. Replaceable in tests, which must never bring real apps forward.
     var onOpenSource: ((NowPlayingInfo) -> Void)?
 
@@ -129,8 +138,11 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     var onQueue: (() -> Void)?                         // ≡, ⌥⌘U, the menu: the Up Next list drops down under the window
     let controls = ArtworkControlsView()
     private let flashView = CentreFlashView()
-    private var chromeVisible = false
-    private var exitWork: DispatchWorkItem?
+    private(set) var chromeVisible = false            // the caption, "…" and ≡ (the controls need controlsRevealed too)
+    private var pointer: NSPoint?                      // where the pointer last was over the window (nil: outside it)
+    private var exitWork: DispatchWorkItem?            // full screen: fade after the pointer leaves
+    private var revealWork: DispatchWorkItem?          // windowed: the dwell before the controls come up
+    private var hideWork: DispatchWorkItem?            // windowed: the wait before the caption / controls go
     private var pendingClick: DispatchWorkItem?
     private var tick: Timer?
     private var seekTarget: (seconds: Double, at: Date)?
@@ -174,8 +186,8 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         // music window's own zones (MusicZone): a click anywhere = play/pause; double-click = the source in its app;
         // double-click a far edge = ∓10 s.
         surface.onPointer = { [weak self] point in self?.pointerMoved(at: point) }
-        surface.onClick = { [weak self] _, _ in self?.clicked() }
-        surface.onMultiClick = { [weak self] point, clicks in self?.multiClicked(at: point, clicks: clicks) }
+        surface.onClick = { [weak self] down, _ in self?.clicked(at: down.timestamp) }
+        surface.onMultiClick = { [weak self] point, _ in self?.multiClicked(at: point) }
         surface.onRightClick = { [weak self] e in
             guard let self = self else { return }
             NSMenu.popUpContextMenu(self.makeMenu(), with: e, for: self.surface)
@@ -323,8 +335,9 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
 
     // Window: the artwork fills it, caption along the bottom; revealing the controls grows that band upward by their
     // height and lifts the text. Full screen: ArtworkLayout — the artwork centred with rounded corners and a shadow,
-    // the caption centred under it, the controls' (reserved) row under that, "…" clear of the menu bar.
-    private func layoutViews(animated: Bool = false) {
+    // the caption centred under it, the controls' (reserved) row under that, "…" clear of the menu bar. Animated, the controls
+    // coming up (`revealing`) ease out and going ease in and out — alpha, the band's growth and the text's lift in one group.
+    private func layoutViews(animated: Bool = false, revealing: Bool = true) {
         let b = content.bounds, full = inFullScreen
         let lift = controlsRevealed && !full ? ArtworkLayout.controlsHeight : 0
         let shadeFrame: NSRect, controlsFrame: NSRect
@@ -364,7 +377,14 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
             place(self.controls, controlsFrame)
             if animated { self.controls.animator().alphaValue = controlsAlpha } else { self.controls.alphaValue = controlsAlpha }
         }
-        if animated { NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.2; apply() } } else { apply() }
+        if animated {
+            let curve: CAMediaTimingFunctionName = revealing ? .easeOut : .easeInEaseOut
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = revealing ? Self.revealDuration : Self.hideDuration
+                ctx.timingFunction = CAMediaTimingFunction(name: curve)
+                apply()
+            }
+        } else { apply() }
     }
 
     // Album art is square, a video's thumbnail 16:9: keep the width and the top-left corner, change the height.
@@ -415,8 +435,10 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     }
     func windowWillExitFullScreen(_ notification: Notification) {
         inFullScreen = false
-        idleWork?.cancel()
+        idleWork?.cancel(); exitWork?.cancel(); exitWork = nil
+        pointer = nil
         layoutViews()
+        if chromeVisible || controlsRevealed { scheduleHide() }    // the windowed rules take over; the pointer's moves say where it is
     }
     func windowDidExitFullScreen(_ notification: Notification) {
         restoreWindowed(refit: !closeAfterFullScreen)
@@ -435,10 +457,45 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         if refit, pictureData != nil, let image = imageView.image { fitAspect(Self.pixelSize(image)) }   // the track may have changed
     }
 
-    // Hovering anywhere over the window shows the caption, "…" and the playback controls at once. They stay while the
-    // pointer is over the window and fade `exitGrace` after it leaves (never mid-drag), so overshooting an edge doesn't
-    // snap them away. In full screen they — and the pointer — hide again after idleDelay, unless the pointer is on the controls.
+    // MARK: hover
+    // Windowed: hovering anywhere over the window shows the caption, "…" and ≡ at once; they fade `hideDelay` after the pointer
+    // leaves it. The playback controls are more deliberate: they come up once the pointer has rested `revealDwell` in the reveal
+    // zone (ArtworkLayout.revealZone: the caption band and a short reach above it, so they're there as the pointer arrives at
+    // the text) and go `hideDelay` after it leaves the larger keep zone or the window. Coming back cancels the wait, and they
+    // never go mid-drag. Full screen has its own rules (`fullScreenPointerMoved`).
     func pointerMoved(at point: NSPoint?) {
+        pointer = point
+        if inFullScreen { fullScreenPointerMoved(at: point); return }
+        if let p = point {
+            fadeChrome(visible: true)
+            if !controlsRevealed && ArtworkLayout.revealZone(window: surface.bounds.size, revealed: false).contains(p) {
+                if revealWork == nil {
+                    revealWork = after(Self.revealDwell) { me in me.revealWork = nil; me.setControls(revealed: true) }
+                }
+            } else { revealWork?.cancel(); revealWork = nil }
+        } else { revealWork?.cancel(); revealWork = nil }
+        if (point == nil && chromeVisible) || (controlsRevealed && !keepsControls(point)) { scheduleHide() } else { hideWork?.cancel(); hideWork = nil }
+    }
+    // Whether a pointer there keeps the controls showing: inside the grown band's zone.
+    private func keepsControls(_ point: NSPoint?) -> Bool {
+        guard let p = point else { return false }
+        return ArtworkLayout.revealZone(window: surface.bounds.size, revealed: true).contains(p)
+    }
+    // After `hideDelay`: the caption and "…" go if the pointer is off the window, the controls if it is off their keep zone —
+    // judged then, from where the pointer last was. A drag on the timeline or volume waits (checked again every `hideDelay`).
+    private func scheduleHide() {
+        guard hideWork == nil else { return }
+        hideWork = after(Self.hideDelay) { me in
+            me.hideWork = nil
+            if me.controls.isInteracting { me.scheduleHide(); return }
+            if me.pointer == nil { me.fadeChrome(visible: false) }
+            if !me.keepsControls(me.pointer) { me.setControls(revealed: false) }
+        }
+    }
+    // Full screen: the caption, "…" and the controls come up at once wherever the pointer moves, fade `exitGrace` after it leaves,
+    // and — with the pointer — hide again after idleDelay, unless the pointer is on the controls.
+    private func fullScreenPointerMoved(at point: NSPoint?) {
+        revealWork?.cancel(); revealWork = nil; hideWork?.cancel(); hideWork = nil
         if point != nil {
             exitWork?.cancel(); exitWork = nil
             fadeChrome(visible: true)
@@ -446,13 +503,13 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         } else if exitWork == nil, chromeVisible || controlsRevealed {
             exitWork = after(Self.exitGrace) { me in
                 me.exitWork = nil
-                if me.controls.isInteracting { me.pointerMoved(at: nil); return }   // check again once the drag ends
+                if me.controls.isInteracting { me.fullScreenPointerMoved(at: nil); return }   // check again once the drag ends
                 me.fadeChrome(visible: false)
                 me.setControls(revealed: false)
             }
         }
         idleWork?.cancel()
-        guard inFullScreen, point != nil else { return }
+        guard point != nil else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self = self, self.inFullScreen else { return }
             let m = self.content.convert(self.window.mouseLocationOutsideOfEventStream, from: nil)
@@ -464,8 +521,8 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         idleWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.idleDelay, execute: work)
     }
-    // The caption band (grown while the controls show); in full screen the caption plus the controls' row.
-    private var controlsZone: NSRect { inFullScreen ? shade.frame.union(controls.frame) : shade.frame }
+    // Full screen: the caption plus the controls' row.
+    private var controlsZone: NSRect { shade.frame.union(controls.frame) }
     private func after(_ delay: TimeInterval, _ body: @escaping (ArtworkWindowController) -> Void) -> DispatchWorkItem {
         let work = DispatchWorkItem { [weak self] in if let self = self { body(self) } }
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
@@ -475,8 +532,10 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         chromeVisible = visible
         let target: CGFloat = visible ? 1 : 0, controlsTarget: CGFloat = visible && controlsRevealed ? 1 : 0
         guard dotButton.alphaValue != target || controls.alphaValue != controlsTarget else { return }
+        let curve: CAMediaTimingFunctionName = visible ? .easeOut : .easeInEaseOut
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = visible ? 0.15 : 0.25
+            ctx.duration = visible ? 0.2 : Self.hideDuration
+            ctx.timingFunction = CAMediaTimingFunction(name: curve)
             dotButton.animator().alphaValue = target
             queueButton.animator().alphaValue = target
             shade.animator().alphaValue = target
@@ -494,7 +553,7 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
             refreshVolume()
             tick = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.refreshControls() }
         }
-        layoutViews(animated: window.isVisible)
+        layoutViews(animated: window.isVisible, revealing: revealed)
     }
     // Play/pause icon and the timeline. After a seek the dragged-to time shows until the app reports it (seekHold).
     private func refreshControls() {
@@ -511,24 +570,37 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         controls.setTime(position: position, duration: duration)
     }
     // MARK: clicks and keys — the music window's zones (MusicZone), the player's keys
-    // A single click anywhere plays/pauses — once `clickDelay` has passed without a second click.
-    private func clicked() {
-        pendingClick?.cancel()
-        pendingClick = after(clickDelay) { me in
-            me.pendingClick = nil
-            me.playPause()
-            me.flashView.show(me.info?.isPlaying == true ? "play.fill" : "pause.fill")
-        }
+    // A single click anywhere plays/pauses — once `clickDelay` has passed without a second click joining it. `time` is the
+    // mouse-down's. AppKit reported it as a first click, so it starts a new run.
+    private func clicked(at time: TimeInterval) {
+        _ = clickRun.press(at: time, first: true)
+        startToggle()
     }
-    // The rest of a quick run of clicks: the far edges skip ∓10 s per click (stacking), the double-click anywhere else opens
-    // the source. Either way the run's first click doesn't play/pause.
-    private func multiClicked(at point: NSPoint, clicks: Int) {
+    // The rest of a quick run of clicks. AppKit counts them from the system's (longer) interval, so the run is re-timed here
+    // (MusicClicks, ≤ 0.3 s): the far edges skip ∓10 s per click (stacking), a double-click anywhere else opens the source, and
+    // either way the run's first click doesn't play/pause. A click too late to join the run is a fresh single click.
+    private func multiClicked(at point: NSPoint) {
+        let run = clickRun.press(at: ProcessInfo.processInfo.systemUptime)
+        guard run >= 2 else { startToggle(); return }
         pendingClick?.cancel(); pendingClick = nil
         switch MusicZone.at(point, in: surface.bounds.size) {
         case .skipBack:    skip(-10)
         case .skipForward: skip(10)
-        case .main:        if clicks == 2 { openSource() }
+        case .main:        if run == 2 { openSource() }
         }
+    }
+    // Waits `clickDelay` for a second click, then plays/pauses. An earlier click that never became part of a run is done waiting:
+    // it plays/pauses now instead of being swallowed by this one.
+    private func startToggle() {
+        if let earlier = pendingClick { earlier.cancel(); pendingClick = nil; togglePlayback() }
+        pendingClick = after(clickDelay) { me in
+            me.pendingClick = nil
+            me.togglePlayback()
+        }
+    }
+    private func togglePlayback() {
+        playPause()
+        flashView.show(info?.isPlaying == true ? "play.fill" : "pause.fill")
     }
     // The app the music comes from, brought forward (launched if it quit); Music also shows the song in its window when
     // Watch may already script it (never asks here).
@@ -701,7 +773,9 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     func windowShouldZoom(_ window: NSWindow, toFrame newFrame: NSRect) -> Bool { false }   // the hidden title bar's double-click
     func windowWillClose(_ notification: Notification) {
         placeholderToken += 1
-        idleWork?.cancel(); exitWork?.cancel(); pendingClick?.cancel(); exitWork = nil; pendingClick = nil
+        idleWork?.cancel(); exitWork?.cancel(); revealWork?.cancel(); hideWork?.cancel(); pendingClick?.cancel()
+        exitWork = nil; revealWork = nil; hideWork = nil; pendingClick = nil
+        pointer = nil; clickRun.reset()
         tick?.invalidate(); tick = nil
         controlsRevealed = false; chromeVisible = false
         layoutViews()
