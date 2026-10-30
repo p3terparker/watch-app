@@ -512,7 +512,7 @@ Z-order: video/web view → loading → `surface` → `controls` → "…".
   speaker button (glyph from `volumeSymbol` — slash / 1 / 2 / 3 waves; click = `onMute`); hovering it (`pointerMoved(at:)`, the
   bar's own tracking area) slides a 50pt `ThinSlider` out to its **left** — so the icon stays under the pointer — taking room
   from the scrubber (`volumeOpen`, animated `layoutParts(animated:)`), and it tucks away 0.6 s after the pointer leaves, never
-  mid-drag; no slide-out in bars under 180pt. `onVolume` → `PlayerWindowController.setVolume` (rounded to 1%, unmutes above
+  mid-drag. (3.26: the slider is a vertical pop-up panel above the speaker, `VolumePopupView`, at any bar width.) `onVolume` → `PlayerWindowController.setVolume` (rounded to 1%, unmutes above
   0, saved to `Prefs.playerVolume`, which new players start at; ↑/↓ in `handleKey` ±10%). Frame-based `layoutParts` hides the
   skip buttons below 150pt wide, the time below 210pt and the volume below 100pt; the time label widens for hour-plus videos
   (`longClock`, `clockWidth`). Live (no duration) → "LIVE" instead of the scrubber. `isScrubbing` = either slider is being
@@ -681,9 +681,9 @@ Sources and tests are at the repository root. `scripts/watch_build.py` handles t
 ## 3.26 — ★, menu-bar ticker, volume, full-screen resize
 - `Sources/NowPlaying.swift` `AppVolume.favouriteApps/favouriteReadScript/favouriteWriteScript` — Apple Music's `favorited` (fallback `loved`) of the current track; fixed text, `run script` inside `try`.
 - `Sources/ArtworkWindow.swift` — `MusicAppControl.favourite/setFavourite`; `ArtworkWindowController.refreshFavourite/toggleFavourite/beginVolumeDrag/dragVolume/resizeArtwork`; `ArtworkControlsView.favourite` (★), `setFavourite`, `volumeOpen`, `pointerMoved(at:)`, `collapseVolume`, `endVolumeInteraction`, `layoutParts(animated:)` (the slider stays at zero width beside the speaker while tucked away).
-- `Sources/ArtworkStyle.swift` — `ControlRow.favourite`, `controlRow(favourite:)` (speaker at the right edge, slider slid out to its left, ★ left of shuffle, dropped with the remaining time), `fullScreen(artwork:in:scale:)` (+ `chrome`), `fullScreenScaleRange`, `resizedScale`.
-- `Sources/PlayerZones.swift` — `VolumeGesture` (relative drag, slop, span), `VolumeHover.zone`.
-- `Sources/ThinSlider.swift` — `ThinSlider.relative`, `DragButton` (click vs sideways drag; `GlyphButton` is one), used by the music window's speaker and `PlayerControlBar.muteButton`.
+- `Sources/ArtworkStyle.swift` — `ControlRow.favourite`, `controlRow(favourite:)` (the speaker at the right edge — no slider in the row —, ★ left of shuffle, dropped with the remaining time), `fullScreen(artwork:in:scale:)` (+ `chrome`), `fullScreenScaleRange`, `resizedScale`.
+- `Sources/PlayerZones.swift` — `VolumeGesture` (relative drag, slop, span), `VolumeHover.zone`, `VolumePopup.frame` (where the pop-up panel sits above the speaker).
+- `Sources/ThinSlider.swift` — `ThinSlider.relative/vertical`, `VolumePopupView` (the pop-up panel), `DragButton` (click vs a drag along `dragAxis`; `GlyphButton` is one), used by the music window's speaker and `PlayerControlBar.muteButton`.
 - `Sources/Marquee.swift` (pure, tested) / `Sources/MenuBarTicker.swift` — the ticker; `AppDelegate.refreshTicker/tickerSettingChanged`, `Prefs.showTicker`, `SettingsController.tickerChanged`.
 - `scripts/watch-update.sh` — the Mac-side updater (Current build or `--stable`; `--dry-run`, `--force`; run on demand, no schedule).
 - `Sources/main.swift` `PlayerSurfaceView.dragIsResize/onResizeDrag` — a drag resizes the picture in full screen instead of moving the window.

@@ -275,32 +275,32 @@ func checkFavouriteScripts() {
 // The music window's one row of controls: ⏮ ⏯ ⏭ from the left, elapsed · timeline · remaining, shuffle · repeat, volume at
 // the right; what doesn't fit drops out in a fixed order and the timeline keeps a usable length.
 func checkControlRow() {
-    func row(_ w: CGFloat, timeline: Bool = true, long: Bool = false, modes: Bool = true, volume: ControlRowVolume = .slider,
+    func row(_ w: CGFloat, timeline: Bool = true, long: Bool = false, modes: Bool = true, volume: ControlRowVolume = .icon,
              favourite: Bool = false) -> ControlRow {
         ArtworkLayout.controlRow(width: w, timeline: timeline, longClock: long, modes: modes, volume: volume, favourite: favourite)
     }
     let wide = row(376)                                       // a 400 pt window
     let all = [wide.previous, wide.playPause, wide.next, wide.elapsed, wide.timeline, wide.remaining, wide.shuffle, wide.repeatMode,
-               wide.volumeIcon, wide.volume].compactMap { $0 }
-    expect(all.count == 10, "a wide window shows every part")
+               wide.volumeIcon].compactMap { $0 }
+    expect(all.count == 9, "a wide window shows every part (the volume slider isn't in the row: it pops up above the speaker)")
     expect(wide.previous!.minX == 0 && wide.previous!.maxX < wide.playPause!.minX && wide.playPause!.maxX < wide.next!.minX,
            "⏮ ⏯ ⏭ from the left edge")
     expect(wide.next!.maxX < wide.elapsed!.minX && wide.elapsed!.maxX <= wide.timeline!.minX && wide.timeline!.maxX <= wide.remaining!.minX,
            "then elapsed, the timeline and remaining")
-    expect(wide.remaining!.maxX < wide.shuffle!.minX && wide.shuffle!.maxX < wide.repeatMode!.minX && wide.repeatMode!.maxX < wide.volume!.minX
-           && wide.volume!.maxX < wide.volumeIcon!.minX && wide.volumeIcon!.maxX == 376,
-           "then shuffle, repeat and the volume — the speaker at the right edge, its slider slid out to its left")
+    expect(wide.remaining!.maxX < wide.shuffle!.minX && wide.shuffle!.maxX < wide.repeatMode!.minX && wide.repeatMode!.maxX < wide.volumeIcon!.minX
+           && wide.volumeIcon!.maxX == 376, "then shuffle, repeat and the speaker at the right edge")
     expect(all.allSatisfy { abs($0.midY - ArtworkLayout.controlsHeight / 2) <= 1 && $0.maxY <= ArtworkLayout.controlsHeight && $0.minY >= 0 },
            "one row: everything centred on the same line")
     for i in all.indices { for j in all.indices where j > i { expect(!all[i].intersects(all[j]), "parts \(i) and \(j) don't overlap") } }
     expect(wide.timeline!.width >= 120, "a 400 pt window has a long timeline (\(wide.timeline!.width))")
-    let usual = row(276)                                      // the usual 300 pt window
-    expect(usual.elapsed == nil && usual.remaining != nil && usual.shuffle != nil && usual.repeatMode != nil && usual.volume != nil
-           && usual.previous != nil && usual.timeline!.width >= ArtworkLayout.minTimeline, "300 pt: only the elapsed time gives way")
-    let smaller = row(220)
-    expect(smaller.shuffle == nil && smaller.repeatMode == nil && smaller.volume != nil, "then shuffle/repeat")
-    let narrow = row(200)
-    expect(narrow.volume == nil && narrow.volumeIcon != nil && narrow.remaining != nil, "then the volume slider (the speaker stays)")
+    expect(row(276).elapsed != nil && row(243).elapsed != nil, "the usual 300 pt window has room for everything (no slider in the row)")
+    let usual = row(230)
+    expect(usual.elapsed == nil && usual.remaining != nil && usual.shuffle != nil && usual.repeatMode != nil && usual.volumeIcon != nil
+           && usual.previous != nil && usual.timeline!.width >= ArtworkLayout.minTimeline, "a bit narrower: only the elapsed time gives way")
+    let smaller = row(190)
+    expect(smaller.shuffle == nil && smaller.repeatMode == nil && smaller.remaining != nil && smaller.volumeIcon != nil, "then shuffle/repeat")
+    let narrow = row(150)
+    expect(narrow.remaining == nil && narrow.previous != nil && narrow.volumeIcon != nil, "then the remaining time (the speaker stays)")
     let tiny = row(100)
     expect(tiny.previous == nil && tiny.next == nil && tiny.remaining == nil && tiny.playPause != nil && tiny.timeline != nil,
            "a tiny window keeps ⏯ and the timeline")
@@ -310,11 +310,11 @@ func checkControlRow() {
     expect(noLength.timeline == nil && noLength.elapsed == nil && noLength.remaining == nil && noLength.shuffle != nil, "no length: no timeline or times")
     let other = row(376, modes: false, volume: .none)
     expect(other.shuffle == nil && other.volumeIcon == nil && other.timeline!.maxX > 340, "an app Watch can't script: the timeline takes the room")
-    let denied = row(376, volume: .icon)
-    expect(denied.volume == nil && denied.volumeIcon != nil, "not allowed: the speaker alone")
-    let tucked = row(376, volume: .icon)
-    expect(tucked.volumeIcon == wide.volumeIcon && tucked.volumeIcon!.maxX == 376, "tucked away or out, the speaker stays where it is (the pointer is on it)")
-    expect(tucked.timeline!.width > wide.timeline!.width && tucked.shuffle!.maxX > wide.shuffle!.maxX, "…and the slider's room goes to the timeline until it slides out")
+    // 3.26: the volume slider pops up above the speaker, so the speaker — at the right edge — is there at every window size.
+    for w: CGFloat in [80, 100, 150, 200, 276, 376, 600] {
+        let r = row(w)
+        expect(r.volumeIcon != nil && r.volumeIcon!.maxX == w && r.volumeIcon!.minX >= r.playPause!.maxX, "a \(Int(w)) pt row has the speaker at its right edge")
+    }
     // 3.26: the ★ (Apple Music's favourite) sits left of shuffle; it outlasts shuffle/repeat and goes with the remaining time.
     let starred = row(376, volume: .icon, favourite: true)
     expect(starred.favourite != nil && starred.shuffle != nil && starred.repeatMode != nil, "a wide window shows ★, shuffle and repeat")

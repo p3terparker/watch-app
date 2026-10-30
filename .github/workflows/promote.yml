@@ -17,6 +17,10 @@ on:
         description: Only print what would happen
         type: boolean
         default: false
+      replace_old:
+        description: Also delete every older stable release (vX.Y) and its tag, so the new one is the only release
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -29,6 +33,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       SRC: ${{ inputs.tag }}
       DRY_RUN: ${{ inputs.dry_run }}
+      REPLACE_OLD: ${{ inputs.replace_old }}
     steps:
       - uses: actions/checkout@v5
 
@@ -67,6 +72,11 @@ jobs:
           old=$(gh release list --limit 200 --json tagName,isPrerelease \
                   --jq '.[] | select(.isPrerelease and (.tagName | test("-preview$"))) | .tagName')
           remove=$(printf '%s\n' "$SRC" $old | sort -u)
+          if [ "$REPLACE_OLD" = true ]; then
+            older=$(gh release list --limit 200 --json tagName,isPrerelease \
+                      --jq ".[] | select((.isPrerelease | not) and .tagName != \"$tag\") | .tagName")
+            remove=$(printf '%s\n' $remove $older | sort -u)
+          fi
 
           echo "Publish $tag as the latest release: $dmg ($sha), tagged at commit $target"
           echo "Then delete:"

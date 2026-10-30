@@ -58,11 +58,10 @@ struct ControlRow: Equatable {
     var elapsed: CGRect?, timeline: CGRect?, remaining: CGRect?
     var favourite: CGRect?
     var shuffle: CGRect?, repeatMode: CGRect?
-    var volumeIcon: CGRect?, volume: CGRect?
+    var volumeIcon: CGRect?                          // the slider isn't in the row: it pops up above the speaker (VolumePopup)
 }
-// no app volume · the speaker alone (the slider is tucked away, or not allowed) · speaker + the slider slid out (3.26: only
-// while the pointer is on the speaker)
-enum ControlRowVolume { case none, icon, slider }
+// no app volume · the speaker (3.26: its slider pops up above it while the pointer is on it, so it never takes room in the row)
+enum ControlRowVolume { case none, icon }
 
 enum ArtworkLayout {
     static let captionHeight: CGFloat = 64, gap: CGFloat = 20
@@ -85,38 +84,34 @@ enum ArtworkLayout {
     }
 
     // The controls' row at `width`. When it can't all fit, parts drop out in this order: the elapsed time, shuffle/repeat,
-    // the volume slider (the speaker stays), the remaining time and the ★ (3.26), ⏮/⏭ — the timeline (when there's a length) and
-    // ⏯ stay. `modes`: shuffle/repeat can be set for this app. `favourite`: the app has a ★ Watch can set (Apple Music), left of
+    // the remaining time and the ★ (3.26), ⏮/⏭ — the timeline (when there's a length), ⏯ and the speaker stay. `modes`: shuffle/repeat can be set for this app. `favourite`: the app has a ★ Watch can set (Apple Music), left of
     // shuffle. Unflipped coordinates (y up), centred vertically in `height`.
     static func controlRow(width w: CGFloat, height h: CGFloat = controlsHeight, timeline: Bool, longClock: Bool,
                            modes: Bool, volume: ControlRowVolume, favourite: Bool = false) -> ControlRow {
-        let side: CGFloat = 20, play: CGFloat = 22, mode: CGFloat = 18, icon: CGFloat = 16, slider: CGFloat = 40
+        let side: CGFloat = 20, play: CGFloat = 22, mode: CGFloat = 18, icon: CGFloat = 16
         let label: CGFloat = longClock ? 42 : 28, gap: CGFloat = 6, tight: CGFloat = 2
         // Drop level n removes the first n parts of the order above.
         func width(_ level: Int) -> CGFloat {
-            var x = play + (level < 5 ? 2 * (side + 1) : 0)
-            if timeline { x += gap + (level < 1 ? label + tight : 0) + minTimeline + (level < 4 ? tight + label : 0) }
+            var x = play + (level < 4 ? 2 * (side + 1) : 0)
+            if timeline { x += gap + (level < 1 ? label + tight : 0) + minTimeline + (level < 3 ? tight + label : 0) }
             if modes && level < 2 { x += gap + 2 * mode + 1 }
-            if favourite && level < 4 { x += (modes && level < 2 ? 1 : gap) + mode }   // beside shuffle, or after the speaker's gap
-            if volume != .none { x += gap + icon + (volume == .slider && level < 3 ? tight + slider : 0) }
+            if favourite && level < 3 { x += (modes && level < 2 ? 1 : gap) + mode }   // beside shuffle, or after the speaker's gap
+            if volume != .none { x += gap + icon }
             return x
         }
-        let level = (0...5).first { width($0) <= w } ?? 5
+        let level = (0...4).first { width($0) <= w } ?? 4
         func y(_ height: CGFloat) -> CGFloat { ((h - height) / 2).rounded() }
         var row = ControlRow()
         var x: CGFloat = 0
-        let skips = level < 5
+        let skips = level < 4
         if skips { row.previous = CGRect(x: x, y: y(side), width: side, height: side); x += side + 1 }
         row.playPause = CGRect(x: x, y: y(play), width: play, height: play); x += play
         if skips { x += 1; row.next = CGRect(x: x, y: y(side), width: side, height: side); x += side }
         var right = w
         if volume != .none {
-            // The speaker stays at the right edge, where the pointer is; the slider slides out to its left (3.26).
-            row.volumeIcon = CGRect(x: right - icon, y: y(18), width: icon, height: 18); right -= icon
-            if volume == .slider && level < 3 { row.volume = CGRect(x: right - tight - slider, y: y(18), width: slider, height: 18); right -= tight + slider }
-            right -= gap
+            row.volumeIcon = CGRect(x: right - icon, y: y(18), width: icon, height: 18); right -= icon + gap
         }
-        let star = favourite && level < 4
+        let star = favourite && level < 3
         if modes && level < 2 {
             row.repeatMode = CGRect(x: right - mode, y: y(mode), width: mode, height: mode); right -= mode + 1
             row.shuffle = CGRect(x: right - mode, y: y(mode), width: mode, height: mode); right -= mode + (star ? 1 : gap)
@@ -127,7 +122,7 @@ enum ArtworkLayout {
         if timeline {
             x += gap
             if level < 1 { row.elapsed = CGRect(x: x, y: y(13), width: label, height: 13); x += label + tight }
-            if level < 4 { row.remaining = CGRect(x: right - label, y: y(13), width: label, height: 13); right -= label + tight }
+            if level < 3 { row.remaining = CGRect(x: right - label, y: y(13), width: label, height: 13); right -= label + tight }
             row.timeline = CGRect(x: x, y: y(18), width: max(0, right - x), height: 18)
         }
         return row

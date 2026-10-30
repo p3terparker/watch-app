@@ -1573,7 +1573,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         statusObservation = nil
         if let o = endObserver { NotificationCenter.default.removeObserver(o); endObserver = nil }
         if let t = timeObserver { player?.removeTimeObserver(t); timeObserver = nil }
-        hideControlsWork?.cancel(); controls.alphaValue = 0
+        hideControlsWork?.cancel(); controls.collapseVolume(); controls.alphaValue = 0
         player?.pause(); videoView?.removeFromSuperview(); videoView = nil; player = nil; bridge = nil
     }
 
@@ -2351,19 +2351,18 @@ final class FadingButton: NSButton {
 
 // The playback bar: ⟲10 · play/pause · ⟳10 · scrubber · time · volume. Parts drop out as the window narrows (the skip
 // buttons first, then the time, then the volume). The volume is the speaker icon — its glyph shows the level, a click
-// mutes — and hovering it slides a short slider out to its left (so the icon stays under the pointer), taking room
-// from the scrubber; it tucks away shortly after the pointer leaves. Both sliders are ThinSliders. 3.26: press-and-drag on
-// the speaker sets the volume too, from where it already is (VolumeGesture), and a drag on the slider is relative as well.
+// mutes — and hovering it pops a short vertical slider up above it (3.26: it needs no room in the bar, so it is there at any
+// window size); it goes shortly after the pointer leaves. Press-and-drag up or down on the speaker sets the volume too, from
+// where it already is (VolumeGesture), and a drag on the slider is relative as well. Both sliders are ThinSliders.
 final class PlayerControlBar: NSView {
-    static let volumeWidth: CGFloat = 50, volumeMinWidth: CGFloat = 180   // no slide-out in narrower bars
     var onPlayPause: (() -> Void)?
     var onSkip: ((Double) -> Void)?
     var onMute: (() -> Void)?
     var onSeek: ((Double) -> Void)?
     var onVolume: ((Double) -> Void)?
     // Dragging the scrubber or the volume: the bar stays up, and refreshes leave that slider where the finger is.
-    var isScrubbing: Bool { scrubber.isTracking || volumeSlider.isTracking || muteButton.isDragging }
-    private(set) var volumeOpen = false
+    var isScrubbing: Bool { scrubber.isTracking || volumeSlider.isTracking || muteButton.isDragging || volumeOpen }
+    private(set) var volumeOpen = false                // the volume pop-up is up
     private let backButton = NSButton(title: "", image: NSImage(), target: nil, action: nil)
     private let playButton = NSButton(title: "", image: NSImage(), target: nil, action: nil)
     private let forwardButton = NSButton(title: "", image: NSImage(), target: nil, action: nil)
@@ -2371,6 +2370,9 @@ final class PlayerControlBar: NSView {
     private var volumeGesture: VolumeGesture?        // a drag that began on the speaker
     private let scrubber = ThinSlider()
     private let volumeSlider = ThinSlider()
+    // 3.26: the slider lives in a panel above the speaker (a sibling of this bar in its parent, so not clipped to the bar): it
+    // pops up while the pointer is on the speaker or the panel, in a window of any size.
+    private lazy var volumePopup = VolumePopupView(slider: volumeSlider)
     private let timeLabel = NSTextField(labelWithString: "")
     private var isLiveStream = false
     private var longClock = false                    // an hour or more: "1:02:03 / 1:23:45" needs a wider label
@@ -2394,6 +2396,7 @@ final class PlayerControlBar: NSView {
         backButton.image = sym("gobackward.10").withSymbolConfiguration(Self.symbolConfig); backButton.toolTip = "Back 10 seconds"
         forwardButton.image = sym("goforward.10").withSymbolConfiguration(Self.symbolConfig); forwardButton.toolTip = "Forward 10 seconds"
         muteButton.toolTip = "Volume — click to mute, drag to change"
+        muteButton.dragAxis = .vertical                 // up is louder, like the slider above it
         muteButton.onDragStart = { [weak self] in self?.beginVolumeDrag() }
         muteButton.onDrag = { [weak self] dx, finished in self?.dragVolume(by: dx, finished: finished) }
         scrubber.onChange = { [weak self] value, _ in self?.onSeek?(value) }
@@ -2404,9 +2407,6 @@ final class PlayerControlBar: NSView {
             if finished { self?.scheduleVolumeClose() }
         }
         volumeSlider.setAccessibilityLabel("Volume")
-        volumeSlider.relative = true
-        volumeSlider.alphaValue = 0
-        addSubview(volumeSlider)
         timeLabel.font = Self.timeFont
         timeLabel.textColor = NSColor.white.withAlphaComponent(0.8)
         timeLabel.alignment = .right
@@ -2415,28 +2415,54 @@ final class PlayerControlBar: NSView {
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
                                        owner: self, userInfo: nil))
         layoutParts()
+        _ = volumePopup                                 // sets the slider up (vertical, relative) even before the bar has a parent
     }
     required init?(coder: NSCoder) { fatalError() }
     override func hitTest(_ point: NSPoint) -> NSView? { alphaValue < 0.05 ? nil : super.hitTest(point) }
     override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); layoutParts() }
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        if let parent = superview, volumePopup.superview !== parent { parent.addSubview(volumePopup, positioned: .above, relativeTo: self) }
+    }
 
-    // MARK: volume slide-out
+    // MARK: volume pop-up
     override func mouseEntered(with e: NSEvent) { pointerMoved(at: convert(e.locationInWindow, from: nil)) }
     override func mouseMoved(with e: NSEvent) { pointerMoved(at: convert(e.locationInWindow, from: nil)) }
     override func mouseExited(with e: NSEvent) { pointerMoved(at: nil) }
-    private var volumeZone: NSRect { (volumeOpen ? muteButton.frame.union(volumeSlider.frame) : muteButton.frame).insetBy(dx: -4, dy: -6) }
+    // The speaker, and — once the panel is up — the panel (in this bar's coordinates; the panel is in the parent's).
+    private var volumeZone: NSRect {
+        let panel = volumeOpen ? superview.map { convert(volumePopup.frame, from: $0) } : nil
+        return VolumeHover.zone(icon: muteButton.frame, slider: panel)
+    }
+    // `point` may lie outside the bar (over the panel), where its own tracking area stops; the close check below reads the real
+    // pointer position anyway, so moving up onto the panel keeps it.
     func pointerMoved(at point: NSPoint?) {
-        if let p = point, volumeZone.contains(p), !muteButton.isHidden, bounds.width >= Self.volumeMinWidth {
+        if let p = point, alphaValue >= 0.05, !muteButton.isHidden, volumeZone.contains(p) {
             closeVolumeWork?.cancel(); closeVolumeWork = nil
-            if !volumeOpen { volumeOpen = true; layoutParts(animated: true) }
+            if !volumeOpen { volumeOpen = true; showPopup(true, animated: true) }
         } else if volumeOpen {
             scheduleVolumeClose()
         }
     }
-    // A press-and-drag on the speaker: the level moves from where it is by how far the pointer travels sideways, whether or not
+    private func showPopup(_ visible: Bool, animated: Bool) {
+        if visible, let parent = superview {
+            volumePopup.frame = VolumePopup.frame(above: convert(muteButton.frame, to: parent), in: parent.bounds.size)
+        }
+        let alpha: CGFloat = visible ? 1 : 0
+        if animated { NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.15; volumePopup.animator().alphaValue = alpha } }
+        else { volumePopup.alphaValue = alpha }
+    }
+    // The panel goes at once (the bar is going, or the video is).
+    func collapseVolume() {
+        closeVolumeWork?.cancel(); closeVolumeWork = nil
+        guard volumeOpen else { return }
+        volumeOpen = false
+        showPopup(false, animated: false)
+    }
+    // A press-and-drag on the speaker: the level moves from where it is by how far the pointer travels up or down, whether or not
     // the pointer is on the slider; a click (no movement) still mutes.
     private func beginVolumeDrag() {
-        let slider = max(0, volumeSlider.bounds.width - 2 * ThinSlider.knobRadius)
+        let slider = max(0, volumeSlider.bounds.height - 2 * ThinSlider.knobRadius)
         volumeGesture = VolumeGesture(start: volumeSlider.value, span: max(slider, VolumeGesture.minSpan))
     }
     private func dragVolume(by dx: CGFloat, finished: Bool) {
@@ -2451,16 +2477,20 @@ final class PlayerControlBar: NSView {
         let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             self.closeVolumeWork = nil
-            guard !self.volumeSlider.isTracking, !self.muteButton.isDragging else { return }          // its release schedules this again
-            if let w = self.window, self.volumeZone.contains(self.convert(w.mouseLocationOutsideOfEventStream, from: nil)) { return }
+            // Still being dragged, or the pointer is still on the speaker or the panel (beyond this bar's own tracking area, so no
+            // event will say when it leaves): look again shortly.
+            if self.volumeSlider.isTracking || self.muteButton.isDragging { self.scheduleVolumeClose(); return }
+            if let w = self.window, self.volumeZone.contains(self.convert(w.mouseLocationOutsideOfEventStream, from: nil)) {
+                self.scheduleVolumeClose(); return
+            }
             self.volumeOpen = false
-            self.layoutParts(animated: true)
+            self.showPopup(false, animated: true)
         }
         closeVolumeWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
-    private func layoutParts(animated: Bool = false) {
+    private func layoutParts() {
         let h = bounds.height, btn: CGFloat = 16, gap: CGFloat = 4, pad: CGFloat = 5, labelH: CGFloat = 12, y = (h - btn) / 2
         var frames: [(NSView, NSRect)] = []
         let skips = bounds.width >= 150
@@ -2470,12 +2500,8 @@ final class PlayerControlBar: NSView {
             frames.append((b, NSRect(x: x, y: y, width: btn, height: btn))); x += btn + gap
         }
         var right = bounds.width - pad
-        muteButton.isHidden = bounds.width < 100
+        muteButton.isHidden = bounds.width < 46             // ⏯ and the speaker are the last to go (the slider pops up, so it needs no room)
         if !muteButton.isHidden { frames.append((muteButton, NSRect(x: right - btn, y: y, width: btn, height: btn))); right -= btn + gap }
-        let showVolume = volumeOpen && !muteButton.isHidden && bounds.width >= Self.volumeMinWidth
-        let volumeW = showVolume ? Self.volumeWidth : 0
-        frames.append((volumeSlider, NSRect(x: right - volumeW, y: 0, width: volumeW, height: h)))
-        if showVolume { right -= volumeW + gap }
         let left = x + 2
         if isLiveStream {
             scrubber.isHidden = true
@@ -2490,17 +2516,7 @@ final class PlayerControlBar: NSView {
             }
             frames.append((scrubber, NSRect(x: left, y: 0, width: max(0, right - left), height: h)))
         }
-        let volumeAlpha: CGFloat = showVolume ? 1 : 0
-        if animated {
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.2
-                for (v, f) in frames { v.animator().frame = f }
-                volumeSlider.animator().alphaValue = volumeAlpha
-            }
-        } else {
-            for (v, f) in frames { v.frame = f }
-            volumeSlider.alphaValue = volumeAlpha
-        }
+        for (v, f) in frames { v.frame = f }
     }
     private static func clockWidth(long: Bool) -> CGFloat {
         let sample = long ? "0:00:00 / 0:00:00" : "00:00 / 00:00"

@@ -71,10 +71,11 @@ struct MusicClicks {
 }
 
 // The volume control's drag (3.26), shared by the video bar and the music window. A press on the speaker is a click (mute /
-// unmute) unless the pointer moves sideways more than `slop`; then it is a drag, and the level moves from where it already is
-// by the distance travelled — the pointer doesn't have to be on the slider, and the level doesn't jump to it, as in Apple
-// Music. `span` is how many points a drag must cover to run the whole range (the slider's own length when the pointer is on it,
-// so the knob follows 1:1; at least `minSpan` from the speaker, whose slider is short). Pure, so `test.sh` covers it.
+// unmute) unless the pointer moves along the slider's axis (up or down, now that the slider pops up above the speaker) more than
+// `slop`; then it is a drag, and the level moves from where it already is by the distance travelled — the pointer doesn't have
+// to be on the slider, and the level doesn't jump to it, as in Apple Music. `span` is how many points a drag must cover to run
+// the whole range (the slider's own length when the pointer is on it, so the knob follows 1:1; at least `minSpan` from the
+// speaker, whose slider is short). Pure, so `test.sh` covers it.
 struct VolumeGesture: Equatable {
     static let slop: CGFloat = 3, minSpan: CGFloat = 80, fallbackSpan: CGFloat = 60
     let start: Double, span: CGFloat
@@ -82,18 +83,34 @@ struct VolumeGesture: Equatable {
         self.start = start.isFinite ? min(1, max(0, start)) : 0
         self.span = span > 0 && span.isFinite ? span : Self.fallbackSpan
     }
-    // The level after the pointer has moved `dx` points (right = louder) since the press. Measured from the press, not from the
-    // last event, so pulling back past either end unwinds the way it came.
-    func level(afterMoving dx: CGFloat) -> Double { min(1, max(0, start + Double(dx / span))) }
-    // Whether `dx` is far enough from the press to be a drag rather than a click.
-    static func isDrag(_ dx: CGFloat) -> Bool { abs(dx) >= slop }
+    // The level after the pointer has moved `distance` points (up / right = louder) since the press. Measured from the press, not
+    // from the last event, so pulling back past either end unwinds the way it came.
+    func level(afterMoving distance: CGFloat) -> Double { min(1, max(0, start + Double(distance / span))) }
+    // Whether `distance` is far enough from the press to be a drag rather than a click.
+    static func isDrag(_ distance: CGFloat) -> Bool { abs(distance) >= slop }
 }
 
-// Where the pointer must be for a volume slider to be out: on the speaker (a little beyond its edges), and, once the slider has
-// slid out, on that too — so the pointer can travel along it without it closing. nil slider: not out. Pure.
+// Where the pointer must be for the volume pop-up to be out: on the speaker (a little beyond its edges), and, once the panel has
+// come up, on that too — so the pointer can travel from the speaker up into it without it closing. nil panel: not out. Pure.
 enum VolumeHover {
     static func zone(icon: CGRect, slider: CGRect?) -> CGRect {
         let both = slider.map { icon.union($0) } ?? icon
         return both.insetBy(dx: -4, dy: -6)
+    }
+}
+
+// Where the volume pop-up panel sits (3.26): a short vertical panel directly above the speaker, centred on it, so it needs no
+// room in the controls' row and works in a window of any size. With little room above the speaker (a very small window) the
+// panel gets shorter, down to `minHeight`; it slides sideways to stay inside the window. `icon` is in the container's own
+// coordinates (origin bottom left, y up; the container is `size` big). Pure, so `test.sh` covers it.
+enum VolumePopup {
+    static let width: CGFloat = 28, height: CGFloat = 96, minHeight: CGFloat = 32, gap: CGFloat = 4, margin: CGFloat = 4
+    static func frame(above icon: CGRect, in size: CGSize) -> CGRect {
+        let bottom = icon.maxY + gap
+        let room = size.height - margin - bottom
+        let h = min(height, max(minHeight, room))
+        let y = min(bottom, max(0, size.height - h))
+        let x = min(max(icon.midX - width / 2, margin), max(margin, size.width - width - margin))
+        return CGRect(x: x, y: y, width: width, height: h)
     }
 }

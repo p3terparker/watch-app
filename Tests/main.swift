@@ -306,6 +306,21 @@ expect(tuckedZone.contains(CGPoint(x: 368, y: 13)) && !tuckedZone.contains(CGPoi
 expect(outZone.contains(CGPoint(x: 330, y: 13)) && outZone.contains(CGPoint(x: 368, y: 13)) && !outZone.contains(CGPoint(x: 300, y: 13)),
        "slid out: the speaker and the slider keep it, nothing beyond")
 expect(outZone.minX == 314 && outZone.maxX == 380, "…joined, so the pointer can travel from the speaker along the slider")
+// 3.26: the volume slider is a vertical panel that pops up above the speaker, at any window size.
+let popIcon = CGRect(x: 150, y: 4, width: 16, height: 18)
+let popup = VolumePopup.frame(above: popIcon, in: CGSize(width: 320, height: 320))
+expect(popup == CGRect(x: 144, y: 26, width: 28, height: 96), "centred above the speaker, 4 pt clear of it, 28 × 96 (\(popup))")
+expect(VolumePopup.frame(above: CGRect(x: 2, y: 4, width: 16, height: 18), in: CGSize(width: 320, height: 320)).minX == 4, "kept inside the left edge")
+expect(VolumePopup.frame(above: CGRect(x: 300, y: 4, width: 16, height: 18), in: CGSize(width: 320, height: 320)).maxX == 316, "…and the right edge")
+let smallPopup = VolumePopup.frame(above: CGRect(x: 100, y: 19, width: 16, height: 18), in: CGSize(width: 240, height: 100))
+expect(smallPopup.height < 96 && smallPopup.height >= VolumePopup.minHeight && smallPopup.maxY <= 100 - VolumePopup.margin + 0.001 && smallPopup.minY >= 41,
+       "a short window gives it less height, never above the top (\(smallPopup))")
+let cramped = VolumePopup.frame(above: CGRect(x: 10, y: 30, width: 16, height: 18), in: CGSize(width: 60, height: 60))
+expect(cramped.maxY <= 60 && cramped.minY >= 0 && cramped.minX >= 0 && cramped.maxX <= 60, "even a cramped window keeps it on screen (\(cramped))")
+expect(VolumePopup.frame(above: popIcon, in: CGSize(width: 20, height: 320)).width == 28, "a window narrower than the panel doesn't squash it")
+let popZone = VolumeHover.zone(icon: popIcon, slider: popup)
+expect(popZone.contains(CGPoint(x: 158, y: 24)) && popZone.contains(CGPoint(x: 158, y: 60)) && !popZone.contains(CGPoint(x: 158, y: 140)),
+       "the zone joins the speaker and the panel above it — the 4 pt gap between them too — and nothing beyond")
 
 // 3.26: the menu-bar ticker's one line and its motion.
 expect(TickerText.line(title: "Song", artist: "Artist") == "Song – Artist", "song – artist")

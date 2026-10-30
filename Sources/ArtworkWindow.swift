@@ -134,7 +134,6 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     private let titleLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
     private let dotButton = FadingButton(title: "", image: sym("ellipsis.circle.fill"), target: nil, action: nil)
-    private let queueButton = FadingButton(title: "", image: sym("list.bullet.circle.fill"), target: nil, action: nil)
     var onQueue: (() -> Void)?                         // ≡, ⌥⌘U, the menu: the Up Next list drops down under the window
     let controls = ArtworkControlsView()
     private let flashView = CentreFlashView()
@@ -225,11 +224,6 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         dotButton.isBordered = false; dotButton.contentTintColor = NSColor.white.withAlphaComponent(0.55)
         dotButton.imageScaling = .scaleProportionallyDown; dotButton.toolTip = "Menu"
         content.addSubview(dotButton)
-        queueButton.target = self; queueButton.action = #selector(queueTapped)
-        queueButton.alphaValue = 0
-        queueButton.isBordered = false; queueButton.contentTintColor = NSColor.white.withAlphaComponent(0.55)
-        queueButton.imageScaling = .scaleProportionallyDown; queueButton.toolTip = "Up Next (⌥⌘U)"
-        content.addSubview(queueButton)
         controls.alphaValue = 0
         controls.previous.onPress = { [weak self] in self?.onCommand?(.command(.previous)) }
         controls.next.onPress = { [weak self] in self?.onCommand?(.command(.next)) }
@@ -363,14 +357,12 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
             shadeFrame = spot.caption; controlsFrame = spot.controls
             fullChrome = spot.chrome
             dotButton.frame = NSRect(x: b.width - 40, y: b.height - 56, width: 16, height: 16)
-            queueButton.frame = NSRect(x: b.width - 62, y: b.height - 56, width: 16, height: 16)
         } else {
             fullChrome = 1
             artHolder.frame = b
             shadeFrame = NSRect(x: 0, y: 0, width: b.width, height: ArtworkLayout.windowBand + lift)
             controlsFrame = NSRect(x: 12, y: 6, width: max(0, b.width - 24), height: ArtworkLayout.controlsHeight)
             dotButton.frame = NSRect(x: b.width - 20, y: b.height - 20, width: 16, height: 16)
-            queueButton.frame = NSRect(x: b.width - 40, y: b.height - 20, width: 16, height: 16)
         }
         imageView.frame = artHolder.bounds
         flashView.frame = NSRect(x: (artHolder.frame.midX - 28).rounded(), y: (artHolder.frame.midY - 28).rounded(), width: 56, height: 56)
@@ -500,6 +492,7 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     // never go mid-drag. Full screen has its own rules (`fullScreenPointerMoved`).
     func pointerMoved(at point: NSPoint?) {
         pointer = point
+        controls.pointerMoved(at: point.map { controls.convert($0, from: content) })    // the volume pop-up reaches beyond the row
         if inFullScreen { fullScreenPointerMoved(at: point); return }
         if let p = point {
             fadeChrome(visible: true)
@@ -573,7 +566,6 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
             ctx.duration = visible ? 0.2 : Self.hideDuration
             ctx.timingFunction = CAMediaTimingFunction(name: curve)
             dotButton.animator().alphaValue = target
-            queueButton.animator().alphaValue = target
             shade.animator().alphaValue = target * fade
             controls.animator().alphaValue = controlsTarget * fade
         }
@@ -803,11 +795,11 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         controls.volume.value = controls.volume.value > 0 ? 0 : lastVolume
         volumeChanged(to: controls.volume.value, finished: true)
     }
-    // A press-and-drag on the speaker (3.26) sets the volume from where it already is, by how far the pointer moves sideways —
+    // A press-and-drag on the speaker (3.26) sets the volume from where it already is, by how far the pointer moves up or down —
     // the pointer needn't be on the slider (a click, without moving, mutes instead). Anything but allowed/askable does nothing.
     private func beginVolumeDrag() {
         guard volumeAccess == .granted || volumeAccess == .undetermined else { volumeGesture = nil; return }
-        let slider = max(0, controls.volume.bounds.width - 2 * ThinSlider.knobRadius)
+        let slider = max(0, controls.volume.bounds.height - 2 * ThinSlider.knobRadius)
         volumeGesture = VolumeGesture(start: controls.volume.value, span: max(slider, VolumeGesture.minSpan))
     }
     private func dragVolume(by dx: CGFloat, finished: Bool) {
@@ -848,7 +840,6 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         }
         return m
     }
-    @objc private func queueTapped() { onQueue?() }
     @objc private func showMenu() {
         makeMenu().popUp(positioning: nil, at: NSPoint(x: dotButton.frame.minX - 150, y: dotButton.frame.minY - 4), in: content)
     }
@@ -970,9 +961,11 @@ final class ArtworkControlsView: NSView {
     private var modesAvailable = false                  // the app has its own shuffle/repeat Watch can set
     private var favouriteAvailable = false              // the app has a ★ Watch can set (Apple Music)
     private var longClock = false
-    // 3.26: the volume slider is tucked away (zero width, invisible) until the pointer rests on the speaker, then slides out to its
-    // left; it goes shortly after the pointer leaves the speaker and the slider.
+    // 3.26: the volume slider lives in a panel that pops up above the speaker while the pointer is on the speaker (or the panel)
+    // and goes shortly after it leaves. The panel is a sibling of this row in its parent (added when the row is), so it isn't
+    // clipped to the row and needs no room in it — it works at any window size.
     static let volumeCloseDelay: TimeInterval = 0.5
+    lazy var volumePopup = VolumePopupView(slider: volume)
     private(set) var volumeOpen = false
     private var closeVolumeWork: DispatchWorkItem?
     private var row = ControlRow()                      // as last laid out
@@ -985,53 +978,76 @@ final class ArtworkControlsView: NSView {
             addSubview(label)
         }
         elapsedLabel.alignment = .right; remainingLabel.alignment = .left    // the times hug the timeline
-        for v in [previous, playPause, next, timeline, favourite, shuffle, repeatButton, volumeIcon, volume] as [NSView] { addSubview(v) }
+        for v in [previous, playPause, next, timeline, favourite, shuffle, repeatButton, volumeIcon] as [NSView] { addSubview(v) }
         timeline.setAccessibilityLabel("Position")
         volume.setAccessibilityLabel("Volume")
-        volume.relative = true                          // a drag moves it from where it is; a click doesn't jump
-        volume.alphaValue = 0
+        volumeIcon.dragAxis = .vertical                 // up is louder, like the slider above it
         shuffle.lit = false; repeatButton.lit = false
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
                                        owner: self, userInfo: nil))
         layoutParts()
+        _ = volumePopup                                 // sets the slider up (vertical, relative) even before the row has a parent
     }
     required init?(coder: NSCoder) { fatalError() }
     override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); layoutParts() }
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        if let parent = superview, volumePopup.superview !== parent { parent.addSubview(volumePopup, positioned: .above, relativeTo: self) }
+    }
 
-    // MARK: volume slide-out
+    // MARK: volume pop-up
     override func mouseEntered(with e: NSEvent) { pointerMoved(at: convert(e.locationInWindow, from: nil)) }
     override func mouseMoved(with e: NSEvent) { pointerMoved(at: convert(e.locationInWindow, from: nil)) }
     override func mouseExited(with e: NSEvent) { pointerMoved(at: nil) }
     private var canSlide: Bool { (access == .granted || access == .undetermined) && row.volumeIcon != nil }
-    private var volumeZone: CGRect? { row.volumeIcon.map { VolumeHover.zone(icon: $0, slider: volumeOpen ? row.volume : nil) } }
+    // The speaker, and — once the panel is up — the panel (in this view's coordinates; the panel is in the parent's).
+    private var volumeZone: CGRect? {
+        guard let icon = row.volumeIcon else { return nil }
+        let panel = volumeOpen ? superview.map { convert(volumePopup.frame, from: $0) } : nil
+        return VolumeHover.zone(icon: icon, slider: panel)
+    }
+    // `point` is in this view's coordinates, and may lie outside it (over the panel): AppDelegate-side code forwards the window's
+    // pointer here, since the panel is beyond this row's own tracking area.
     func pointerMoved(at point: NSPoint?) {
         if let p = point, alphaValue >= 0.05, canSlide, volumeZone?.contains(p) == true {
             closeVolumeWork?.cancel(); closeVolumeWork = nil
-            if !volumeOpen { volumeOpen = true; layoutParts(animated: true) }
+            if !volumeOpen { volumeOpen = true; showPopup(true, animated: true) }
         } else if volumeOpen {
             scheduleVolumeClose()
         }
+    }
+    private func showPopup(_ visible: Bool, animated: Bool) {
+        if visible, let parent = superview, let icon = row.volumeIcon {
+            volumePopup.frame = VolumePopup.frame(above: convert(icon, to: parent), in: parent.bounds.size)
+        }
+        let alpha: CGFloat = visible ? 1 : 0
+        if animated { NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.15; volumePopup.animator().alphaValue = alpha } }
+        else { volumePopup.alphaValue = alpha }
     }
     private func scheduleVolumeClose() {
         guard closeVolumeWork == nil else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             self.closeVolumeWork = nil
-            guard !self.volume.isTracking, !self.volumeIcon.isDragging else { return }      // its release asks again
-            if let w = self.window, self.volumeZone?.contains(self.convert(w.mouseLocationOutsideOfEventStream, from: nil)) == true { return }
+            // Still being dragged, or the pointer is still on the speaker or the panel (beyond this row's own tracking area, so no
+            // event will say when it leaves): look again shortly.
+            if self.volume.isTracking || self.volumeIcon.isDragging { self.scheduleVolumeClose(); return }
+            if let w = self.window, self.volumeZone?.contains(self.convert(w.mouseLocationOutsideOfEventStream, from: nil)) == true {
+                self.scheduleVolumeClose(); return
+            }
             self.collapseVolume(animated: true)
         }
         closeVolumeWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.volumeCloseDelay, execute: work)
     }
-    // The slider tucks back in (at once with the controls themselves, otherwise animated).
+    // The panel goes (at once with the controls themselves, otherwise it fades).
     func collapseVolume(animated: Bool = false) {
         closeVolumeWork?.cancel(); closeVolumeWork = nil
         guard volumeOpen else { return }
         volumeOpen = false
-        layoutParts(animated: animated)
+        showPopup(false, animated: animated)
     }
-    // A drag on the slider or the speaker ended: it may go once the pointer is off them.
+    // A drag on the slider or the speaker ended: the panel may go once the pointer is off them.
     func endVolumeInteraction() { if volumeOpen { scheduleVolumeClose() } }
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard alphaValue >= 0.05, !isHidden, let hit = super.hitTest(point) else { return nil }
@@ -1101,34 +1117,18 @@ final class ArtworkControlsView: NSView {
         layoutParts()
     }
 
-    // `animated`: the slider sliding out or in, and what it moves aside.
-    private func layoutParts(animated: Bool = false) {
-        let slides = access == .granted || access == .undetermined
+    private func layoutParts() {
         row = ArtworkLayout.controlRow(width: bounds.width, height: bounds.height, timeline: showsTimeline, longClock: longClock,
-                                       modes: modesAvailable && access != .unsupported, volume: access == .unsupported ? .none : slides && volumeOpen ? .slider : .icon,
+                                       modes: modesAvailable && access != .unsupported, volume: access == .unsupported ? .none : .icon,
                                        favourite: favouriteAvailable && access != .unsupported)
-        var frames: [(NSView, CGRect)] = []
         func place(_ view: NSView, _ frame: CGRect?) {
             view.isHidden = frame == nil
-            if let f = frame { frames.append((view, f)) }
+            if let f = frame { view.frame = f }
         }
         place(previous, row.previous); place(playPause, row.playPause); place(next, row.next)
         place(elapsedLabel, row.elapsed); place(timeline, row.timeline); place(remainingLabel, row.remaining)
         place(favourite, row.favourite); place(shuffle, row.shuffle); place(repeatButton, row.repeatMode)
         place(volumeIcon, row.volumeIcon)
-        // Tucked away, the slider keeps its place beside the speaker at zero width and no opacity, so it slides out from there.
-        place(volume, row.volume ?? row.volumeIcon.map { CGRect(x: $0.minX, y: $0.minY, width: 0, height: $0.height) })
-        let sliderAlpha: CGFloat = row.volume == nil ? 0 : 1
-        if animated {
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.2
-                for (v, f) in frames { v.animator().frame = f }
-                volume.animator().alphaValue = sliderAlpha
-            }
-        } else {
-            for (v, f) in frames { v.frame = f }
-            volume.alphaValue = sliderAlpha
-        }
     }
 }
 

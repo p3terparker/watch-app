@@ -66,7 +66,7 @@ back-off then give up). **Playback controls** (build 50): resting the pointer on
 timeline (elapsed / -remaining), ⏮ ⏯ ⏭ and — for Music/Spotify — the app's own volume (`AppVolume` via AppleScript
 `sound volume`, Automation asked once on the first drag's release). Commands go out only on a click (`NowPlayingRemote`:
 one short adapter `send`/`seek` run each). Thin white sliders (`ThinSlider`, `Sources/ThinSlider.swift`) are shared with the
-video player, whose speaker icon now slides out a volume slider on hover (↑/↓ keys too; `Prefs.playerVolume`). Pure logic +
+video player, whose speaker icon pops up a volume slider on hover (3.26: vertical, above the speaker; ↑/↓ keys too; `Prefs.playerVolume`). Pure logic +
 monitor in `Sources/NowPlaying.swift` (tested by `test.sh`); window, controls and actions in `Sources/ArtworkWindow.swift`.
 **Build 51:** YouTube never falls back to its web page (that page caused the ads, the missing click zones and the video
 thumbnail in the music window): `PlayerFailureView` with yt-dlp's reason, one signed-in retry for bot/age checks when a
@@ -146,10 +146,14 @@ off by default): `MenuBarTicker` (`Sources/MenuBarTicker.swift`) is a second sta
 scrolls like iTunes's display when wider than 150 pt (`Marquee`/`TickerText`, `Sources/Marquee.swift`, tested; one
 CAKeyframeAnimation, no timer; still when paused or with Reduce Motion); it exists only while a song is known; the Now Playing
 reader runs for it all the time (`NowPlayingMonitor.Client.ticker`); `AppDelegate.refreshTicker`. (3) Volume: the slider is **always
-tucked away** and slides out to the speaker's left only while the pointer rests on the speaker (music window: `ArtworkControlsView
-.volumeOpen`, `ArtworkLayout.controlRow(volume: .icon/.slider)`; video bar already did). A click on the speaker mutes; press-and-drag
-sideways (`DragButton`, `VolumeGesture`, `VolumeHover` in `PlayerZones.swift`, tested) moves the level **from where it is** by 1/80 per
-point (no jump), and `ThinSlider.relative` makes the slider itself drag the same way. (4) Full screen: dragging resizes the picture
+hidden** and pops **up** (vertical, `ThinSlider.vertical`) in a small panel above the speaker only while the pointer is on the speaker
+or the panel (`VolumePopupView`, a sibling of the controls in their parent, added by `viewDidMoveToSuperview`; `VolumePopup.frame`
+fits it above the speaker at **any window size**, `VolumeHover.zone` joins speaker and panel) — music window `ArtworkControlsView
+.volumeOpen`, video bar `PlayerControlBar`; the row no longer holds a slider (`ArtworkLayout.controlRow(volume: .icon)`). A click on
+the speaker mutes; press-and-drag **up/down** (`DragButton.dragAxis = .vertical`, `VolumeGesture`, `VolumeHover`, `VolumePopup` in
+`PlayerZones.swift`, tested) moves the level **from where it is** by 1/80 per point (no jump), and `ThinSlider.relative` makes the
+slider itself drag the same way. The 3.21 queue is **on hold**: the ≡ button is gone from the music window; Up Next is only in the
+right-click / "…" menu (⌥⌘U) and the Play Next / Play Later row menus. (4) Full screen: dragging resizes the picture
 (`PlayerSurfaceView.dragIsResize/onResizeDrag` → `ArtworkWindowController.resizeArtwork`, `ArtworkLayout.resizedScale`, factor
 `fullScreenScale`, `Prefs.artworkFullScreenScale`; a quarter of the usual size up to filling the screen); past the point where it and
 the caption stack fit together it stays on the top edge and grows downward, caption and controls slide down with it and fade

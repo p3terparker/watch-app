@@ -24,7 +24,7 @@ The version number only goes up when a new batch of changes starts, not on every
 
 1. Write the release notes in `docs/releases/v<version>.md`, covering everything since the last stable release. Merge them to `main`.
 2. Make sure the build you want has passed and is the current build.
-3. Run the **Promote to stable** workflow from the Actions tab. Leave the tag as `current-build`. Tick *dry run* first if you want to see what it will do.
+3. Run the **Promote to stable** workflow from the Actions tab. Leave the tag as `current-build`. Tick *dry run* first if you want to see what it will do. Tick *replace old* only when you want every earlier stable release (and its tag) deleted, so the new one is the only release left; the download links of the old ones stop working.
 
 The workflow takes the installer already attached to the current build (it doesn't rebuild), checks its SHA-256, publishes `v<version>` as the latest release with your notes and the hash, and then deletes the current build and any old `vX.Y-preview` releases. If `docs/releases/next.md` exists, delete it in the same change so the next current build starts clean.
 
