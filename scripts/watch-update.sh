@@ -5,10 +5,10 @@
 #   watch-update --stable     the release marked Latest instead
 #   watch-update --dry-run    say what it would do; change nothing
 #   watch-update --force      reinstall even if this build is already installed
-#   watch-update --install-agent    check every 10 minutes in the background and update by itself (a launchd agent)
-#   watch-update --uninstall-agent  stop doing that
-#   watch-update --auto       what the agent runs: quiet, logs to ~/Library/Application Support/Watch Updater/updater.log,
-#                             shows a notification when it has updated Watch (which quits and reopens it)
+#   watch-update --uninstall-agent  remove the 10-minute background checker an earlier version of this script could install
+#
+# It runs only when you ask (or when Claude has just finished a wave of changes and runs it for you): it does not check on a
+# schedule. Run it straight from GitHub so there is never an old copy: curl -fsSL <raw URL of this file> | bash
 #
 # Why it avoids the "unidentified developer" dialog and the password: the disk image is fetched with curl, which does not
 # mark it as quarantined (a browser download does), so Gatekeeper never looks at it; and Watch is replaced where it already
@@ -24,16 +24,14 @@ STATE_DIR="$HOME/Library/Application Support/Watch Updater"
 STATE="$STATE_DIR/installed"
 LABEL="com.jacob.watch-updater"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-LOG="$STATE_DIR/updater.log"
-channel="current-build"; dry=0; force=0; auto=0; agent=""
+channel="current-build"; dry=0; force=0; agent=""
 for arg in "$@"; do
     case "$arg" in
         --stable)  channel="latest" ;;
         --dry-run) dry=1 ;;
         --force)   force=1 ;;
-        --auto)    auto=1 ;;
-        --install-agent|--uninstall-agent) agent="$arg" ;;
-        -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --uninstall-agent) agent="$arg" ;;
+        -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "watch-update: unknown option $arg (try --help)" >&2; exit 2 ;;
     esac
 done
@@ -41,48 +39,12 @@ done
 say() { printf '%s\n' "$*"; }
 die() { printf 'watch-update: %s\n' "$*" >&2; exit 1; }
 
-# --- the background agent: this script, copied to a fixed place, run by launchd every 10 minutes and at login
+# --- clean-up of the background checker an earlier version could install (no longer offered)
 if [ "$agent" = "--uninstall-agent" ]; then
     launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
     rm -f "$PLIST"
     say "Background updates are off. (watch-update still works by hand.)"
     exit 0
-fi
-if [ "$agent" = "--install-agent" ]; then
-    [ -f "$0" ] || die "run this from the downloaded file, not piped into bash"
-    mkdir -p "$STATE_DIR" "$HOME/Library/LaunchAgents"
-    installed_script="$STATE_DIR/watch-update"
-    [ "$0" -ef "$installed_script" ] || cp "$0" "$installed_script"
-    chmod +x "$installed_script"
-    cat > "$PLIST" <<PLISTEOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-    <key>Label</key><string>$LABEL</string>
-    <key>ProgramArguments</key><array><string>$installed_script</string><string>--auto</string></array>
-    <key>RunAtLoad</key><true/>
-    <key>StartInterval</key><integer>600</integer>
-    <key>ProcessType</key><string>Background</string>
-</dict></plist>
-PLISTEOF
-    launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
-    launchctl bootstrap "gui/$(id -u)" "$PLIST" || die "couldn't start the background agent"
-    say "Done. Every 10 minutes (and now) it checks GitHub and, if there is a newer build, installs it."
-    say "Updating quits and reopens Watch, with a notification. Log: $LOG"
-    say "By hand any time: $installed_script   ·   turn off: $installed_script --uninstall-agent"
-    exit 0
-fi
-
-# Background runs say nothing on screen: everything goes to the log (kept small), and only one runs at a time.
-if [ "$auto" = 1 ]; then
-    mkdir -p "$STATE_DIR"
-    if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 200000 ]; then tail -c 50000 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"; fi
-    exec >>"$LOG" 2>&1
-    echo "--- $(date '+%Y-%m-%d %H:%M:%S')"
-    mkdir "$STATE_DIR/lock" 2>/dev/null || {
-        if [ -n "$(find "$STATE_DIR/lock" -maxdepth 0 -mmin +30 2>/dev/null)" ]; then rmdir "$STATE_DIR/lock" 2>/dev/null || true; fi
-        echo "another update is running"; exit 0
-    }
 fi
 
 if [ "$channel" = "latest" ]; then api="https://api.github.com/repos/$REPO/releases/latest"
@@ -94,14 +56,11 @@ cleanup() {
     if [ -n "$mount_point" ]; then hdiutil detach "$mount_point" -quiet -force >/dev/null 2>&1 || true; fi
     rm -rf "$work"
 }
-trap 'cleanup; [ "$auto" = 1 ] && rmdir "$STATE_DIR/lock" 2>/dev/null; true' EXIT
+trap cleanup EXIT
 
 # --- what is the newest build? (the release is recreated on every passing build, so its publish time says which one it is)
-if ! curl -fsSL -H 'Accept: application/vnd.github+json' "$api" -o "$work/release.json"; then
-    # Offline, rate-limited, or no build has passed yet: nothing to do. By hand that is worth saying; in the background it is normal.
-    if [ "$auto" = 1 ]; then echo "couldn't read the release (offline, or none yet)"; exit 0; fi
-    die "couldn't read $api — is the build finished? (no '$channel' release yet means no build has passed)"
-fi
+curl -fsSL -H 'Accept: application/vnd.github+json' "$api" -o "$work/release.json" \
+    || die "couldn't read $api — are you online, and has a build passed? (no '$channel' release yet means none has)"
 field() { grep -o "\"$1\": *\"[^\"]*\"" "$work/release.json" | head -1 | sed 's/^[^:]*: *"//; s/"$//' || true; }
 published="$(field published_at)"
 title="$(field name)"
@@ -176,6 +135,4 @@ mkdir -p "$STATE_DIR"; printf '%s' "$published" > "$STATE"
 new_version="$(defaults read "$dest/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo '?') ($(defaults read "$dest/Contents/Info" CFBundleVersion 2>/dev/null || echo '?'))"
 say "Installed $new_version. Opening Watch…"
 open "$dest"
-if [ "$auto" = 1 ]; then
-    osascript -e "display notification \"Watch $new_version is installed and open.\" with title \"Watch updated\"" >/dev/null 2>&1 || true
-fi
+

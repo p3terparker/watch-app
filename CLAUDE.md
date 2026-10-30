@@ -157,16 +157,16 @@ the caption stack fit together it stays on the top edge and grows downward, capt
 
 **Working routine (the owner's standing rules, 2026-10-30):** for each batch of changes asked for: make them, push to the session's
 `claude/` branch (that publishes the **Current build** pre-release once the tests pass), and when the build is finalized and
-ready to test, **update the owner's Mac with it** — run `~/Library/Application Support/Watch Updater/watch-update` there
-(`scripts/watch-update.sh`; needs a Remote Control session — `list_computer_folders`, then `request_computer_folder`; if the Mac
-isn't reachable, say so and the background agent / `watch-update` does it). A finished build session ends with that, not before.
+ready to test, **update the owner's Mac with it**: run `curl -fsSL https://raw.githubusercontent.com/p3terparker/watch-app/<branch>/scripts/watch-update.sh | bash`
+there (`scripts/watch-update.sh`; needs a Remote Control session — `list_computer_folders`, then `request_computer_folder`; if the
+Mac isn't reachable, say so and give the owner the same command). Only after a finished wave of changes, or when asked — **never
+on a schedule or per small push**; the owner decided against background polling. A finished build session ends with that.
 **Never publish the official release until the owner says so:** no Promote to stable workflow, no `vX.Y` release or tag, no
 merge to `main`, no `docs/releases/vX.Y.md` push meant for promotion. Use `[no preview]` in a commit message for pushes that
 must not replace the Current build (docs-only, work in progress); remember a new push cancels a build still running on the branch.
 **Updating a Mac:** `scripts/watch-update.sh` downloads the Current build with curl (no quarantine mark, so no "unidentified
 developer" dialog), checks its SHA-256 from the release notes, quits Watch, replaces it where it lives and reopens it.
-`--install-agent` makes launchd run it every 10 minutes (`--auto`: quiet, logged, notification), `--stable` follows the Latest
-release, `--dry-run` only reports.
+`--stable` follows the Latest release, `--dry-run` only reports, `--force` reinstalls.
 
 **Gotchas (see GOTCHAS.md):** never AppleScript an app by name unless it's running (uninstalled names pop a
 "Where is …?" chooser) and never send Apple Events without checking `AEDeterminePermissionToAutomateTarget`
