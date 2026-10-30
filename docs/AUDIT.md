@@ -11,8 +11,25 @@ skips publishing for commits marked `[no preview]`. No preference keys added; bu
 ### Verification
 
 - Authored in a Linux cloud session without a Swift toolchain (its download host is blocked there and running downloaded
-  compilers isn't permitted), so nothing was compiled locally. GitHub Actions on macOS is the compiler and test runner;
-  results are recorded below once the run finishes.
+  compilers isn't permitted), so nothing was compiled locally; GitHub Actions on macOS compiled and tested it.
+- [Run 40981479051](https://github.com/p3terparker/watch-app/actions/runs/40981479051), commit `585e422` (macos-15, Xcode 16.4,
+  Swift 6.1.2), all gating steps green on the first attempt:
+  - The whole app type-checks; the universal build passed its bundle verification.
+  - 18 tooling tests and **636** Swift checks pass (562 in build 51). New: the one-row layout (order, one line, no overlaps,
+    drop-out order at 376/276/220/200/100 pt, no length, unscriptable app, denied volume, long clock), `MusicZone` strips,
+    shuffle/repeat/reveal scripts, repeat cycling and reading the apps' answers.
+  - 12 real-helper checks pass, the Now Playing adapter under system perl included. The installer verification passed for
+    3.20 (52): 230,529,288 bytes, SHA-256 `834a841223908e1d1f1ca9610e01332b344994b383fecfca214355c7d7e76abd`.
+  - The isolated AppKit harness passes **170 checks with 0 failures** (153 in build 51), on the fixture video and the
+    music window: controls revealed on hovering anywhere, the one-row geometry, 🔀/🔁 setting the fixture app's shuffle and
+    repeat (off → all → one → off) lit accordingly, the 1 s exit grace (and re-entry keeping them), a single click
+    waiting out the double-click interval before reaching Music (also from a corner and the bottom edge), a double-click
+    opening the source without playing/pausing, edge-strip double-clicks stacking ∓10 s, a double-click a quarter in
+    opening instead of skipping, no shuffle/repeat for Podcasts, and every earlier player/panel/music-window check.
+  - The informational live YouTube step hit YouTube's bot check for 2 of 3 public videos from GitHub's address (the third
+    resolved natively in 3.6 s); it doesn't gate the preview and is unrelated to this change.
+  - That commit's message happened to quote the `[no preview]` marker, so the preview was published by the following
+    documentation commit's run.
 - Manual (pending, needs a real Mac): reveal and click timing feel; shuffle/repeat changing real Music and Spotify settings
   (and the one-time Automation prompt on the first click); double-click opening/revealing in Music, Spotify and Podcasts.
 
