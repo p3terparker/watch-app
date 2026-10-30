@@ -1,6 +1,6 @@
 # Watch App
 
-A "plays almost any video" menu-bar player. **Current: v3.25.**
+A "plays almost any video" menu-bar player. **Current: v3.26.**
 Binary `Watch` · bundle `com.jacob.watch` · hotkey **⌥⌘Y** ·
 frameworks: Cocoa, WebKit, Carbon, ServiceManagement, **AVKit, AVFoundation, MediaPlayer**.
 
@@ -91,7 +91,7 @@ that phase keeps the number; bump it only when a new phase starts or the user sa
 holds the stable `vX.Y` release(s) and at most one pre-release, **Current build** (tag `current-build`), which each passing
 push replaces; there are no per-version previews. A stable release is made by running the **Promote to stable** workflow
 (`promote.yml`, see docs/RELEASE.md) once `docs/releases/vX.Y.md` is on `main`. The installer is named with the release
-number: `package.sh` makes `dist/Watch-<version>.dmg` (e.g. `Watch-3.25.dmg`).
+number: `package.sh` makes `dist/Watch-<version>.dmg` (e.g. `Watch-3.26.dmg`).
 **3.21 — Up Next under the music window:** `PlayQueue`/`QueueItem` (+ `MediaSource`, `SpotifyLink`) moved to
 `Sources/Queue.swift` with Play Next/Later insertion, edits, sections and `handBack` (tested); `Sources/Handoff.swift` has the
 pure song-boundary reducer and `QueueRoute` (tested). `UniversalQueue` (`Sources/UpNext.swift`) plays the current item in
@@ -135,6 +135,25 @@ mid-drag). Full screen is unchanged. Clicks are timed by Watch, not AppKit's `cl
 tested) joins a click to a run only within `MusicZone.doubleClickWindow` (`min(system interval, 0.3 s)`) of the previous one, so a
 single click plays/pauses after ≈ 0.32 s (was ≈ 0.55 s), a double-click opens the app only if quick, and a slow second click is a
 fresh single click. Video windows keep the 3.14 zones and timings.
+
+**3.26 — star, menu-bar ticker, volume, full-screen resize:** (1) the music window's controls row has a **★** left of shuffle for
+Apple Music only (`AppVolume.favouriteReadScript/WriteScript` — `favorited` of the current track, `loved` as the fallback;
+`MusicAppControl.favourite/setFavourite`; `ArtworkWindowController.refreshFavourite/toggleFavourite`, `isFavourite`): read when the
+controls come up and on a new song (only when Watch is already allowed), a click sets it in the background (Music is never brought
+forward; may ask Automation once) — separate from Watch's own Favourites. **Spotify has no star**: its scripting has no like
+command (Web API deliberately not used). (2) Preferences ▸ "Show the playing song and artist in the menu bar" (`Prefs.showTicker`,
+off by default): `MenuBarTicker` (`Sources/MenuBarTicker.swift`) is a second status item holding one 11 pt line "Song – Artist" that
+scrolls like iTunes's display when wider than 150 pt (`Marquee`/`TickerText`, `Sources/Marquee.swift`, tested; one
+CAKeyframeAnimation, no timer; still when paused or with Reduce Motion); it exists only while a song is known; the Now Playing
+reader runs for it all the time (`NowPlayingMonitor.Client.ticker`); `AppDelegate.refreshTicker`. (3) Volume: the slider is **always
+tucked away** and slides out to the speaker's left only while the pointer rests on the speaker (music window: `ArtworkControlsView
+.volumeOpen`, `ArtworkLayout.controlRow(volume: .icon/.slider)`; video bar already did). A click on the speaker mutes; press-and-drag
+sideways (`DragButton`, `VolumeGesture`, `VolumeHover` in `PlayerZones.swift`, tested) moves the level **from where it is** by 1/80 per
+point (no jump), and `ThinSlider.relative` makes the slider itself drag the same way. (4) Full screen: dragging resizes the picture
+(`PlayerSurfaceView.dragIsResize/onResizeDrag` → `ArtworkWindowController.resizeArtwork`, `ArtworkLayout.resizedScale`, factor
+`fullScreenScale`, `Prefs.artworkFullScreenScale`; a quarter of the usual size up to filling the screen); past the point where it and
+the caption stack fit together it stays on the top edge and grows downward, caption and controls slide down with it and fade
+(`ArtworkLayout.fullScreen(...).chrome`) — gone when it fills the height.
 
 **Gotchas (see GOTCHAS.md):** never AppleScript an app by name unless it's running (uninstalled names pop a
 "Where is …?" chooser) and never send Apple Events without checking `AEDeterminePermissionToAutomateTarget`

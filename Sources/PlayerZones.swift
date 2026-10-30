@@ -69,3 +69,31 @@ struct MusicClicks {
     }
     mutating func reset() { count = 0 }
 }
+
+// The volume control's drag (3.26), shared by the video bar and the music window. A press on the speaker is a click (mute /
+// unmute) unless the pointer moves sideways more than `slop`; then it is a drag, and the level moves from where it already is
+// by the distance travelled — the pointer doesn't have to be on the slider, and the level doesn't jump to it, as in Apple
+// Music. `span` is how many points a drag must cover to run the whole range (the slider's own length when the pointer is on it,
+// so the knob follows 1:1; at least `minSpan` from the speaker, whose slider is short). Pure, so `test.sh` covers it.
+struct VolumeGesture: Equatable {
+    static let slop: CGFloat = 3, minSpan: CGFloat = 80, fallbackSpan: CGFloat = 60
+    let start: Double, span: CGFloat
+    init(start: Double, span: CGFloat) {
+        self.start = start.isFinite ? min(1, max(0, start)) : 0
+        self.span = span > 0 && span.isFinite ? span : Self.fallbackSpan
+    }
+    // The level after the pointer has moved `dx` points (right = louder) since the press. Measured from the press, not from the
+    // last event, so pulling back past either end unwinds the way it came.
+    func level(afterMoving dx: CGFloat) -> Double { min(1, max(0, start + Double(dx / span))) }
+    // Whether `dx` is far enough from the press to be a drag rather than a click.
+    static func isDrag(_ dx: CGFloat) -> Bool { abs(dx) >= slop }
+}
+
+// Where the pointer must be for a volume slider to be out: on the speaker (a little beyond its edges), and, once the slider has
+// slid out, on that too — so the pointer can travel along it without it closing. nil slider: not out. Pure.
+enum VolumeHover {
+    static func zone(icon: CGRect, slider: CGRect?) -> CGRect {
+        let both = slider.map { icon.union($0) } ?? icon
+        return both.insetBy(dx: -4, dy: -6)
+    }
+}

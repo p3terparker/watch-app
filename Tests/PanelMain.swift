@@ -245,6 +245,16 @@ final class FixtureMusicApp: MusicAppControl {
         completion(true)
     }
     override func reveal(_ bundleID: String) { revealed.append(bundleID) }
+    // 3.26: Apple Music's ★ — what the fixture app reports, and what Watch set (never the real app).
+    var favouriteReply = false
+    var favouriteSets: [Bool] = []
+    override func favourite(_ bundleID: String, completion: @escaping (Bool?) -> Void) {
+        completion(AppVolume.favouriteApps.contains(bundleID) ? favouriteReply : nil)
+    }
+    override func setFavourite(_ on: Bool, bundleID: String, completion: @escaping (Bool) -> Void) {
+        guard AppVolume.favouriteApps.contains(bundleID) else { completion(false); return }
+        favouriteSets.append(on); favouriteReply = on; completion(true)
+    }
     // 3.24: Watch pausing/resuming the app for its own playback (never asks). Off unless a check turns it on, so the
     // other checks' command counts stay as they were.
     var recordsAllowed = false
@@ -313,6 +323,22 @@ Prefs.showNowPlaying = false; panel.nowPlayingSettingsChanged()
 check(panel.nowPlayingRow.isHidden, "Preference off hides the row")
 Prefs.showNowPlaying = true; panel.nowPlayingSettingsChanged()
 check(!panel.nowPlayingRow.isHidden, "Preference on shows it again")
+// 3.26: the menu-bar ticker — off by default; on, one line "Song – Artist" in its own status item (still while paused or when it
+// fits, scrolling when it doesn't), gone with the song and with the preference.
+check(!Prefs.showTicker && panel.ticker == nil, "the menu-bar ticker is off by default")
+Prefs.showTicker = true; panel.tickerSettingChanged()
+check(panel.ticker?.isShowing == true && panel.ticker?.text == "Fixture Song – Fixture Artist", "on: the paused song, one line (\(String(describing: panel.ticker?.text)))")
+check(panel.ticker?.isScrolling == false && panel.ticker?.marquee?.scrolls == false, "…short and paused, so it stands still")
+let longTitle = "A Very Long Song Title That Could Not Possibly Fit In A Small Menu Bar Window At Once"
+panel.nowPlayingChanged(nowPlayingFixture(longTitle, square)); pump(0.1)
+check(panel.ticker?.text == longTitle + " – Fixture Artist" && panel.ticker?.marquee?.scrolls == true && panel.ticker?.marquee?.window == Marquee.maxWidth,
+      "a long title is cut to a 150 pt window")
+check(panel.ticker?.isScrolling == !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, "…and scrolls while it plays (unless Reduce Motion is on)")
+panel.nowPlayingChanged(nowPlayingFixture(longTitle, square, playing: false)); pump(0.1)
+check(panel.ticker?.isScrolling == false, "…and stops while paused")
+panel.nowPlayingChanged(nowPlayingFixture("Fixture Song", square, playing: false)); pump(0.1)
+Prefs.showTicker = false; panel.tickerSettingChanged()
+check(panel.ticker == nil, "off again: the item is gone")
 panel.openArtwork(); pump(0.3)
 let viewer = panel.artworkWindow!
 check(viewer.musicApp === fixtureMusic, "the music window controls Music/Spotify through the app's own MusicAppControl")
@@ -379,18 +405,36 @@ check(waitFor(3) { viewer.controlsRevealed && viewer.controls.alphaValue > 0.9 }
 check(Date().timeIntervalSince(approach) >= ArtworkWindowController.revealDwell - 0.02, "…not before the dwell")
 check(viewer.chromeVisible, "the caption stays")
 pump(ArtworkWindowController.revealDuration + 0.1)
-check(!viewer.controls.volume.isHidden && abs(viewer.controls.volume.value - 0.4) < 0.001, "Music's own volume shows its level")
+check(!viewer.controls.volume.isHidden && abs(viewer.controls.volume.value - 0.4) < 0.001, "Music's own volume shows its level (the slider itself is tucked away)")
 check(abs(viewer.controls.timeline.value - 0.25) < 0.02, "timeline at the reported position")
 // One row under the caption: ⏮ ⏯ ⏭ from the left, the timeline, then Music's own shuffle/repeat and its volume.
 let musicRow = viewer.controls
 check(musicRow.frame.minY == 6 && musicRow.frame.height == ArtworkLayout.controlsHeight, "the controls are one row along the bottom (\(musicRow.frame))")
 check(!musicRow.previous.isHidden && musicRow.previous.frame.minX == 0 && musicRow.previous.frame.maxX < musicRow.playPause.frame.minX
       && musicRow.playPause.frame.maxX < musicRow.next.frame.minX && musicRow.next.frame.maxX < musicRow.timeline.frame.minX, "⏮ ⏯ ⏭ left of the timeline")
-check(!musicRow.shuffle.isHidden && !musicRow.repeatButton.isHidden && musicRow.timeline.frame.maxX < musicRow.shuffle.frame.minX
-      && musicRow.repeatButton.frame.maxX < musicRow.volumeIcon.frame.minX && musicRow.volume.frame.maxX == musicRow.bounds.width, "shuffle, repeat, then the volume at the right")
-check([musicRow.previous, musicRow.playPause, musicRow.next, musicRow.timeline, musicRow.shuffle, musicRow.repeatButton, musicRow.volumeIcon, musicRow.volume]
+check(!musicRow.shuffle.isHidden && !musicRow.repeatButton.isHidden && !musicRow.favourite.isHidden && musicRow.timeline.frame.maxX < musicRow.favourite.frame.minX
+      && musicRow.favourite.frame.maxX < musicRow.shuffle.frame.minX && musicRow.repeatButton.frame.maxX < musicRow.volumeIcon.frame.minX
+      && musicRow.volumeIcon.frame.maxX == musicRow.bounds.width, "★, shuffle, repeat, then the speaker at the right edge")
+check(!musicRow.volumeOpen && musicRow.volume.frame.width == 0 && musicRow.volume.alphaValue < 0.05 && musicRow.volume.hitTest(NSPoint(x: musicRow.volume.frame.midX, y: musicRow.volume.frame.midY)) == nil,
+      "the volume slider is always hidden until the pointer is on the speaker")
+check([musicRow.previous, musicRow.playPause, musicRow.next, musicRow.timeline, musicRow.favourite, musicRow.shuffle, musicRow.repeatButton, musicRow.volumeIcon, musicRow.volume]
       .allSatisfy { abs($0.frame.midY - musicRow.playPause.frame.midY) <= 1 }, "everything on the same line")
 viewerSnapshot("artwork-controls")
+// 3.26 ★: Apple Music's own favourite flag, read when the controls come up and set in the background by a click — Music isn't
+// brought forward, and Watch's own Favourites list (the right-click menu) is untouched.
+check(viewer.isFavourite == false && fixtureMusic.favouriteSets.isEmpty, "the ★ reads Music's flag (off) and sets nothing by itself")
+let favouritesBefore = Favourites.shared.all().count
+musicRow.favourite.performClick(nil); pump(0.1)
+check(fixtureMusic.favouriteSets == [true] && viewer.isFavourite == true, "★ favourites the song in Music")
+musicRow.favourite.performClick(nil); pump(0.1)
+check(fixtureMusic.favouriteSets == [true, false] && viewer.isFavourite == false, "…and a second click removes it")
+check(Favourites.shared.all().count == favouritesBefore && fixtureMusic.revealed.isEmpty, "Watch's own Favourites list is separate, and Music stays where it was")
+fixtureMusic.favouriteReply = true
+viewer.show(timedSong); musicRow.pointerMoved(at: nil); pump(0.05)
+var nextSong = timedSong; nextSong.title = "Another Song"; viewer.show(nextSong); pump(0.1)
+check(viewer.isFavourite == true, "a new song reads its own flag (\(String(describing: viewer.isFavourite)))")
+fixtureMusic.favouriteReply = false; viewer.show(timedSong); pump(0.1)
+check(viewer.isFavourite == false, "…and back")
 // 🔀 🔁 set Music's own shuffle and repeat (never Watch's queue), lit while on.
 check(musicRow.shuffle.lit == false && musicRow.repeatButton.lit == false, "Music's shuffle and repeat read as off")
 musicRow.shuffle.performClick(nil); pump(0.1)
@@ -411,6 +455,64 @@ viewer.controls.timeline.onChange?(0.5, true)
 check(sent.last == .seek(100), "letting go of the timeline halfway seeks to half the length")
 viewer.controls.volume.onChange?(0.7, true)
 check(fixtureMusic.sets.last == 0.7, "the volume slider sets the app's own volume")
+// 3.26: the slider is hidden unless the pointer is on the speaker; a click mutes, a drag from the speaker moves the volume from
+// where it is — the pointer needn't be on the slider.
+let speaker = NSPoint(x: musicRow.volumeIcon.frame.midX, y: musicRow.volumeIcon.frame.midY)
+musicRow.pointerMoved(at: NSPoint(x: musicRow.timeline.frame.midX, y: speaker.y))
+check(!musicRow.volumeOpen, "the pointer elsewhere on the row leaves the slider tucked away")
+musicRow.pointerMoved(at: speaker); pump(0.4)
+check(musicRow.volumeOpen && musicRow.volume.frame.width > 30 && musicRow.volume.alphaValue > 0.9, "on the speaker the slider slides out")
+check(musicRow.volume.frame.maxX < musicRow.volumeIcon.frame.minX && musicRow.volumeIcon.frame.maxX == musicRow.bounds.width, "…to the speaker's left, which stays under the pointer")
+let outPoint = NSPoint(x: musicRow.volume.frame.minX + 4, y: speaker.y)
+musicRow.pointerMoved(at: outPoint); pump(ArtworkControlsView.volumeCloseDelay + 0.3)
+check(musicRow.volumeOpen, "moving along onto the slider keeps it out")
+musicRow.volumeIcon.onDragStart?(); musicRow.volumeIcon.onDrag?(8, false)
+check(abs((fixtureMusic.sets.last ?? 0) - 0.8) < 0.001 && abs(musicRow.volume.value - 0.8) < 0.001, "dragging right from the speaker raises the volume from 70% by 1/80 per point")
+musicRow.volumeIcon.onDrag?(-8, true)
+check(abs((fixtureMusic.sets.last ?? 0) - 0.6) < 0.001, "pulling back unwinds it, measured from the press: \(String(describing: fixtureMusic.sets.last))")
+musicRow.volumeIcon.performClick(nil); pump(0.1)
+check(fixtureMusic.sets.last == 0 && musicRow.volume.value == 0, "a click on the speaker mutes")
+musicRow.volumeIcon.performClick(nil); pump(0.1)
+check(abs((fixtureMusic.sets.last ?? 0) - 0.6) < 0.001, "…and the next unmutes to where it was")
+musicRow.pointerMoved(at: NSPoint(x: musicRow.timeline.frame.midX, y: speaker.y))
+check(waitFor(2) { !musicRow.volumeOpen && musicRow.volume.frame.width == 0 }, "off the speaker the slider tucks back in")
+// The real mouse paths: DragButton (click vs drag) and a relative ThinSlider, driven with events.
+final class ClickCounter: NSObject { var hits = 0; @objc func hit() { hits += 1 } }
+let counter = ClickCounter()
+let probe = DragButton(frame: NSRect(x: 4, y: 40, width: 20, height: 20))
+probe.target = counter; probe.action = #selector(ClickCounter.hit)
+var probeDrags: [(CGFloat, Bool)] = [], probeStarts = 0
+probe.onDragStart = { probeStarts += 1 }
+probe.onDrag = { probeDrags.append(($0, $1)) }
+viewer.window.contentView!.addSubview(probe)
+let probeMid = NSPoint(x: 10, y: 10)
+probe.mouseDown(with: mouse(.leftMouseDown, probe, probeMid, clicks: 1))
+probe.mouseDragged(with: mouse(.leftMouseDragged, probe, NSPoint(x: 12, y: 10), clicks: 1))
+probe.mouseUp(with: mouse(.leftMouseUp, probe, NSPoint(x: 12, y: 10), clicks: 1))
+check(counter.hits == 1 && probeStarts == 0 && probeDrags.isEmpty, "a press that moves under 3 pt is a click")
+probe.mouseDown(with: mouse(.leftMouseDown, probe, probeMid, clicks: 1))
+probe.mouseDragged(with: mouse(.leftMouseDragged, probe, NSPoint(x: 20, y: 10), clicks: 1))
+check(probeStarts == 1 && probe.isDragging && probeDrags.count == 1 && abs(probeDrags[0].0 - 10) < 0.01 && !probeDrags[0].1, "moving sideways starts a drag")
+probe.mouseDragged(with: mouse(.leftMouseDragged, probe, NSPoint(x: 6, y: 10), clicks: 1))
+probe.mouseUp(with: mouse(.leftMouseUp, probe, NSPoint(x: 6, y: 10), clicks: 1))
+check(counter.hits == 1 && probeStarts == 1 && !probe.isDragging && probeDrags.count == 3 && abs(probeDrags[2].0 + 4) < 0.01 && probeDrags[2].1,
+      "…reported as the distance from the press, ending with finished and no click")
+probe.removeFromSuperview()
+let probeSlider = ThinSlider(frame: NSRect(x: 4, y: 40, width: 108, height: 18))
+probeSlider.relative = true; probeSlider.value = 0.5
+var sliderEvents: [(Double, Bool)] = []
+probeSlider.onChange = { sliderEvents.append(($0, $1)) }
+viewer.window.contentView!.addSubview(probeSlider)
+probeSlider.mouseDown(with: mouse(.leftMouseDown, probeSlider, NSPoint(x: 8, y: 9), clicks: 1))
+check(probeSlider.value == 0.5 && sliderEvents.isEmpty, "pressing a relative slider far from its knob doesn't move it")
+probeSlider.mouseDragged(with: mouse(.leftMouseDragged, probeSlider, NSPoint(x: 28, y: 9), clicks: 1))
+check(abs(probeSlider.value - 0.7) < 0.001 && sliderEvents.last?.1 == false, "dragging 20 pt of a 100 pt line moves it 20%, from where it was")
+probeSlider.mouseUp(with: mouse(.leftMouseUp, probeSlider, NSPoint(x: 28, y: 9), clicks: 1))
+check(abs(probeSlider.value - 0.7) < 0.001 && sliderEvents.last?.1 == true && !probeSlider.isTracking, "letting go keeps it and says it's finished")
+probeSlider.mouseDown(with: mouse(.leftMouseDown, probeSlider, NSPoint(x: 90, y: 9), clicks: 1))
+probeSlider.mouseUp(with: mouse(.leftMouseUp, probeSlider, NSPoint(x: 90, y: 9), clicks: 1))
+check(abs(probeSlider.value - 0.7) < 0.001 && sliderEvents.last?.1 == true, "a plain click on the line leaves it alone")
+probeSlider.removeFromSuperview()
 // Once up, a larger zone keeps them, so the band growing and the text lifting can't make them flicker.
 viewer.pointerMoved(at: NSPoint(x: area.midX, y: revealZone.maxY + 10)); pump(ArtworkWindowController.hideDelay + 0.3)
 check(viewer.controlsRevealed, "they stay while the pointer is in the larger keep zone, above where it revealed them")

@@ -150,6 +150,13 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     private(set) var appModes: AppModes?               // that app's own shuffle/repeat, as last read or set
     private var askingVolume = false
     private var lastVolume = 0.5                       // what the speaker icon restores after muting
+    private var volumeGesture: VolumeGesture?          // a drag that began on the speaker (3.26): moves the level from where it is
+    private(set) var isFavourite: Bool?                // Apple Music's ★ on the song showing (nil: not read yet)
+    // 3.26: the full-screen picture's size factor (1 = the usual; drag it — ArtworkLayout.resizedScale) and how much of the caption
+    // and controls still shows once it nearly fills the screen (ArtworkLayout.fullScreen's `chrome`).
+    private(set) var fullScreenScale = CGFloat(Prefs.artworkFullScreenScale)
+    private(set) var fullChrome: CGFloat = 1
+    private var resizeStart: (scale: CGFloat, art: NSRect)?
     private let artShadow: NSShadow = {
         let s = NSShadow()
         s.shadowColor = NSColor.black.withAlphaComponent(0.45); s.shadowBlurRadius = 30; s.shadowOffset = NSSize(width: 0, height: -10)
@@ -193,6 +200,8 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
             NSMenu.popUpContextMenu(self.makeMenu(), with: e, for: self.surface)
         }
         surface.onKey = { [weak self] e in self?.handleKey(e) ?? false }
+        surface.dragIsResize = { [weak self] in self?.inFullScreen == true }
+        surface.onResizeDrag = { [weak self] press, point, finished in self?.resizeArtwork(from: press, to: point, finished: finished) }
         window.contentView = content
 
         content.addSubview(background)
@@ -228,6 +237,9 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         controls.timeline.onChange = { [weak self] value, finished in self?.scrubbed(to: value, finished: finished) }
         controls.volume.onChange = { [weak self] value, finished in self?.volumeChanged(to: value, finished: finished) }
         controls.volumeIcon.onPress = { [weak self] in self?.toggleMute() }
+        controls.volumeIcon.onDragStart = { [weak self] in self?.beginVolumeDrag() }
+        controls.volumeIcon.onDrag = { [weak self] dx, finished in self?.dragVolume(by: dx, finished: finished) }
+        controls.favourite.onPress = { [weak self] in self?.toggleFavourite() }
         controls.shuffle.onPress = { [weak self] in self?.toggleShuffle() }
         controls.repeatButton.onPress = { [weak self] in self?.cycleRepeat() }
         content.addSubview(controls)
@@ -263,10 +275,11 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         guard let new = new else { notPlaying = true; updateCaption(); return }
         let newTrack = new.itemKey != info?.itemKey
         info = new; notPlaying = false
+        if newTrack { isFavourite = nil }
         updateCaption()
         if controlsRevealed {
             refreshControls()
-            if new.appBundleID != volumeApp { refreshVolume() }
+            if new.appBundleID != volumeApp { refreshVolume() } else if newTrack { refreshFavourite() }
         }
         if let art = new.artwork {
             placeholderToken += 1
@@ -344,12 +357,15 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         background.frame = b
         surface.frame = b
         if full {
-            let spot = ArtworkLayout.fullScreen(artwork: imageView.image.map(Self.pixelSize) ?? NSSize(width: 1, height: 1), in: b.size)
+            let spot = ArtworkLayout.fullScreen(artwork: imageView.image.map(Self.pixelSize) ?? NSSize(width: 1, height: 1), in: b.size,
+                                                scale: fullScreenScale)
             artHolder.frame = spot.art
             shadeFrame = spot.caption; controlsFrame = spot.controls
+            fullChrome = spot.chrome
             dotButton.frame = NSRect(x: b.width - 40, y: b.height - 56, width: 16, height: 16)
             queueButton.frame = NSRect(x: b.width - 62, y: b.height - 56, width: 16, height: 16)
         } else {
+            fullChrome = 1
             artHolder.frame = b
             shadeFrame = NSRect(x: 0, y: 0, width: b.width, height: ArtworkLayout.windowBand + lift)
             controlsFrame = NSRect(x: 12, y: 6, width: max(0, b.width - 24), height: ArtworkLayout.controlsHeight)
@@ -365,10 +381,14 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
             ? [(titleLabel, 22, .semibold, 32), (detailLabel, 15, .regular, 6)]
             : [(titleLabel, 13, .semibold, 28 + lift), (detailLabel, 11, .regular, 11 + lift)]
         let inset: CGFloat = full ? 0 : 12
-        let controlsAlpha: CGFloat = controlsRevealed && chromeVisible ? 1 : 0
+        let controlsAlpha: CGFloat = controlsRevealed && chromeVisible ? fullChrome : 0
         func place(_ view: NSView, _ frame: NSRect) { if animated { view.animator().frame = frame } else { view.frame = frame } }
         let apply = {
             place(self.shade, shadeFrame)
+            if self.chromeVisible {                      // full screen: faded as the picture nearly fills the screen (fullChrome)
+                let shown = full ? self.fullChrome : 1
+                if animated { self.shade.animator().alphaValue = shown } else { self.shade.alphaValue = shown }
+            }
             for (label, size, weight, y) in styles {
                 label.font = .systemFont(ofSize: size, weight: weight)
                 label.alignment = full ? .center : .left
@@ -457,6 +477,21 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         if refit, pictureData != nil, let image = imageView.image { fitAspect(Self.pixelSize(image)) }   // the track may have changed
     }
 
+    // A drag in full screen (SurfaceView hands over the press point and the pointer): the picture is resized as if grabbed there,
+    // everything laid out afresh on each event. The caption and controls slide down with its bottom edge as it grows towards the
+    // screen's height and are gone when it fills it. Remembered (Prefs.artworkFullScreenScale) when the drag ends.
+    func resizeArtwork(from press: NSPoint, to point: NSPoint, finished: Bool) {
+        guard inFullScreen else { return }
+        let start = resizeStart ?? (fullScreenScale, artHolder.frame)
+        resizeStart = finished ? nil : start
+        let size = imageView.image.map(Self.pixelSize) ?? NSSize(width: 1, height: 1)
+        let range = ArtworkLayout.fullScreenScaleRange(artwork: size, in: content.bounds.size)
+        fullScreenScale = ArtworkLayout.resizedScale(from: start.scale, art: start.art, press: press, to: point, range: range)
+        layoutViews()
+        if finished { Prefs.artworkFullScreenScale = Double(fullScreenScale) }
+        pointerMoved(at: point)
+    }
+
     // MARK: hover
     // Windowed: hovering anywhere over the window shows the caption, "…" and ≡ at once; they fade `hideDelay` after the pointer
     // leaves it. The playback controls are more deliberate: they come up once the pointer has rested `revealDwell` in the reveal
@@ -531,15 +566,16 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     private func fadeChrome(visible: Bool) {
         chromeVisible = visible
         let target: CGFloat = visible ? 1 : 0, controlsTarget: CGFloat = visible && controlsRevealed ? 1 : 0
-        guard dotButton.alphaValue != target || controls.alphaValue != controlsTarget else { return }
+        let fade = inFullScreen ? fullChrome : 1                  // a full-screen picture that nearly fills the screen leaves no room for the caption
+        guard dotButton.alphaValue != target || controls.alphaValue != controlsTarget * fade || shade.alphaValue != target * fade else { return }
         let curve: CAMediaTimingFunctionName = visible ? .easeOut : .easeInEaseOut
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = visible ? 0.2 : Self.hideDuration
             ctx.timingFunction = CAMediaTimingFunction(name: curve)
             dotButton.animator().alphaValue = target
             queueButton.animator().alphaValue = target
-            shade.animator().alphaValue = target
-            controls.animator().alphaValue = controlsTarget
+            shade.animator().alphaValue = target * fade
+            controls.animator().alphaValue = controlsTarget * fade
         }
     }
 
@@ -548,6 +584,7 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         guard revealed != controlsRevealed else { return }
         controlsRevealed = revealed
         tick?.invalidate(); tick = nil
+        if !revealed { controls.collapseVolume() }
         if revealed {
             refreshControls()
             refreshVolume()
@@ -674,6 +711,36 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
             if let level = level, !self.controls.volume.isTracking { self.controls.volume.value = level; if level > 0 { self.lastVolume = level } }
             self.controls.setVolume(access: access, appName: ArtworkActions.appName(id))
             self.refreshModes()
+            self.refreshFavourite()
+        }
+    }
+
+    // Apple Music's ★ on the song showing. Read only when Watch is already allowed (never asks), when the controls come up and
+    // when the song changes; a click sets it in the background — Music is not brought forward. It is Music's own favourite flag,
+    // separate from Watch's Favourites list (the right-click menu's Add to Favourites). Apps without one (Spotify's scripting has
+    // no like) show no star.
+    private func refreshFavourite() {
+        guard let id = volumeApp else { return }
+        let available = AppVolume.favouriteApps.contains(id)
+        controls.setFavourite(isFavourite, access: volumeAccess, appName: ArtworkActions.appName(id), available: available)
+        guard volumeAccess == .granted, available, let key = info?.itemKey else { return }
+        musicApp.favourite(id) { [weak self] state in
+            guard let self = self, self.volumeApp == id, self.info?.itemKey == key, let state = state else { return }
+            self.isFavourite = state
+            self.controls.setFavourite(state, access: self.volumeAccess, appName: ArtworkActions.appName(id), available: true)
+        }
+    }
+    // Shows the new state at once, sends it, then reads back what the app has (and whether macOS allowed it). The user's own
+    // click, so macOS may ask once.
+    private func toggleFavourite() {
+        guard let id = volumeApp, AppVolume.favouriteApps.contains(id), let key = info?.itemKey else { return }
+        let before = isFavourite, on = !(before ?? false)
+        isFavourite = on
+        controls.setFavourite(on, access: volumeAccess, appName: ArtworkActions.appName(id), available: true)
+        musicApp.setFavourite(on, bundleID: id) { [weak self] done in
+            guard let self = self, self.volumeApp == id, self.info?.itemKey == key else { return }
+            if !done { self.isFavourite = before; NSSound.beep() }
+            self.refreshVolume()                    // macOS may just have allowed it: everything is read afresh
         }
     }
 
@@ -712,6 +779,7 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         }
     }
     private func volumeChanged(to value: Double, finished: Bool) {
+        if finished { controls.endVolumeInteraction() }
         guard let id = volumeApp else { return }
         controls.setVolume(access: volumeAccess, appName: ArtworkActions.appName(id))
         if value > 0 && finished { lastVolume = value }
@@ -734,6 +802,20 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         guard volumeAccess == .granted || volumeAccess == .undetermined else { return }
         controls.volume.value = controls.volume.value > 0 ? 0 : lastVolume
         volumeChanged(to: controls.volume.value, finished: true)
+    }
+    // A press-and-drag on the speaker (3.26) sets the volume from where it already is, by how far the pointer moves sideways —
+    // the pointer needn't be on the slider (a click, without moving, mutes instead). Anything but allowed/askable does nothing.
+    private func beginVolumeDrag() {
+        guard volumeAccess == .granted || volumeAccess == .undetermined else { volumeGesture = nil; return }
+        let slider = max(0, controls.volume.bounds.width - 2 * ThinSlider.knobRadius)
+        volumeGesture = VolumeGesture(start: controls.volume.value, span: max(slider, VolumeGesture.minSpan))
+    }
+    private func dragVolume(by dx: CGFloat, finished: Bool) {
+        guard let gesture = volumeGesture else { return }
+        if finished { volumeGesture = nil }
+        let level = gesture.level(afterMoving: dx)
+        controls.volume.value = level
+        volumeChanged(to: level, finished: finished)
     }
 
     // Close · Enter/Exit Full Screen · Full-Screen Background ▸ Artwork Colours / Black — then the artwork actions.
@@ -880,13 +962,21 @@ final class ArtworkControlsView: NSView {
     let shuffle = GlyphButton(symbol: "shuffle", pointSize: 10, tip: "Shuffle")
     let repeatButton = GlyphButton(symbol: "repeat", pointSize: 10, tip: "Repeat")
     let volumeIcon = GlyphButton(symbol: "speaker.wave.2.fill", pointSize: 10, tip: "Volume")
+    let favourite = GlyphButton(symbol: "star", pointSize: 10, tip: "Favourite")
     private let elapsedLabel = NSTextField(labelWithString: "0:00"), remainingLabel = NSTextField(labelWithString: "-0:00")
     private static let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium)
     var showsTimeline = true { didSet { if showsTimeline != oldValue { layoutParts() } } }
     private(set) var access: AppVolumeAccess = .unsupported
     private var modesAvailable = false                  // the app has its own shuffle/repeat Watch can set
+    private var favouriteAvailable = false              // the app has a ★ Watch can set (Apple Music)
     private var longClock = false
-    var isInteracting: Bool { timeline.isTracking || volume.isTracking }
+    // 3.26: the volume slider is tucked away (zero width, invisible) until the pointer rests on the speaker, then slides out to its
+    // left; it goes shortly after the pointer leaves the speaker and the slider.
+    static let volumeCloseDelay: TimeInterval = 0.5
+    private(set) var volumeOpen = false
+    private var closeVolumeWork: DispatchWorkItem?
+    private var row = ControlRow()                      // as last laid out
+    var isInteracting: Bool { timeline.isTracking || volume.isTracking || volumeIcon.isDragging }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -895,14 +985,54 @@ final class ArtworkControlsView: NSView {
             addSubview(label)
         }
         elapsedLabel.alignment = .right; remainingLabel.alignment = .left    // the times hug the timeline
-        for v in [previous, playPause, next, timeline, shuffle, repeatButton, volumeIcon, volume] as [NSView] { addSubview(v) }
+        for v in [previous, playPause, next, timeline, favourite, shuffle, repeatButton, volumeIcon, volume] as [NSView] { addSubview(v) }
         timeline.setAccessibilityLabel("Position")
         volume.setAccessibilityLabel("Volume")
+        volume.relative = true                          // a drag moves it from where it is; a click doesn't jump
+        volume.alphaValue = 0
         shuffle.lit = false; repeatButton.lit = false
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: nil))
         layoutParts()
     }
     required init?(coder: NSCoder) { fatalError() }
     override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); layoutParts() }
+
+    // MARK: volume slide-out
+    override func mouseEntered(with e: NSEvent) { pointerMoved(at: convert(e.locationInWindow, from: nil)) }
+    override func mouseMoved(with e: NSEvent) { pointerMoved(at: convert(e.locationInWindow, from: nil)) }
+    override func mouseExited(with e: NSEvent) { pointerMoved(at: nil) }
+    private var canSlide: Bool { (access == .granted || access == .undetermined) && row.volumeIcon != nil }
+    private var volumeZone: CGRect? { row.volumeIcon.map { VolumeHover.zone(icon: $0, slider: volumeOpen ? row.volume : nil) } }
+    func pointerMoved(at point: NSPoint?) {
+        if let p = point, alphaValue >= 0.05, canSlide, volumeZone?.contains(p) == true {
+            closeVolumeWork?.cancel(); closeVolumeWork = nil
+            if !volumeOpen { volumeOpen = true; layoutParts(animated: true) }
+        } else if volumeOpen {
+            scheduleVolumeClose()
+        }
+    }
+    private func scheduleVolumeClose() {
+        guard closeVolumeWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.closeVolumeWork = nil
+            guard !self.volume.isTracking, !self.volumeIcon.isDragging else { return }      // its release asks again
+            if let w = self.window, self.volumeZone?.contains(self.convert(w.mouseLocationOutsideOfEventStream, from: nil)) == true { return }
+            self.collapseVolume(animated: true)
+        }
+        closeVolumeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.volumeCloseDelay, execute: work)
+    }
+    // The slider tucks back in (at once with the controls themselves, otherwise animated).
+    func collapseVolume(animated: Bool = false) {
+        closeVolumeWork?.cancel(); closeVolumeWork = nil
+        guard volumeOpen else { return }
+        volumeOpen = false
+        layoutParts(animated: animated)
+    }
+    // A drag on the slider or the speaker ended: it may go once the pointer is off them.
+    func endVolumeInteraction() { if volumeOpen { scheduleVolumeClose() } }
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard alphaValue >= 0.05, !isHidden, let hit = super.hitTest(point) else { return nil }
         return hit === self ? nil : hit
@@ -929,8 +1059,8 @@ final class ArtworkControlsView: NSView {
         volumeIcon.setSymbol(volumeSymbol(volume.value))
         volumeIcon.dimmed = access == .denied
         switch access {
-        case .granted: volumeIcon.toolTip = "\(appName) volume — click to mute"
-        case .undetermined: volumeIcon.toolTip = "Drag to set \(appName)'s volume (macOS asks once)"
+        case .granted: volumeIcon.toolTip = "\(appName) volume — click to mute, drag to change"
+        case .undetermined: volumeIcon.toolTip = "Click to mute or drag to set \(appName)'s volume (macOS asks once)"
         case .denied: volumeIcon.toolTip = "Watch isn't allowed to set \(appName)'s volume. Allow it in System Settings ▸ Privacy & Security ▸ Automation."
         case .unsupported: volumeIcon.toolTip = nil
         }
@@ -956,18 +1086,49 @@ final class ArtworkControlsView: NSView {
         layoutParts()
     }
 
-    private func layoutParts() {
+    // The ★ (Apple Music's favourite flag; nil: not known yet — shown off). Same permission as the volume: dimmed when it isn't
+    // allowed, hidden for an app Watch can't script or one with no such flag.
+    func setFavourite(_ on: Bool?, access: AppVolumeAccess, appName: String, available: Bool) {
+        favouriteAvailable = available
+        let lit = on ?? false
+        favourite.setSymbol(lit ? "star.fill" : "star")
+        favourite.dimmed = access == .denied
+        switch access {
+        case .denied: favourite.toolTip = "Watch isn't allowed to favourite songs in \(appName). Allow it in System Settings ▸ Privacy & Security ▸ Automation."
+        case .undetermined: favourite.toolTip = "Favourite this song in \(appName) (macOS asks once)"
+        default: favourite.toolTip = lit ? "Favourited in \(appName) — click to remove" : "Favourite this song in \(appName)"
+        }
+        layoutParts()
+    }
+
+    // `animated`: the slider sliding out or in, and what it moves aside.
+    private func layoutParts(animated: Bool = false) {
         let slides = access == .granted || access == .undetermined
-        let row = ArtworkLayout.controlRow(width: bounds.width, height: bounds.height, timeline: showsTimeline, longClock: longClock,
-                                           modes: modesAvailable && access != .unsupported, volume: access == .unsupported ? .none : slides ? .slider : .icon)
+        row = ArtworkLayout.controlRow(width: bounds.width, height: bounds.height, timeline: showsTimeline, longClock: longClock,
+                                       modes: modesAvailable && access != .unsupported, volume: access == .unsupported ? .none : slides && volumeOpen ? .slider : .icon,
+                                       favourite: favouriteAvailable && access != .unsupported)
+        var frames: [(NSView, CGRect)] = []
         func place(_ view: NSView, _ frame: CGRect?) {
             view.isHidden = frame == nil
-            if let f = frame { view.frame = f }
+            if let f = frame { frames.append((view, f)) }
         }
         place(previous, row.previous); place(playPause, row.playPause); place(next, row.next)
         place(elapsedLabel, row.elapsed); place(timeline, row.timeline); place(remainingLabel, row.remaining)
-        place(shuffle, row.shuffle); place(repeatButton, row.repeatMode)
-        place(volumeIcon, row.volumeIcon); place(volume, row.volume)
+        place(favourite, row.favourite); place(shuffle, row.shuffle); place(repeatButton, row.repeatMode)
+        place(volumeIcon, row.volumeIcon)
+        // Tucked away, the slider keeps its place beside the speaker at zero width and no opacity, so it slides out from there.
+        place(volume, row.volume ?? row.volumeIcon.map { CGRect(x: $0.minX, y: $0.minY, width: 0, height: $0.height) })
+        let sliderAlpha: CGFloat = row.volume == nil ? 0 : 1
+        if animated {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.2
+                for (v, f) in frames { v.animator().frame = f }
+                volume.animator().alphaValue = sliderAlpha
+            }
+        } else {
+            for (v, f) in frames { v.frame = f }
+            volume.alphaValue = sliderAlpha
+        }
     }
 }
 
@@ -1030,6 +1191,26 @@ class MusicAppControl {
                                        repeatFlag: music ? nil : repeating.booleanValue)
             }
             DispatchQueue.main.async { completion(modes) }
+        }
+    }
+    // Apple Music's ★ on the current song, only if Watch is already allowed (never asks); nil when it can't be read.
+    func favourite(_ bundleID: String, completion: @escaping (Bool?) -> Void) {
+        guard let script = AppVolume.favouriteReadScript(bundleID), Self.isRunning(bundleID) else { completion(nil); return }
+        queue.async {
+            var state: Bool?
+            if Self.access(automationPermission(bundleID, ask: false)) == .granted, let result = Self.run(script) { state = result.booleanValue }
+            DispatchQueue.main.async { completion(state) }
+        }
+    }
+    // A click on ★: set or clear the current song's favourite flag, in the background (the app isn't brought forward). The user's
+    // own click, so macOS may ask once.
+    func setFavourite(_ on: Bool, bundleID: String, completion: @escaping (Bool) -> Void) {
+        guard let script = AppVolume.favouriteWriteScript(bundleID, on: on), Self.isRunning(bundleID) else { completion(false); return }
+        queue.async {
+            var access = Self.access(automationPermission(bundleID, ask: false))
+            if access == .undetermined { access = Self.access(automationPermission(bundleID, ask: true)) }
+            let done = access == .granted && Self.run(script) != nil
+            DispatchQueue.main.async { completion(done) }
         }
     }
     // A click on 🔀 / 🔁: one of AppVolume's shuffle/repeat scripts. The user's own click, so macOS may ask once.

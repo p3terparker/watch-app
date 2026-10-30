@@ -4,12 +4,17 @@ import AppKit
 // a 2 pt line, the part before the value brighter, and a dot only while it's hovered or dragged. The whole view is
 // the hit area, so it's easy to grab although it looks like a hairline. `onChange(value, finished)` fires while
 // dragging and once more on release with `finished` true. Ignores clicks while faded out, like FadingButton.
+// `relative` (the volume sliders, 3.26): a press doesn't jump to the pointer — a drag moves the value from where it already is,
+// by as far as the pointer travels (VolumeGesture), wherever on the slider it started; a click leaves it alone.
 final class ThinSlider: NSView {
     static let knobRadius: CGFloat = 4
     var value: Double = 0 { didSet { if value != oldValue { needsDisplay = true } } }
     var onChange: ((Double, Bool) -> Void)?
+    var relative = false
     private(set) var isTracking = false
     private var hovering = false
+    private var gesture: VolumeGesture?               // relative mode: the value and span when the press began
+    private var pressX: CGFloat = 0
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -45,19 +50,68 @@ final class ThinSlider: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseEntered(with e: NSEvent) { hovering = true; needsDisplay = true }
     override func mouseExited(with e: NSEvent) { hovering = false; needsDisplay = true }
-    override func mouseDown(with e: NSEvent) { isTracking = true; track(e, finished: false) }
+    override func mouseDown(with e: NSEvent) {
+        isTracking = true
+        if relative {
+            gesture = VolumeGesture(start: value, span: bounds.width - 2 * Self.knobRadius)
+            pressX = convert(e.locationInWindow, from: nil).x
+        } else {
+            track(e, finished: false)
+        }
+    }
     override func mouseDragged(with e: NSEvent) { track(e, finished: false) }
-    override func mouseUp(with e: NSEvent) { track(e, finished: true); isTracking = false; needsDisplay = true }
+    override func mouseUp(with e: NSEvent) { track(e, finished: true); isTracking = false; gesture = nil; needsDisplay = true }
     private func track(_ e: NSEvent, finished: Bool) {
-        value = Self.value(at: convert(e.locationInWindow, from: nil).x, width: bounds.width)
+        let x = convert(e.locationInWindow, from: nil).x
+        if relative {
+            guard let g = gesture else { return }
+            if !finished || x != pressX { value = g.level(afterMoving: x - pressX) }   // letting go never moves it
+        } else {
+            value = Self.value(at: x, width: bounds.width)
+        }
         setAccessibilityValue(value)
         onChange?(value, finished)
     }
 }
 
+// A button whose press is a click (its action, as usual) — or, when `onDrag` is set and the pointer moves sideways more than
+// VolumeGesture.slop, a drag: `onDragStart` once, then `onDrag(distance since the press, finished)`. The speaker button of the
+// volume controls (3.26): a click mutes, press-and-drag sets the level relative to where it is. Without `onDrag` it is a plain
+// NSButton.
+class DragButton: NSButton {
+    var onDragStart: (() -> Void)?
+    var onDrag: ((_ dx: CGFloat, _ finished: Bool) -> Void)?
+    private(set) var isDragging = false
+    private var pressX: CGFloat?
+    override func mouseDown(with e: NSEvent) {
+        guard onDrag != nil, isEnabled else { super.mouseDown(with: e); return }
+        pressX = e.locationInWindow.x; isDragging = false
+    }
+    override func mouseDragged(with e: NSEvent) {
+        guard let x0 = pressX else { super.mouseDragged(with: e); return }
+        let dx = e.locationInWindow.x - x0
+        if !isDragging {
+            guard VolumeGesture.isDrag(dx) else { return }
+            isDragging = true
+            onDragStart?()
+        }
+        onDrag?(dx, false)
+    }
+    override func mouseUp(with e: NSEvent) {
+        guard let x0 = pressX else { super.mouseUp(with: e); return }
+        pressX = nil
+        if isDragging {
+            isDragging = false
+            onDrag?(e.locationInWindow.x - x0, true)
+        } else if bounds.contains(convert(e.locationInWindow, from: nil)) {
+            sendAction(action, to: target)
+        }
+    }
+}
+
 // A borderless SF Symbol button for the playback controls: white at 85%, full white while hovered; ignores clicks
 // while faded out.
-final class GlyphButton: NSButton {
+final class GlyphButton: DragButton {
     var onPress: (() -> Void)?
     private let pointSize: CGFloat
     private var hovering = false { didSet { tint() } }

@@ -328,6 +328,23 @@ enum AppVolume {
         }
     }
 
+    // 3.26: the star on the music window's controls — Apple Music's own favourite flag on the current song (what its ☆ sets in
+    // the library, not Watch's Favourites list). Spotify's scripting has no way to like a song, so only Music has one. Music
+    // names the property `favorited`; older versions called it `loved`, so the script tries the new name first. The scripts
+    // are fixed text: nothing of the song goes into them.
+    static let favouriteApps: Set<String> = ["com.apple.Music"]
+    static func favouriteReadScript(_ bundleID: String) -> String? {
+        favouriteApps.contains(bundleID) ? favouriteScript(bundleID, "get favorited of current track", "get loved of current track") : nil
+    }
+    static func favouriteWriteScript(_ bundleID: String, on: Bool) -> String? {
+        favouriteApps.contains(bundleID)
+            ? favouriteScript(bundleID, "set favorited of current track to \(on)", "set loved of current track to \(on)") : nil
+    }
+    private static func favouriteScript(_ bundleID: String, _ verb: String, _ older: String) -> String {
+        func run(_ verb: String) -> String { "run script \"tell application id \\\"\(bundleID)\\\" to \(verb)\"" }
+        return "try\n\(run(verb))\non error\n\(run(older))\nend try"
+    }
+
     static func percent(_ level: Double) -> Int { Int((min(1, max(0, level.isFinite ? level : 0)) * 100).rounded()) }
     static func level(percent: Int) -> Double { min(1, max(0, Double(percent) / 100)) }
 }
@@ -383,7 +400,7 @@ final class CoalescingSender<Value> {
 // Runs the adapter while someone wants it — the panel while it's visible, the artwork window while it's open — and
 // reports what's playing on the main thread, only when it changes. Call from the main thread.
 final class NowPlayingMonitor {
-    enum Client: Hashable { case panel, viewer }
+    enum Client: Hashable { case panel, viewer, ticker }   // the panel, the music window, the menu-bar ticker (3.26: always on while its preference is)
     static let backoff: [TimeInterval] = [2, 10, 60]   // restarts after an unexpected exit; then it gives up
     static let quickExit: TimeInterval = 15             // an adapter that dies sooner counts as failing
     static let clearDelay: TimeInterval = 0.6           // "nothing playing" must hold this long (start-up, track changes)

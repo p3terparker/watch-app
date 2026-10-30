@@ -52,14 +52,17 @@ enum ArtworkPalette {
 }
 
 // Where each playback control sits in the music window's one row under the caption: ⏮ ⏯ ⏭ from the left edge, then
-// elapsed · timeline · remaining, then shuffle · repeat and the volume at the right edge. nil = not shown.
+// elapsed · timeline · remaining, then ★ · shuffle · repeat and the volume (slider, speaker) at the right edge. nil = not shown.
 struct ControlRow: Equatable {
     var previous: CGRect?, playPause: CGRect?, next: CGRect?
     var elapsed: CGRect?, timeline: CGRect?, remaining: CGRect?
+    var favourite: CGRect?
     var shuffle: CGRect?, repeatMode: CGRect?
     var volumeIcon: CGRect?, volume: CGRect?
 }
-enum ControlRowVolume { case none, icon, slider }              // no app volume · the speaker alone (not allowed) · speaker + slider
+// no app volume · the speaker alone (the slider is tucked away, or not allowed) · speaker + the slider slid out (3.26: only
+// while the pointer is on the speaker)
+enum ControlRowVolume { case none, icon, slider }
 
 enum ArtworkLayout {
     static let captionHeight: CGFloat = 64, gap: CGFloat = 20
@@ -82,10 +85,11 @@ enum ArtworkLayout {
     }
 
     // The controls' row at `width`. When it can't all fit, parts drop out in this order: the elapsed time, shuffle/repeat,
-    // the volume slider (the speaker stays), the remaining time, ⏮/⏭ — the timeline (when there's a length) and ⏯ stay.
-    // `modes`: shuffle/repeat can be set for this app. Unflipped coordinates (y up), centred vertically in `height`.
+    // the volume slider (the speaker stays), the remaining time and the ★ (3.26), ⏮/⏭ — the timeline (when there's a length) and
+    // ⏯ stay. `modes`: shuffle/repeat can be set for this app. `favourite`: the app has a ★ Watch can set (Apple Music), left of
+    // shuffle. Unflipped coordinates (y up), centred vertically in `height`.
     static func controlRow(width w: CGFloat, height h: CGFloat = controlsHeight, timeline: Bool, longClock: Bool,
-                           modes: Bool, volume: ControlRowVolume) -> ControlRow {
+                           modes: Bool, volume: ControlRowVolume, favourite: Bool = false) -> ControlRow {
         let side: CGFloat = 20, play: CGFloat = 22, mode: CGFloat = 18, icon: CGFloat = 16, slider: CGFloat = 40
         let label: CGFloat = longClock ? 42 : 28, gap: CGFloat = 6, tight: CGFloat = 2
         // Drop level n removes the first n parts of the order above.
@@ -93,6 +97,7 @@ enum ArtworkLayout {
             var x = play + (level < 5 ? 2 * (side + 1) : 0)
             if timeline { x += gap + (level < 1 ? label + tight : 0) + minTimeline + (level < 4 ? tight + label : 0) }
             if modes && level < 2 { x += gap + 2 * mode + 1 }
+            if favourite && level < 4 { x += (modes && level < 2 ? 1 : gap) + mode }   // beside shuffle, or after the speaker's gap
             if volume != .none { x += gap + icon + (volume == .slider && level < 3 ? tight + slider : 0) }
             return x
         }
@@ -106,12 +111,18 @@ enum ArtworkLayout {
         if skips { x += 1; row.next = CGRect(x: x, y: y(side), width: side, height: side); x += side }
         var right = w
         if volume != .none {
-            if volume == .slider && level < 3 { row.volume = CGRect(x: right - slider, y: y(18), width: slider, height: 18); right -= slider + tight }
-            row.volumeIcon = CGRect(x: right - icon, y: y(18), width: icon, height: 18); right -= icon + gap
+            // The speaker stays at the right edge, where the pointer is; the slider slides out to its left (3.26).
+            row.volumeIcon = CGRect(x: right - icon, y: y(18), width: icon, height: 18); right -= icon
+            if volume == .slider && level < 3 { row.volume = CGRect(x: right - tight - slider, y: y(18), width: slider, height: 18); right -= tight + slider }
+            right -= gap
         }
+        let star = favourite && level < 4
         if modes && level < 2 {
             row.repeatMode = CGRect(x: right - mode, y: y(mode), width: mode, height: mode); right -= mode + 1
-            row.shuffle = CGRect(x: right - mode, y: y(mode), width: mode, height: mode); right -= mode + gap
+            row.shuffle = CGRect(x: right - mode, y: y(mode), width: mode, height: mode); right -= mode + (star ? 1 : gap)
+        }
+        if star {
+            row.favourite = CGRect(x: right - mode, y: y(mode), width: mode, height: mode); right -= mode + gap
         }
         if timeline {
             x += gap
@@ -125,16 +136,50 @@ enum ArtworkLayout {
     // Full screen: the artwork centred at up to 70% of the width and 62% of the height (keeping its shape), the caption
     // centred under it and the playback controls' row under that — reserved even while they're hidden, so the artwork
     // never moves when they appear. The group is centred vertically. Unflipped coordinates (y up), like AppKit.
-    static func fullScreen(artwork: CGSize, in screen: CGSize) -> (art: CGRect, caption: CGRect, controls: CGRect) {
-        let shape = artwork.width > 0 && artwork.height > 0 ? artwork : CGSize(width: 1, height: 1)
-        let scale = min(screen.width * 0.7 / shape.width, screen.height * 0.62 / shape.height)
+    //
+    // 3.26: `scale` resizes the picture (1 = the size above; dragging it changes the factor). It runs from a quarter of the usual
+    // size (`minFullScreenScale`) up to filling the screen — touching top and bottom, or both sides if the picture is wider than
+    // the screen. Once the picture and the stack under it (gap + caption + controls) no longer fit together the group isn't
+    // centred any more: the picture's top stays on the screen's top edge and it grows downward, so the caption and controls
+    // slide down with its bottom edge, and `chrome` (1 → 0) fades them out; when the picture fills the screen's height they are
+    // gone, off the bottom.
+    static let minFullScreenScale: CGFloat = 0.25
+    private static func shaped(_ artwork: CGSize) -> CGSize { artwork.width > 0 && artwork.height > 0 ? artwork : CGSize(width: 1, height: 1) }
+    private static func usualScale(_ shape: CGSize, _ screen: CGSize) -> CGFloat { min(screen.width * 0.7 / shape.width, screen.height * 0.62 / shape.height) }
+    static func fullScreenScaleRange(artwork: CGSize, in screen: CGSize) -> ClosedRange<CGFloat> {
+        let shape = shaped(artwork)
+        guard screen.width > 0, screen.height > 0 else { return 1...1 }
+        let fill = min(screen.width / shape.width, screen.height / shape.height)
+        return minFullScreenScale...max(1, fill / usualScale(shape, screen))
+    }
+    static func fullScreen(artwork: CGSize, in screen: CGSize, scale factor: CGFloat = 1)
+        -> (art: CGRect, caption: CGRect, controls: CGRect, chrome: CGFloat) {
+        let shape = shaped(artwork)
+        let range = fullScreenScaleRange(artwork: artwork, in: screen)
+        let scale = usualScale(shape, screen) * min(max(factor.isFinite ? factor : 1, range.lowerBound), range.upperBound)
         let w = (shape.width * scale).rounded(), h = (shape.height * scale).rounded()
-        let bottom = ((screen.height - h - gap - captionHeight - controlsHeight) / 2).rounded()
-        let art = CGRect(x: ((screen.width - w) / 2).rounded(), y: bottom + controlsHeight + captionHeight + gap, width: w, height: h)
+        let stack = gap + captionHeight + controlsHeight
+        let artY: CGFloat = h + stack <= screen.height ? ((screen.height - h - stack) / 2).rounded() + stack : max(0, screen.height - h)
+        let art = CGRect(x: ((screen.width - w) / 2).rounded(), y: artY, width: w, height: h)
         let captionWidth = min(screen.width * 0.8, max(w, 480)).rounded()
         let x = ((screen.width - captionWidth) / 2).rounded()
-        let caption = CGRect(x: x, y: bottom + controlsHeight, width: captionWidth, height: captionHeight)
-        let controls = CGRect(x: x, y: bottom, width: captionWidth, height: controlsHeight)
-        return (art, caption, controls)
+        let caption = CGRect(x: x, y: artY - gap - captionHeight, width: captionWidth, height: captionHeight)
+        let controls = CGRect(x: x, y: caption.minY - controlsHeight, width: captionWidth, height: controlsHeight)
+        return (art, caption, controls, min(1, max(0, artY / stack)))
+    }
+
+    // Dragging the full-screen picture (3.26) resizes it as if it were grabbed by the point pressed: moving the pointer away from
+    // the picture's centre grows it, towards the centre shrinks it, in proportion — a corner grabbed 200 pt out and pulled 100 pt
+    // further is 1.5 times as big. The factor is measured from the press (`start` is the scale then, `art` the picture's frame
+    // then), so pulling back unwinds, and clamped to `range`. Pressing within 12 pt of the centre has no direction of its own:
+    // dragging right grows it. Distances under 60 pt count as 60, so a press near the centre doesn't make it jumpy.
+    static func resizedScale(from start: CGFloat, art: CGRect, press: CGPoint, to point: CGPoint, range: ClosedRange<CGFloat>) -> CGFloat {
+        let vx = press.x - art.midX, vy = press.y - art.midY
+        let r = (vx * vx + vy * vy).squareRoot()
+        let (ux, uy): (CGFloat, CGFloat) = r >= 12 ? (vx / r, vy / r) : (1, 0)
+        let outward = (point.x - press.x) * ux + (point.y - press.y) * uy
+        let reach = max(r, 60)
+        let scale = start * (reach + outward) / reach
+        return min(max(scale.isFinite ? scale : start, range.lowerBound), range.upperBound)
     }
 }

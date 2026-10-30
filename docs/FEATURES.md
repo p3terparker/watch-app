@@ -1,4 +1,4 @@
-# Watch 3.25
+# Watch 3.26
 
 Plays almost any video and downloads it. Hotkey **⌥⌘Y**.
 
@@ -71,13 +71,16 @@ A player window opens right away with a spinner while yt-dlp finds the stream. E
 While Music, Spotify, Podcasts or another audio app plays (or is paused), the list starts with a **Now Playing** row: artwork, the title, and *artist · app*. Click it (or **⤢**) to open the artwork in a floating window.
 
 - The window follows the music: the next track's artwork cross-fades in without taking focus. **Only music changes it.** A video, in a browser tab or a Watch player, never replaces the song.
-- Hover anywhere for the caption and "…". Rest the pointer on the caption, or just above it, and one row of controls slides in: **⏮ ⏯ ⏭**, a timeline with elapsed and remaining time (drag to seek), **shuffle**, **repeat**, and a volume slider. In a small window, the elapsed time drops out first, then shuffle and repeat, then the slider.
+- Hover anywhere for the caption and "…". Rest the pointer on the caption, or just above it, and one row of controls slides in: **⏮ ⏯ ⏭**, a timeline with elapsed and remaining time (drag to seek), **shuffle**, **repeat**, and the volume. In a small window, the elapsed time drops out first, then shuffle and repeat, then the volume slider, then the star.
 - For Music and Spotify, shuffle, repeat and volume set **that app's own** settings (Music's repeat goes off → all → this song; Spotify's is on/off). macOS asks once, on your first click. Other music apps are controlled only while they hold the system's Now Playing slot, otherwise the buttons dim.
-- Watch only acts on another app when you click. It reads Now Playing information only while the panel or the artwork window is open.
+- **★ (Apple Music only):** the star next to shuffle favourites the playing song in Music itself. It happens in the background (Music doesn't come forward) and the star shows Music's real state, read when the controls appear and when the song changes. It is separate from Watch's own Favourites (right-click ▸ Add to Favourites). Spotify has no star: its scripting has no way to like a song.
+- **Volume:** the slider is always hidden. Rest the pointer on the speaker and it slides out to its left (the speaker stays under the pointer); it tucks away shortly after the pointer leaves. Click the speaker to mute or unmute. Press and drag sideways on the speaker (or on the slider, anywhere along it) to change the volume from wherever it is now, as in Apple Music: the pointer doesn't have to be on the slider and the volume doesn't jump. Video windows work the same way.
+- Watch only acts on another app when you click. It reads Now Playing information only while the panel or the artwork window is open (or while the menu-bar ticker is on).
 - **Clicks:** a click anywhere plays or pauses (after about a third of a second, so a double-click doesn't also toggle). A quick double-click (within 0.3 s) opens the music in its app. A double-click near the far left or right edge skips 10 seconds. Space, ←/→ and F work too.
 - Right-click or "…": **Copy · Save…** (the original image, named *Artist – Album*) · **Open in Preview** · **Search YouTube for this song** · **Show ‹App›**. Esc closes.
-- **Full screen** (**F**, **⌃⌘F**, or the menu): the artwork sits over a gradient of its own colours, or black (…▸ Full-Screen Background). The title, "…" and pointer fade after a couple of idle seconds.
+- **Full screen** (**F**, **⌃⌘F**, or the menu): the artwork sits over a gradient of its own colours, or black (…▸ Full-Screen Background). The title, "…" and pointer fade after a couple of idle seconds. **Click and drag** anywhere to resize the picture: drag away from its centre to grow it, towards the centre to shrink it (from a quarter of the usual size up to filling the screen). As it nears the full height the caption and controls slide down and fade, and when it fills the screen from top to bottom they're gone; make it smaller and they come back. The size is remembered. A plain click still plays or pauses.
 - Turn the row off with **Preferences ▸ Show what's playing in other apps**.
+- **Menu-bar ticker** (**Preferences ▸ Show the playing song and artist in the menu bar**, off by default): one small line, "Song – Artist", next to Watch's icon so you can glance at what's playing. Text that fits stands still; longer text rests, then scrolls leftwards like iTunes's display, in a window up to 150 pt wide. Paused songs show dimmed and still, as does everything with Reduce Motion on. It disappears when nothing is playing, and clicking it does what the icon does. While it is on, Watch reads Now Playing in the background all the time.
 
 **Podcasts.** Search Apple's podcast directory from the Podcasts tab (no account). Pick a show, or paste an Apple Podcasts show link or a feed, to see its episodes newest first, with date, length, a resume bar and ✓. Episodes play in the music window, resume where you left off, and get a ✓ when finished (right-click to Mark as Played). **+** adds one to Up Next, **↗** opens it in Apple Podcasts, **⬇** downloads it. Pasted episode links work the same and show up in Recent Links.
 
@@ -140,6 +143,7 @@ yt-dlp (with Python and EJS), FFmpeg, ffprobe and Deno are bundled, so there's n
 
 ## Changelog
 
+- **3.26.** A ★ on the music window for Apple Music (favourites the song in the background), an optional one-line scrolling song name in the menu bar, a volume slider that stays hidden until you rest on the speaker (click to mute, drag from the speaker to change it), and a full-screen picture you can resize by dragging, with the caption sliding away when it fills the screen.
 - **3.25.** Now Playing artwork window with its own controls, podcasts, Music library search, one Up Next queue under the music window (and a list in each video window), media keys and Control Center, Finder's Open With, YouTube always plays natively with a proper error card, quality that follows the window size, a volume slider in video windows, and windows that open beside each other. Builds 3.19 to 3.24 were development steps toward this and were never released on their own. See [the release notes](releases/v3.25.md).
 - **3.18.** First release from this repository, under MIT, with its own build, test and package scripts.
 - **3.17.** Self-contained installer: pinned universal yt-dlp, FFmpeg, ffprobe and Deno inside the app, a first-run guide, optional YouTube connection, bundled notices and sources. Tools update by replacing the app.
