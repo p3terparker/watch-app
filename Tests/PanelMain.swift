@@ -602,7 +602,15 @@ if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
     musicWindow.controls.playPause.performClick(nil); pump(0.3)
     check(musicWindow.info?.isPlaying == false && fixtureMusic.performed.count == 2, "⏯ pauses Watch's player, not Music")
     musicWindow.controls.playPause.performClick(nil); pump(0.2)
-    // A video queued next opens in a video window beside the music window and runs from the queue.
+    // A video queued next opens in a video window beside the music window and runs from the queue. GitHub's Mac has a
+    // 1024×768 screen, where a 477 pt music window and its list leave no room for a player beside them (it would cascade,
+    // as on any full screen): a smaller music window at the top left leaves room on the right.
+    if let vis = musicWindow.window.screen?.visibleFrame {
+        musicWindow.window.setFrame(NSRect(x: vis.minX, y: vis.maxY - 240, width: 240, height: 240), display: true); pump(0.2)
+    }
+    if let d = drawer {
+        check(!d.window.frame.intersects(musicWindow.window.frame), "the list follows the window (\(d.window.frame) vs \(musicWindow.window.frame))")
+    }
     let before = panel.windowManager.players.count
     up.insert([QueueItem(url: video, title: "Fixture Video")], at: (up.queue?.pos ?? 0) + 1)
     if let id = up.queue?.peek(1, wrap: false)?.id { up.jump(to: id) }
@@ -610,7 +618,9 @@ if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
     let queued = panel.windowManager.players.last
     check(panel.windowManager.players.count == before + 1 && up.engine == .video && queued?.onEnded != nil,
           "a queued video opens in a video window that the queue drives")
-    check(queued.map { !$0.window.frame.intersects(musicWindow.window.frame) } ?? false, "beside the music window, not on it")
+    let queuedFrame = queued?.window.frame ?? musicWindow.window.frame
+    check(!queuedFrame.intersects(musicWindow.window.frame) && !(drawer?.window.frame.intersects(queuedFrame) ?? false),
+          "beside the music window and its list, not on them (\(queuedFrame))")
     check(waitFor(10) { queued?.isPlaying == true } && musicWindow.info?.title == "Fixture Video", "the music window shows the video playing beside it")
     // Up Next runs out: the video window closes and Music carries on with its own Up Next.
     fixtureMusic.performed = []

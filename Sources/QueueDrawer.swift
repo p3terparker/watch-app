@@ -1,14 +1,14 @@
 import AppKit
 
 // The Up Next list that drops down under the music window (3.21), like Music's MiniPlayer: a child window that moves with
-// it, as wide as it (at least 300 pt), up to 360 pt tall, flipping above it when there's no room below. Sections: History
+// it, as wide as it (at least 300 pt), up to 360 pt tall; with no room below it flips above, or the window moves up for it (DrawerLayout). Sections: History
 // (collapsed) · Now Playing · Playing Next (what you added; Clear) · Continue Playing (the rest of the list) · Then (the
 // app the queue hands back to). Drag rows to reorder, ⌫ removes, double-click or Return plays a row, Esc closes; drop
 // files, folders and links anywhere in it; right-click for more. It shows and edits whatever its closures say — the
 // universal queue for the music window.
 final class QueueDrawer: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
     static let rowType = NSPasteboard.PasteboardType("com.jacob.watch.queue-item")
-    static let minWidth: CGFloat = 300, maxHeight: CGFloat = 360, gap: CGFloat = 6, barHeight: CGFloat = 30
+    static let minWidth: CGFloat = 300, maxHeight: CGFloat = 360, minHeight: CGFloat = 120, gap: CGFloat = 6, barHeight: CGFloat = 30
 
     enum Section { case history, now, next, rest }
     enum Row {
@@ -28,6 +28,7 @@ final class QueueDrawer: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
     private var endTarget: Int?
     private var showHistory = false
     private var observers: [NSObjectProtocol] = []
+    private var placing = false                    // moving the parent for the list re-enters place() through its didMove
 
     // What to show and what to do with it.
     var queue: () -> PlayQueue? = { nil }
@@ -132,18 +133,24 @@ final class QueueDrawer: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
     }
     private func stopObserving() { observers.forEach { NotificationCenter.default.removeObserver($0) }; observers = [] }
 
-    // Under the parent, as wide as it (at least minWidth); above it when the screen has no room below.
+    // Under the parent, as wide as it (at least minWidth); DrawerLayout decides when there's no room below — the window
+    // moves up for it, except while you drag or resize it.
     func place() {
-        guard let p = parent, isShown else { return }
+        guard let p = parent, isShown, !placing else { return }
+        placing = true
+        defer { placing = false }
         let content = rows.indices.reduce(CGFloat(0)) { $0 + rowHeight($1) }
         let height = min(Self.maxHeight, Self.barHeight + max(content, 34) + 8)
         let width = max(Self.minWidth, p.frame.width)
-        var f = NSRect(x: p.frame.minX, y: p.frame.minY - Self.gap - height, width: width, height: height)
-        if let vis = (p.screen ?? NSScreen.main)?.visibleFrame {
-            if f.minY < vis.minY { f.origin.y = min(p.frame.maxY + Self.gap, vis.maxY - height) }
-            f.origin.x = min(max(f.minX, vis.minX), vis.maxX - f.width)
+        guard let vis = (p.screen ?? NSScreen.main)?.visibleFrame else {
+            window.setFrame(NSRect(x: p.frame.minX, y: p.frame.minY - Self.gap - height, width: width, height: height), display: true)
+            return
         }
-        if f != window.frame { window.setFrame(f, display: true) }
+        let userMoving = p.inLiveResize || NSEvent.pressedMouseButtons & 1 != 0
+        let placed = DrawerLayout.place(parent: p.frame, height: height, minHeight: Self.minHeight, width: width, gap: Self.gap,
+                                        in: vis, moveParent: !userMoving)
+        if placed.parent != p.frame { p.setFrame(placed.parent, display: true) }
+        if placed.list != window.frame { window.setFrame(placed.list, display: true) }
     }
     var isAbove: Bool { (parent?.frame.maxY ?? 0) <= window.frame.minY }
 

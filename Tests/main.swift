@@ -209,6 +209,28 @@ let scattered = [CGRect(x: 900, y: 600, width: 400, height: 225),   // top right
                  CGRect(x: 800, y: 90, width: 400, height: 225)]    // bottom right
 expect(Tiling.readingOrder(scattered, columns: 2) == [2, 0, 1, 3], "top row left to right, then the next row")
 expect(Tiling.readingOrder(scattered, columns: 1) == [2, 0, 1, 3], "one column: top to bottom")
+// The Up Next list under the music window: below, above, else the window moves up for it; shrinks on a short screen.
+let small = CGRect(x: 0, y: 0, width: 1024, height: 743)       // GitHub's Mac: 1024×768 less the menu bar
+func drawer(_ parent: CGRect, _ height: CGFloat, move: Bool = true) -> (list: CGRect, parent: CGRect) {
+    DrawerLayout.place(parent: parent, height: height, minHeight: 120, width: max(300, parent.width), gap: 6, in: small, moveParent: move)
+}
+var placed = drawer(CGRect(x: 273, y: 400, width: 477, height: 300), 200)
+expect(placed.list == CGRect(x: 273, y: 194, width: 477, height: 200) && placed.parent.minY == 400, "room below: under the window")
+placed = drawer(CGRect(x: 100, y: 50, width: 300, height: 300), 200)
+expect(placed.list == CGRect(x: 100, y: 356, width: 300, height: 200) && placed.parent.minY == 50, "room only above: over the top")
+placed = drawer(CGRect(x: 273, y: 164, width: 477, height: 477), 200)
+expect(placed.parent == CGRect(x: 273, y: 206, width: 477, height: 477) && placed.list == CGRect(x: 273, y: 0, width: 477, height: 200),
+       "no room either side: the window moves up just enough (\(placed))")
+placed = drawer(CGRect(x: 0, y: 100, width: 600, height: 500), 300)
+expect(placed.parent.minY == 243 && placed.list == CGRect(x: 0, y: 0, width: 600, height: 237), "a short screen: the list shrinks to the room left (\(placed))")
+placed = drawer(CGRect(x: 273, y: 164, width: 477, height: 477), 200, move: false)
+expect(placed.parent.minY == 164 && placed.list == CGRect(x: 273, y: 0, width: 477, height: 158), "while dragging: never moves the window (\(placed))")
+for parent in [CGRect(x: 273, y: 400, width: 477, height: 300), CGRect(x: 100, y: 50, width: 300, height: 300),
+               CGRect(x: 273, y: 164, width: 477, height: 477), CGRect(x: 0, y: 100, width: 600, height: 500), CGRect(x: 500, y: 0, width: 240, height: 240)] {
+    let r = drawer(parent, 200)
+    expect(!r.list.intersects(r.parent) && small.contains(r.list) && small.contains(r.parent), "list and window both on screen, apart: \(parent) → \(r)")
+}
+expect(drawer(CGRect(x: 900, y: 400, width: 200, height: 200), 200).list.minX == 724, "kept on screen sideways")
 // Player click zones: top third + bottom middle resize, centre plays/pauses, lower left/right thirds skip.
 let player = CGSize(width: 440, height: 247)
 func zone(_ x: CGFloat, _ yFromTop: CGFloat) -> PlayerZone { PlayerZone.at(CGPoint(x: x, y: player.height - yFromTop), in: player) }

@@ -11,8 +11,14 @@ Music/Spotify for the queue.
 
 ### Verification
 
-- Authored without a local Swift toolchain; GitHub Actions on macOS compiles and tests it. Results are recorded here once the
-  run finishes.
+- Authored without a local Swift toolchain; GitHub Actions on macOS compiles and tests it.
+- First run, [40983777826](https://github.com/p3terparker/watch-app/actions/runs/40983777826) (`7d8195e`): type-check,
+  `./check.sh` (unit tests incl. the queue, hand-off and Spotify checks), helpers, package, bundled tools and installer
+  verification passed; the GUI harness failed 2 of 192 checks, both from GitHub's 1024×768 screen: the list flipped above a
+  477 pt music window and was clamped over it, and a queued video then found no free spot beside them and cascaded.
+  Fix: `DrawerLayout` (`Sources/Tiling.swift`, unit-tested) — below, else above, else the window moves up just enough (never
+  while you drag or resize it), shrinking the list on a screen too short for both; the harness's video check now uses a
+  smaller music window so a free spot exists. Results of the next run are recorded with 3.22.
 - Manual (pending, needs a real Mac): slot-in with real Music and Spotify (the boundary pause and rewind, how much of the next
   song is heard, the hand-back), the one-time Automation prompts, Spotify launching in the background, media-key Next
   during a Spotify song, drag-and-drop from Finder/Spotify into the list, and the list's look under small and large windows.
@@ -46,7 +52,9 @@ skips publishing for commits marked `[no preview]`. No preference keys added; bu
   - The informational live YouTube step hit YouTube's bot check for 2 of 3 public videos from GitHub's address (the third
     resolved natively in 3.6 s); it doesn't gate the preview and is unrelated to this change.
   - That commit's message happened to quote the `[no preview]` marker, so the preview was published by the following
-    documentation commit's run.
+    documentation commit's run, [40983135021](https://github.com/p3terparker/watch-app/actions/runs/40983135021) (same checks,
+    all green): [v3.20-preview](https://github.com/p3terparker/watch-app/releases/tag/v3.20-preview), "Watch 3.20 preview
+    (52)", DMG 230,329,383 bytes, SHA-256 `44bf86551812bdf1d3ea6c6f21ab17a5fb02eea152112d1d265305132ecf7693`.
 - Manual (pending, needs a real Mac): reveal and click timing feel; shuffle/repeat changing real Music and Spotify settings
   (and the one-time Automation prompt on the first click); double-click opening/revealing in Music, Spotify and Podcasts.
 
