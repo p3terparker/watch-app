@@ -86,7 +86,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Watch-${{ github.sha }}
-          path: dist/Watch.dmg
+          path: dist/Watch-*.dmg
           retention-days: 30
 
       # A commit message containing "[no preview]" (work in progress) is built and tested but not published, so the
@@ -100,14 +100,15 @@ jobs:
           version=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Info.plist)
           build=$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' Info.plist)
           tag="v${version}-preview"
-          sha=$(shasum -a 256 dist/Watch.dmg | cut -d' ' -f1)
+          dmg="dist/Watch-${version}.dmg"            # named with the release number by package.sh
+          sha=$(shasum -a 256 "$dmg" | cut -d' ' -f1)
           notes="$RUNNER_TEMP/notes.md"
           if [ -f "docs/releases/${tag}.md" ]; then cat "docs/releases/${tag}.md" > "$notes"; else echo "Watch ${version} preview." > "$notes"; fi
           # shellcheck disable=SC2016 # the backticks are Markdown
-          printf '\nBuilt automatically on GitHub from commit `%s` (%s).\n\nSHA-256 for `Watch.dmg`:\n\n```\n%s\n```\n' \
-            "${GITHUB_SHA::7}" "$GITHUB_REF_NAME" "$sha" >> "$notes"
+          printf '\nBuilt automatically on GitHub from commit `%s` (%s).\n\nSHA-256 for `%s`:\n\n```\n%s\n```\n' \
+            "${GITHUB_SHA::7}" "$GITHUB_REF_NAME" "${dmg#dist/}" "$sha" >> "$notes"
           gh release delete "$tag" --yes --cleanup-tag || true
-          gh release create "$tag" dist/Watch.dmg --prerelease --latest=false --target "$GITHUB_SHA" \
+          gh release create "$tag" "$dmg" --prerelease --latest=false --target "$GITHUB_SHA" \
             --title "Watch ${version} preview (${build})" --notes-file "$notes"
           echo "Published https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag} (sha256 ${sha})"
 

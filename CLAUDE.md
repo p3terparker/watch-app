@@ -85,6 +85,10 @@ same Automation rules as the volume). Clicks use `MusicZone` (`Sources/PlayerZon
 after `clickDelay` (the double-click interval), double-click = `openSource` (bring the app forward / launch it; Music reveals
 the track when already allowed), double-click in far-edge strips (15%, ≥36 pt) = ∓10 s. Full screen only via F/⌃⌘F/menu.
 Pushes whose commit message contains `[no preview]` are built and tested but don't replace the preview (`build.yml`).
+**Versioning:** one version number per **phase** — the batch of changes asked for together — not per change: every push of
+that phase keeps the number (each passing one replaces that version's preview); bump it only when a new phase starts or
+the user says it's a new version. (3.20–3.24 were one phase numbered per change; they stay as published.) The installer is
+named with the release number: `package.sh` makes `dist/Watch-<version>.dmg` (e.g. `Watch-3.24.dmg`).
 **3.21 — Up Next under the music window:** `PlayQueue`/`QueueItem` (+ `MediaSource`, `SpotifyLink`) moved to
 `Sources/Queue.swift` with Play Next/Later insertion, edits, sections and `handBack` (tested); `Sources/Handoff.swift` has the
 pure song-boundary reducer and `QueueRoute` (tested). `UniversalQueue` (`Sources/UpNext.swift`) plays the current item in

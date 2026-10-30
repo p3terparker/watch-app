@@ -6,7 +6,7 @@ Watch is an independent project. Its source, tests, dependency pins and packagin
 
 ## Install
 
-[Download Watch.dmg](https://github.com/p3terparker/watch-app/releases/latest/download/Watch.dmg) from the [latest release](https://github.com/p3terparker/watch-app/releases/latest). Open the disk image, drag Watch to Applications, eject the image, and open Watch. The first-run guide explains watching, included tools and optional YouTube connection. Click the play icon in the menu bar or press **Option–Command–Y**.
+Download the Watch disk image (`Watch-<version>.dmg`, e.g. `Watch-3.24.dmg`) from the [latest release](https://github.com/p3terparker/watch-app/releases/latest). Open the disk image, drag Watch to Applications, eject the image, and open Watch. The first-run guide explains watching, included tools and optional YouTube connection. Click the play icon in the menu bar or press **Option–Command–Y**.
 
 Previews of the next version, built and checked automatically on GitHub, appear on the [Releases page](https://github.com/p3terparker/watch-app/releases) marked **Pre-release**.
 
@@ -24,7 +24,7 @@ Build prerequisites: macOS, Xcode Command Line Tools, Python 3.9+ and an interne
 ./check.sh                    # metadata and deterministic regression tests
 ./build.sh                    # current architecture, fully bundled
 ./build.sh --universal        # Apple Silicon + Intel
-./package.sh                  # tests, universal build, dist/Watch.dmg
+./package.sh                  # tests, universal build, dist/Watch-<version>.dmg
 python3 scripts/verify_watch_package.py --canonical
 ```
 

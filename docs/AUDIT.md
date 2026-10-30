@@ -8,7 +8,9 @@ Watch's own playback in macOS's Now Playing with media keys / Control Center / h
 window and relaunching (new key `upNextQueue`), Finder's Open With for video/audio (`CFBundleDocumentTypes`, Alternate rank —
 Watch never becomes the default app). The pure decisions (`OwnPlayback`, `MusicPause`, `QueueSnapshot`) are unit-tested. The
 GUI harness's three play/pause checks that failed once on 3.23's first run now wait for the state instead of fixed pauses.
-Bundle ID, hotkey and URL handlers unchanged.
+Bundle ID, hotkey and URL handlers unchanged. Later the same day the installer was renamed with the release number
+(`Watch-3.24.dmg`; `package.sh`, `verify_watch_package.py`, `build.yml`) and v3.24-preview republished with it — same 3.24
+(56) app.
 
 ### Verification
 

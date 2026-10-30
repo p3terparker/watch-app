@@ -160,7 +160,9 @@ def package_app(app, bundle, destination):
         run(["ditto", bundle, stage / bundle.name])
         (stage / "Applications").symlink_to("/Applications")
         shutil.copy2(ROOT / "FIRST_RUN.txt", stage / "Read Me.txt")
-        dmg = scratch / (app["name"] + ".dmg")
+        # The release number is in the file name (Watch-3.24.dmg); the volume is still just "Watch".
+        version = plistlib.loads((bundle / "Contents/Info.plist").read_bytes())["CFBundleShortVersionString"]
+        dmg = scratch / "{}-{}.dmg".format(app["name"], version)
         run(["hdiutil", "create", "-volname", app["name"], "-srcfolder", stage,
              "-format", "UDZO", dmg], capture=True)
         run(["hdiutil", "verify", dmg], capture=True)
