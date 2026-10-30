@@ -13,6 +13,7 @@ import threading
 
 ROOT = Path(__file__).resolve().parents[1]
 helpers = Path(sys.argv[1]).resolve()
+contents = helpers.parent                  # the built app's Contents (Now Playing adapter lives beside Helpers)
 live = '--live' in sys.argv[2:]
 checks = 0
 
@@ -73,6 +74,17 @@ with tempfile.TemporaryDirectory(prefix='Watch clean install ') as temp:
             check(bool(output.strip()), name + ' Intel slice executes under Rosetta')
     else:
         print('SKIP Intel execution: Rosetta unavailable', flush=True)
+    # Now Playing: the adapter from a relocated path with spaces, under system perl, clean environment. Read-only
+    # `get` only (never `test`, which registers a fake player, nor any playback command).
+    relocated_contents = home / 'Relocated App.app/Contents'
+    adapter_framework = relocated_contents / 'Frameworks/MediaRemoteAdapter.framework'
+    shutil.copytree(contents / 'Frameworks/MediaRemoteAdapter.framework', adapter_framework, symlinks=True)
+    adapter_script = relocated_contents / 'Resources/NowPlaying/mediaremote-adapter.pl'
+    adapter_script.parent.mkdir(parents=True)
+    shutil.copy2(contents / 'Resources/NowPlaying/mediaremote-adapter.pl', adapter_script)
+    state = json.loads(run(['/usr/bin/perl', adapter_script, adapter_framework, 'get', '--no-artwork'], timeout=30))
+    check(state is None or 'bundleIdentifier' in state, 'Now Playing adapter loads under system perl and reads MediaRemote')
+    print('Now Playing: ' + json.dumps(state and {k: state.get(k) for k in ('bundleIdentifier', 'title', 'playing')}), flush=True)
     if live:
         result = json.loads(run(boundary + ['--flat-playlist', '--dump-single-json', '--skip-download', '--socket-timeout', '15', '--retries', '0', 'ytsearch3:NASA official'], timeout=60))
         check(len(result['entries']) == 3, 'live public YouTube search works without cookies or sign-in')

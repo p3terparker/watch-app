@@ -1,0 +1,127 @@
+# Builds, tests and packages Watch on GitHub's Mac, so changes can be checked and installed without a local build.
+# A push to a claude/* branch that passes the tests, the bundled-tool checks and the installer verification replaces
+# the "vX.Y-preview" pre-release (the README's "latest" download link stays on the last full release).
+name: Build Watch
+
+on:
+  push:
+    branches: [main, 'claude/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write    # publishing the preview pre-release
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun swiftc --version
+          /usr/bin/python3 --version
+
+      # Fast feedback before the long helper build: the whole app type-checks, and the unit/tooling tests pass.
+      - name: Type-check the app
+        id: compile
+        continue-on-error: true
+        run: xcrun swiftc -typecheck -swift-version 5 -target arm64-apple-macos13.0 Sources/*.swift
+
+      - name: Unit and tooling tests
+        id: unit
+        continue-on-error: true
+        run: ./check.sh
+
+      # Downloaded inputs plus the prepared FFmpeg/LAME and Now Playing adapter builds (the first run compiles FFmpeg
+      # for both architectures). Saved right after preparing, so a later failure doesn't throw the work away.
+      - name: Restore helper cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/watch-vendor
+          key: watch-vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Dependencies.json', 'SupplementalSources.json', 'scripts/watch_helpers.py') }}
+          restore-keys: watch-vendor-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Prepare bundled helpers
+        run: /usr/bin/python3 scripts/watch_helpers.py
+
+      - name: Save helper cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/watch-vendor
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      - name: Stop if the app or tests failed
+        if: steps.compile.outcome == 'failure' || steps.unit.outcome == 'failure'
+        run: |
+          echo "Type-check: ${{ steps.compile.outcome }} · unit/tooling tests: ${{ steps.unit.outcome }}"
+          exit 1
+
+      - name: Test, build and package (Apple Silicon + Intel)
+        run: ./package.sh
+
+      - name: Bundled tools and Now Playing adapter
+        run: /usr/bin/python3 Tests/bundled.py build/universal/Watch.app/Contents/Helpers
+
+      - name: Verify the installer
+        run: /usr/bin/python3 scripts/verify_watch_package.py --canonical
+
+      # The real panel, player and music window on the runner's screen, with an FFmpeg-made fixture video and fixture
+      # renditions: UX_SPEC's "Always works" list (click zones, keys, volume, resize + quality, music-only, placement).
+      # A preview is only published when these pass.
+      - name: Player, panel and music window (GUI)
+        timeout-minutes: 15
+        run: /usr/bin/python3 Tests/panel.py build/watch-panel-checks
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Watch-${{ github.sha }}
+          path: dist/Watch.dmg
+          retention-days: 30
+
+      - name: Publish preview pre-release
+        if: startsWith(github.ref, 'refs/heads/claude/') || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Info.plist)
+          build=$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' Info.plist)
+          tag="v${version}-preview"
+          sha=$(shasum -a 256 dist/Watch.dmg | cut -d' ' -f1)
+          notes="$RUNNER_TEMP/notes.md"
+          if [ -f "docs/releases/${tag}.md" ]; then cat "docs/releases/${tag}.md" > "$notes"; else echo "Watch ${version} preview." > "$notes"; fi
+          # shellcheck disable=SC2016 # the backticks are Markdown
+          printf '\nBuilt automatically on GitHub from commit `%s` (%s).\n\nSHA-256 for `Watch.dmg`:\n\n```\n%s\n```\n' \
+            "${GITHUB_SHA::7}" "$GITHUB_REF_NAME" "$sha" >> "$notes"
+          gh release delete "$tag" --yes --cleanup-tag || true
+          gh release create "$tag" dist/Watch.dmg --prerelease --latest=false --target "$GITHUB_SHA" \
+            --title "Watch ${version} preview (${build})" --notes-file "$notes"
+          echo "Published https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag} (sha256 ${sha})"
+
+      # How YouTube links resolve right now with the bundled yt-dlp, exactly as the player asks (informational: YouTube
+      # can bot-check data-centre addresses).
+      - name: Live YouTube resolution (informational)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 8
+        run: /usr/bin/python3 Tests/youtube_live.py build/universal/Watch.app/Contents/Helpers
+
+      - name: Upload panel snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-snapshots-${{ github.sha }}
+          path: build/watch-panel-checks
+          if-no-files-found: ignore
+          retention-days: 14

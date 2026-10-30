@@ -1,12 +1,14 @@
 # Watch App
 
-A standalone, native macOS menu-bar video player. Search YouTube as you type, play videos in small floating windows, browse your recent links and favourites, and download video or audio.
+A standalone, native macOS menu-bar video player. Search YouTube as you type, play videos in small floating windows, browse your recent links and favourites, download video or audio, and open the artwork of whatever is playing in another app.
 
 Watch is an independent project. Its source, tests, dependency pins and packaging tools live entirely in this repository. No checkout or installation of another project is required.
 
 ## Install
 
 [Download Watch.dmg](https://github.com/p3terparker/watch-app/releases/latest/download/Watch.dmg) from the [latest release](https://github.com/p3terparker/watch-app/releases/latest). Open the disk image, drag Watch to Applications, eject the image, and open Watch. The first-run guide explains watching, included tools and optional YouTube connection. Click the play icon in the menu bar or press **Option–Command–Y**.
+
+Previews of the next version, built and checked automatically on GitHub, appear on the [Releases page](https://github.com/p3terparker/watch-app/releases) marked **Pre-release**.
 
 The fully bundled app includes yt-dlp (with Python and EJS), FFmpeg, ffprobe and Deno. Recipients do not need Homebrew, Python or Terminal. Existing system installations are left alone. Media tools update with the app.
 

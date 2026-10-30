@@ -37,6 +37,11 @@ enum Prefs {
     static var hasSeenWelcome: Bool { get { d.bool(forKey: "hasSeenWelcome") } set { d.set(newValue, forKey: "hasSeenWelcome") } }
     static var showBrowserTabs: Bool { get { d.object(forKey: "showBrowserTabs") as? Bool ?? true } set { d.set(newValue, forKey: "showBrowserTabs") } }
     static var showFavourites: Bool { get { d.bool(forKey: "showFavourites") } set { d.set(newValue, forKey: "showFavourites") } }  // the panel's list tab
+    // The panel's Now Playing row (what other apps are playing, with its artwork — NowPlaying.swift).
+    static var showNowPlaying: Bool { get { d.object(forKey: "showNowPlaying") as? Bool ?? true } set { d.set(newValue, forKey: "showNowPlaying") } }
+    // Full-screen artwork backdrop: a gradient of the artwork's colours (default) or black.
+    static var playerVolume: Double { get { d.object(forKey: "playerVolume") as? Double ?? 1 } set { d.set(newValue, forKey: "playerVolume") } }  // what a new player starts at
+    static var artworkColourBackground: Bool { get { d.object(forKey: "artworkColourBackground") as? Bool ?? true } set { d.set(newValue, forKey: "artworkColourBackground") } }
     // Playback modes. Each player window keeps its own (its "…" menu toggles them); these are what a NEW
     // window starts with, i.e. the last choice made anywhere.
     static var autoplay: Bool { get { d.object(forKey: "autoplay") as? Bool ?? true } set { d.set(newValue, forKey: "autoplay") } }
@@ -517,7 +522,7 @@ struct StreamRef {
 }
 enum StreamPlan {
     case single(StreamRef)                              // one muxed URL: progressive file or HLS playlist
-    case split(video: StreamRef, audio: StreamRef)      // separate video + audio → DashHLSBridge
+    case split(videos: [StreamRef], audio: StreamRef)   // video rendition(s), best first, + separate audio → DashHLSBridge
 }
 struct ResolvedStream { let title: String?; let isLive: Bool; let plans: [StreamPlan]; var thumbnail: String? = nil; var duration: Double? = nil }
 
@@ -531,16 +536,20 @@ func avPlayableMuxed(_ f: [String: Any]) -> Bool {
 }
 
 // One yt-dlp call (`-j`) gives the title, live flag and every format, so we build a primary plan plus
-// fallbacks without re-running it. Completes on main; nil = yt-dlp missing/failed (caller falls back to web).
-func resolveStream(_ link: String, completion: @escaping (ResolvedStream?) -> Void) {
+// fallbacks without re-running it. Completes on main with the stream, or nil and yt-dlp's last ERROR line.
+// `cookies` (the connected browser's) is only passed for a retry after YouTube asked for a signed-in viewer.
+@discardableResult
+func resolveStream(_ link: String, cookies: [String] = [], completion: @escaping (ResolvedStream?, String) -> Void) -> YtDlpTask {
     let fmt = parseYouTube(link) != nil
         // YouTube: H.264 HD video + AAC audio (bridged to HLS); live/other → best HLS; last resort muxed mp4.
         ? "bv*[vcodec^=avc1][height<=1080][protocol=https]+ba[ext=m4a][protocol=https]/b[protocol^=m3u8]/b[ext=mp4]/bv*+ba/b"
         : "b[protocol^=m3u8]/b[ext=mp4]/bv*[vcodec^=avc1]+ba[ext=m4a]/bv*[protocol^=m3u8]+ba[protocol^=m3u8]/b/bv*+ba"
-    YtDlp.capture(["-j", "--no-playlist", "--no-warnings", "-f", fmt, link]) { data in
+    return YtDlp.captureWithError(cookies + ["-j", "--no-playlist", "--no-warnings", "-f", fmt, link], timeout: 60) { data, error in
         guard let data = data,
               let firstLine = String(data: data, encoding: .utf8)?.split(separator: "\n").first,
-              let d = (try? JSONSerialization.jsonObject(with: Data(firstLine.utf8))) as? [String: Any] else { completion(nil); return }
+              let d = (try? JSONSerialization.jsonObject(with: Data(firstLine.utf8))) as? [String: Any] else {
+            completion(nil, error.isEmpty ? "yt-dlp returned unreadable output" : error); return
+        }
         let formats = (d["formats"] as? [[String: Any]]) ?? []
         let isLive = (d["is_live"] as? Bool) == true
         var plans: [StreamPlan] = []
@@ -554,9 +563,15 @@ func resolveStream(_ link: String, completion: @escaping (ResolvedStream?) -> Vo
                 plans.append(.single(s))
             }
         }
-        if let req = d["requested_formats"] as? [[String: Any]], req.count == 2,
-           let a = StreamRef(req[0]), let b = StreamRef(req[1]) {
-            plans.append(a.isVideo ? .split(video: a, audio: b) : .split(video: b, audio: a))
+        // Split video + audio: the chosen rendition plus the lower H.264 ones (StreamLadder), so AVPlayer can follow
+        // the window's size; then the chosen one alone (the bridge as it was) in case the ladder won't play.
+        if let req = d["requested_formats"] as? [[String: Any]], req.count == 2 {
+            let v = StreamRef(req[0])?.isVideo == true ? 0 : 1
+            if let audio = StreamRef(req[1 - v]) {
+                let ladder = StreamLadder.renditions(chosen: req[v], formats: formats).compactMap { StreamRef($0, headers: d["http_headers"]) }
+                if ladder.count > 1 { plans.append(.split(videos: ladder, audio: audio)) }
+                if let top = ladder.first { plans.append(.split(videos: [top], audio: audio)) }
+            }
         } else if let s = StreamRef(d) {
             plans.append(.single(s))
         }
@@ -567,7 +582,8 @@ func resolveStream(_ link: String, completion: @escaping (ResolvedStream?) -> Vo
             plans.append(.single(s))
         }
         let info = LinkInfo(json: d)   // also fills in the video's Recent Links row (WindowManager.onInfo)
-        completion(ResolvedStream(title: d["title"] as? String, isLive: isLive, plans: plans, thumbnail: info.thumbnail, duration: info.duration))
+        completion(ResolvedStream(title: d["title"] as? String, isLive: isLive, plans: plans, thumbnail: info.thumbnail, duration: info.duration),
+                   plans.isEmpty ? "yt-dlp found no format Watch can play" : "")
     }
 }
 
@@ -587,34 +603,50 @@ final class DashHLSBridge: NSObject, AVAssetResourceLoaderDelegate {
     struct Index { let initLength: Int; let segments: [(offset: Int, length: Int, duration: Double)] }
 
     // Completes on main with a ready-to-play asset (the bridge must be retained as long as the asset), or nil.
-    static func make(video: StreamRef, audio: StreamRef, completion: @escaping (DashHLSBridge?, AVURLAsset?) -> Void) {
+    // Every video rendition (best first) becomes a variant of one master playlist sharing the audio, so AVPlayer can
+    // switch resolution with the window (preferredMaximumResolution) and the bandwidth; one whose index can't be
+    // read is left out.
+    static func make(videos: [StreamRef], audio: StreamRef, completion: @escaping (DashHLSBridge?, AVURLAsset?) -> Void) {
         let base = "\(scheme)://p"
-        func finish(_ videoURI: String, _ audioURI: String, _ extra: [String: Data]) {
+        func finish(_ variants: [(StreamRef, String)], _ audioURI: String, _ extra: [String: Data]) {
             let b = DashHLSBridge()
-            let codecs = [video.vcodec, audio.acodec].compactMap { $0 }.filter { $0 != "none" }.joined(separator: ",")
-            var inf = "#EXT-X-STREAM-INF:BANDWIDTH=\((video.bitrate ?? 4_000_000) + (audio.bitrate ?? 128_000)),AUDIO=\"a\""
-            if !codecs.isEmpty { inf += ",CODECS=\"\(codecs)\"" }
-            if let w = video.width, let h = video.height { inf += ",RESOLUTION=\(w)x\(h)" }
-            let master = "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n"
+            var master = "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n"
                 + "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"Audio\",DEFAULT=YES,AUTOSELECT=YES,URI=\"\(audioURI)\"\n"
-                + "\(inf)\n\(videoURI)\n"
+            for (video, uri) in variants {
+                let codecs = [video.vcodec, audio.acodec].compactMap { $0 }.filter { $0 != "none" }.joined(separator: ",")
+                var inf = "#EXT-X-STREAM-INF:BANDWIDTH=\((video.bitrate ?? 4_000_000) + (audio.bitrate ?? 128_000)),AUDIO=\"a\""
+                if !codecs.isEmpty { inf += ",CODECS=\"\(codecs)\"" }
+                if let w = video.width, let h = video.height { inf += ",RESOLUTION=\(w)x\(h)" }
+                master += "\(inf)\n\(uri)\n"
+            }
             b.playlists = extra.merging(["/master.m3u8": Data(master.utf8)]) { $1 }
-            let asset = AVURLAsset(url: URL(string: "\(base)/master.m3u8")!, options: video.assetOptions)
+            let asset = AVURLAsset(url: URL(string: "\(base)/master.m3u8")!, options: variants[0].0.assetOptions)
             asset.resourceLoader.setDelegate(b, queue: b.queue)
             completion(b, asset)
         }
-        if video.isHLS && audio.isHLS {
-            DispatchQueue.main.async { finish(video.url.absoluteString, audio.url.absoluteString, [:]) }
+        guard let first = videos.first else { DispatchQueue.main.async { completion(nil, nil) }; return }
+        if first.isHLS && audio.isHLS {
+            DispatchQueue.main.async { finish([(first, first.url.absoluteString)], audio.url.absoluteString, [:]) }
             return
         }
-        guard !video.isHLS, !audio.isHLS else { DispatchQueue.main.async { completion(nil, nil) }; return }
-        let g = DispatchGroup(); var vi: Index?, ai: Index?
-        g.enter(); fetchIndex(video) { vi = $0; g.leave() }
+        let files = videos.filter { !$0.isHLS }
+        guard !files.isEmpty, !audio.isHLS else { DispatchQueue.main.async { completion(nil, nil) }; return }
+        let g = DispatchGroup(), lock = NSLock()
+        var indexes = [Index?](repeating: nil, count: files.count), ai: Index?
+        for (i, video) in files.enumerated() {
+            g.enter(); fetchIndex(video) { idx in lock.lock(); indexes[i] = idx; lock.unlock(); g.leave() }
+        }
         g.enter(); fetchIndex(audio) { ai = $0; g.leave() }
         g.notify(queue: .main) {
-            guard let vi = vi, let ai = ai else { completion(nil, nil); return }
-            finish("\(base)/video.m3u8", "\(base)/audio.m3u8",
-                   ["/video.m3u8": mediaPlaylist(video, vi), "/audio.m3u8": mediaPlaylist(audio, ai)])
+            guard let ai = ai else { completion(nil, nil); return }
+            var variants: [(StreamRef, String)] = [], extra = ["/audio.m3u8": mediaPlaylist(audio, ai)]
+            for (i, video) in files.enumerated() {
+                guard let idx = indexes[i] else { continue }
+                extra["/video\(i).m3u8"] = mediaPlaylist(video, idx)
+                variants.append((video, "\(base)/video\(i).m3u8"))
+            }
+            guard !variants.isEmpty else { completion(nil, nil); return }
+            finish(variants, "\(base)/audio.m3u8", extra)
         }
     }
 
@@ -736,6 +768,7 @@ final class SettingsController: NSObject, NSTextFieldDelegate {
     private var askDirCheck: NSButton!
     private var clipboardHotkeyCheck: NSButton!
     private var browserTabsCheck: NSButton!
+    private var nowPlayingCheck: NSButton!
     private var dirField: NSTextField!
     private var updateButton: NSButton!
     private var updateLabel: NSTextField!
@@ -809,6 +842,10 @@ final class SettingsController: NSObject, NSTextFieldDelegate {
         accessLabel = note("macOS asks once per running browser to let Watch see its video tabs.")
         let accessRow = NSStackView(views: [access, accessLabel]); accessRow.spacing = 8; accessRow.alignment = .centerY
         stack.addArrangedSubview(accessRow)
+
+        nowPlayingCheck = NSButton(checkboxWithTitle: "Show what's playing in other apps (Music, Spotify, browsers…) with its artwork", target: self, action: #selector(nowPlayingChanged))
+        nowPlayingCheck.state = Prefs.showNowPlaying ? .on : .off
+        stack.addArrangedSubview(nowPlayingCheck)
 
         dirField = NSTextField(string: Prefs.downloadDir); dirField.isEditable = false
         dirField.widthAnchor.constraint(equalToConstant: 300).isActive = true
@@ -900,6 +937,7 @@ final class SettingsController: NSObject, NSTextFieldDelegate {
     @objc private func askDirChanged() { Prefs.askDownloadDir = (askDirCheck.state == .on) }
     @objc private func clipboardHotkeyChanged() { Prefs.hotkeyPlaysClipboard = (clipboardHotkeyCheck.state == .on) }
     @objc private func browserTabsChanged() { Prefs.showBrowserTabs = (browserTabsCheck.state == .on); app?.mediaSettingsChanged() }
+    @objc private func nowPlayingChanged() { Prefs.showNowPlaying = (nowPlayingCheck.state == .on); app?.nowPlayingSettingsChanged() }
     @objc private func loginChanged() { app?.toggleLoginItem(); loginCheck.state = currentLogin() ? .on : .off }
     @objc private func updateNow() { showMediaToolUpdateHelp() }
 }
@@ -1175,7 +1213,7 @@ final class MediaMonitor {
 // ============================================================================
 // MARK: - PlayerWindowController (B2) — a single video player window
 // ============================================================================
-final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
+final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     static let sharedProcessPool = WKProcessPool()   // reuse instead of cold-spawning a web view per player
     static let standardSize = NSSize(width: 440, height: 247)   // 16:9 — every player stays this size
     static let barInset: CGFloat = 16                            // playback bar ↔ window sides (keeps off the corner resize)
@@ -1209,7 +1247,9 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     private var youtubeID: String?
     private var youtubeStart = 0
     private var listID: String?                      // `list=` from the link that opened this video
-    private var triedWatchFallback = false
+    private var resolveTask: YtDlpTask?              // the running yt-dlp read; a new load or closing cancels it
+    private var lastPlaybackError: String?           // AVPlayer's reason when the last native plan failed
+    private let failureView = PlayerFailureView()    // "Couldn't play this video in Watch" + why — never YouTube's own page
     private var endObserver: NSObjectProtocol?
     // Resume where this video was left off (PlaybackPositions). An explicit `t=` wins over the saved spot.
     // `positionKey` belongs to the AVPlayer actually playing — startLoad of the next video leaves it alone,
@@ -1218,7 +1258,6 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     private var positionKey: String?
     private var positionReady = false                // no saves until the start/resume seek has landed
     private var lastPositionSave = Date.distantPast
-    private var startSeconds: Int { youtubeStart > 0 ? youtubeStart : Int(resumeAt) }
     // The playlist whose place this window keeps (PlaylistProgress): a playlist link's `list=`, or a YouTube
     // video link's. `playlistStart` is set when opening the playlist carried on past its first video; it belongs
     // to that one load (`token`), so a quick Next or a web fallback can't show it on a different video.
@@ -1302,6 +1341,11 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         surface.onScroll = { [weak self] e in self?.webView?.scrollWheel(with: e) }
         surface.onKey = { [weak self] e in self?.handleKey(e) ?? false }
         drop.addSubview(surface)
+        failureView.frame = drop.bounds; failureView.autoresizingMask = [.width, .height]; failureView.isHidden = true
+        failureView.onRetry = { [weak self] in guard let self = self else { return }; self.startLoad(self.sourceURL, title: self.mediaTitle) }
+        failureView.onOpen = { [weak self] in self?.openInBrowser() }
+        failureView.onSignIn = { (NSApp.delegate as? AppDelegate)?.openYouTubeSignIn() }
+        drop.addSubview(failureView)
 
         resumeChip.isBordered = false; resumeChip.wantsLayer = true
         resumeChip.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.6).cgColor
@@ -1318,6 +1362,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         controls.onPlayPause = { [weak self] in self?.togglePlay() }
         controls.onSkip = { [weak self] s in self?.skip(s); self?.showControls() }
         controls.onMute = { [weak self] in self?.player?.isMuted.toggle(); self?.refreshControls() }
+        controls.onVolume = { [weak self] level in self?.setVolume(level) }
         controls.onSeek = { [weak self] f in self?.seek(toFraction: f) }
         drop.addSubview(controls)
 
@@ -1392,7 +1437,9 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         guard fileURL != nil || looksLikeURL(input) else { NSSound.beep(); return }
         loadToken += 1
         let token = loadToken
-        pendingPlans = []; youtubeID = nil; youtubeStart = 0; listID = nil; triedWatchFallback = false
+        pendingPlans = []; youtubeID = nil; youtubeStart = 0; listID = nil; lastPlaybackError = nil
+        resolveTask?.cancel(); resolveTask = nil
+        failureView.isHidden = true
         mediaTitle = title; isLive = false; resumeAt = 0; info = nil
         hideResumeChip()
         if let t = title { window.title = t }
@@ -1420,11 +1467,25 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         }
         recordPlaylistSpot()
         showLoading(title ?? "Loading…")
-        var settled = false
-        resolveStream(sourceURL) { [weak self] res in
-            guard let self = self, token == self.loadToken, !settled else { return }
-            settled = true
-            guard let res = res, !res.plans.isEmpty else { self.fallbackToWeb(token); return }
+        resolve(token, signedIn: false)
+    }
+    // One yt-dlp read. If YouTube asks for a signed-in viewer and an account is connected (Preferences ▸ YouTube
+    // Account), it's retried once with that browser's cookies — never otherwise. A slow answer is said, not abandoned:
+    // yt-dlp itself gives up after 60 s, and the failure card explains.
+    private func resolve(_ token: Int, signedIn: Bool) {
+        let cookies = signedIn ? YouTube.cookieArgs(YouTube.cookieSources().first ?? "safari") : []
+        resolveTask = resolveStream(sourceURL, cookies: cookies) { [weak self] res, error in
+            guard let self = self, token == self.loadToken else { return }
+            self.resolveTask = nil
+            guard let res = res, !res.plans.isEmpty else {
+                if !signedIn, self.youtubeID != nil, Prefs.youtubeConnected, PlaybackFailure.wantsSignIn(error) {
+                    self.loadingLabel.stringValue = "Trying with your YouTube account…"
+                    self.resolve(token, signedIn: true)
+                    return
+                }
+                self.couldNotPlay(token, error: error, signedIn: signedIn)
+                return
+            }
             self.isLive = res.isLive
             if let t = res.title {
                 self.mediaTitle = t; self.window.title = t; self.loadingLabel.stringValue = t
@@ -1435,38 +1496,51 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
             self.pendingPlans = res.plans
             self.tryNextPlan(token)
         }
-        // yt-dlp can hang on a bad network; don't leave the user staring at a spinner.
         DispatchQueue.main.asyncAfter(deadline: .now() + 25) { [weak self] in
-            guard let self = self, token == self.loadToken, !settled else { return }
-            settled = true; self.fallbackToWeb(token)
+            guard let self = self, token == self.loadToken, self.resolveTask != nil else { return }
+            self.loadingLabel.stringValue = "Still loading — YouTube is slow to answer…"
         }
     }
     private func tryNextPlan(_ token: Int) {
         guard token == loadToken else { return }
-        guard !pendingPlans.isEmpty else { fallbackToWeb(token); return }
+        guard !pendingPlans.isEmpty else { couldNotPlay(token, error: lastPlaybackError ?? "The stream wouldn't play", signedIn: false); return }
         switch pendingPlans.removeFirst() {
         case .single(let s):
             playAsset(AVURLAsset(url: s.url, options: s.assetOptions), token: token)
-        case .split(let v, let a):
-            DashHLSBridge.make(video: v, audio: a) { [weak self] bridge, asset in
+        case .split(let videos, let a):
+            DashHLSBridge.make(videos: videos, audio: a) { [weak self] bridge, asset in
                 guard let self = self, token == self.loadToken else { return }
                 guard let bridge = bridge, let asset = asset else { self.tryNextPlan(token); return }
                 self.playAsset(asset, bridge: bridge, token: token)
             }
         }
     }
-    // Nothing native worked (yt-dlp missing, outdated, or the site isn't supported): YouTube → IFrame embed,
-    // anything else → the page itself.
-    private func fallbackToWeb(_ token: Int) {
+    // Nothing native worked. YouTube: say why in Watch's own window, with Try Again / Open in Browser / Copy Details —
+    // never YouTube's web player (ads, signed out, no Watch controls). Other sites: their page, the only way to show
+    // them. Every failure is logged (PlaybackLog) so "Copy Details" or the log can be sent on.
+    private func couldNotPlay(_ token: Int, error: String, signedIn: Bool) {
         guard token == loadToken else { return }
-        if let id = youtubeID { loadYouTubeEmbed(id: id, start: startSeconds) }
-        else if let u = URL(string: sourceURL) { ensureWebView().load(URLRequest(url: u)) }
+        PlaybackLog.shared.append("\(sourceURL) — \(error.isEmpty ? "no reason given" : error)\(signedIn ? " (signed in)" : "")")
+        guard youtubeID != nil else {
+            if let u = URL(string: sourceURL) { ensureWebView().load(URLRequest(url: u)) }
+            return
+        }
+        teardownAVPlayer(); teardownWebView(); hideLoading()
+        let version = Bundle.main.infoDictionary.map { "\($0["CFBundleShortVersionString"] ?? "?") (\($0["CFBundleVersion"] ?? "?"))" } ?? "?"
+        let offerSignIn = PlaybackFailure.wantsSignIn(error) && !Prefs.youtubeConnected
+        let text = offerSignIn ? "YouTube wants to check you're not a bot. Sign in once (your browser's YouTube session) and Watch plays it directly."
+                               : PlaybackFailure.reason(error)
+        let details = "Watch \(version) · macOS \(ProcessInfo.processInfo.operatingSystemVersionString)\n\(sourceURL)\n"
+            + "Signed in: \(signedIn ? "yes" : "no")\n\(error.isEmpty ? "No reason given" : error)"
+        failureView.show(reason: text, details: details, offerSignIn: offerSignIn)
     }
     private func playAsset(_ asset: AVURLAsset, bridge: DashHLSBridge? = nil, token: Int) {
         teardownWebView(); teardownAVPlayer()
         self.bridge = bridge
         let item = AVPlayerItem(asset: asset)
+        item.preferredMaximumResolution = qualityCap()
         let p = AVPlayer(playerItem: item)
+        p.volume = Float(Prefs.playerVolume)
         // A bare AVPlayerLayer, NOT AVPlayerView: AVPlayerView's built-in controls pin the view to ≥130pt tall,
         // which stops the window shrinking and letterboxes the video (see GOTCHAS).
         let vv = PlayerVideoView(frame: window.contentView!.bounds)
@@ -1511,7 +1585,8 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
                         }
                     } else { self.positionReady = true; self.showStartChip(resumedAt: nil) }
                 case .failed where !becameReady:
-                    self.tryNextPlan(token)          // e.g. bridge/segment trouble → next plan (muxed), then web
+                    self.lastPlaybackError = item.error?.localizedDescription
+                    self.tryNextPlan(token)          // e.g. bridge/segment trouble → next plan (one rendition, muxed)
                 default: break
                 }
             }
@@ -1520,66 +1595,10 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         manager?.beginPlaybackActivity()
     }
 
-    // YouTube IFrame Player API on a youtube.com origin under a desktop-Safari UA (see GOTCHAS: error 153).
-    // Only reached when yt-dlp can't resolve the video; embed errors fall through to the full watch page.
-    private func loadYouTubeEmbed(id: String, start: Int) {
-        let wv = ensureWebView()
-        let html = """
-        <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-        <style>html,body{margin:0;height:100%;background:#000;overflow:hidden}
-        #p{position:fixed;inset:0;width:100%;height:100%}</style></head>
-        <body><div id="p"></div>
-        <script src="https://www.youtube.com/iframe_api"></script>
-        <script>
-        var reported=false;
-        function send(m){try{window.webkit.messageHandlers.yt.postMessage(m);}catch(e){}}
-        function gkWhere(){var p=window.gkPlayer;if(p&&p.getCurrentTime)send('time:\(id):'+p.getCurrentTime()+':'+p.getDuration());}
-        setInterval(function(){if(window.gkPlayer&&gkPlayer.getPlayerState&&gkPlayer.getPlayerState()===1)gkWhere();},5000);
-        function onYouTubeIframeAPIReady(){
-          window.gkPlayer=new YT.Player('p',{videoId:'\(id)',
-            playerVars:{autoplay:1,playsinline:1,rel:0,modestbranding:1,fs:1,start:\(start),origin:'https://www.youtube.com'},
-            events:{
-              'onReady':function(e){e.target.playVideo();},
-              'onError':function(e){send('error:'+e.data);},
-              'onStateChange':function(e){if(e.data===1||e.data===3){reported=true;send('playing');}
-                                          else if(e.data===2){gkWhere();}
-                                          else if(e.data===0){send('ended:\(id)');}}
-            }});
-        }
-        setTimeout(function(){if(!reported)send('timeout');},8000);
-        </script></body></html>
-        """
-        wv.loadHTMLString(html, baseURL: URL(string: "https://www.youtube.com"))
-    }
-    func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == "yt" else { return }
-        let body = (message.body as? String) ?? ""
-        if body == "playing" { hideLoading(); return }
-        // The embed saves its place as well: "time:<id>:<seconds>:<duration>" every 5 s while playing and on pause.
-        // The id travels with it, so a late message from a replaced embed can't land on the next video.
-        if body.hasPrefix("time:") {
-            let parts = body.split(separator: ":", maxSplits: 3).map(String.init)
-            guard parts.count == 4, let t = Double(parts[2]), let d = Double(parts[3]) else { return }
-            let key = PlaybackPositions.key(source: "", youtubeID: parts[1]), duration = d > 0 ? d : nil
-            PlaybackPositions.shared.save(t, duration: duration, for: key)
-            if WatchedVideos.shared.noteProgress(t, duration: duration, for: key) { NotificationCenter.default.post(name: .watchLibraryChanged, object: nil) }
-            return
-        }
-        // The embed fallback ends its video too — Autoplay / Repeat One work there as well.
-        if body.hasPrefix("ended") {
-            if let id = body.split(separator: ":").dropFirst().first { markWatched(PlaybackPositions.key(source: "", youtubeID: String(id))) }
-            if repeatMode == .one { webView?.evaluateJavaScript("gkPlayer.seekTo(0,true);gkPlayer.playVideo()") }
-            else if autoplay || repeatMode == .all { advance(1, auto: true) }
-            return
-        }
-        if body == "timeout" || body.hasPrefix("error") { loadWatchPageFallback() }
-    }
-    private func loadWatchPageFallback() {
-        guard let id = youtubeID, !triedWatchFallback else { return }
-        triedWatchFallback = true
-        var s = "https://www.youtube.com/watch?v=\(id)"
-        if startSeconds > 0 { s += "&t=\(startSeconds)s" }
-        if let u = URL(string: s) { ensureWebView().load(URLRequest(url: u)) }
+    // Most pixels worth decoding for the video area right now (StreamLadder.cap) — resizing moves it, so AVPlayer
+    // switches renditions with the window.
+    private func qualityCap() -> CGSize {
+        StreamLadder.cap(points: window.contentView?.bounds.size ?? Self.standardSize, scale: window.backingScaleFactor)
     }
     private func ensureWebView() -> WKWebView {
         teardownAVPlayer()
@@ -1588,7 +1607,6 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         cfg.processPool = Self.sharedProcessPool
         cfg.mediaTypesRequiringUserActionForPlayback = []
         cfg.preferences.isElementFullscreenEnabled = true
-        cfg.userContentController.add(self, name: "yt")   // YouTube IFrame API → userContentController(_:didReceive:)
         let wv = WKWebView(frame: window.contentView!.bounds, configuration: cfg)
         wv.autoresizingMask = [.width, .height]
         wv.navigationDelegate = self
@@ -1603,7 +1621,6 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         return wv
     }
     private func teardownWebView() {
-        webView?.configuration.userContentController.removeScriptMessageHandler(forName: "yt")
         webView?.removeFromSuperview(); webView = nil
     }
     private func teardownAVPlayer() {
@@ -1689,7 +1706,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         guard let p = player, let item = p.currentItem else { return }
         let dur = item.duration
         let live = isLive || !(dur.isNumeric && dur.seconds > 0)
-        controls.update(playing: p.timeControlStatus != .paused, muted: p.isMuted,
+        controls.update(playing: p.timeControlStatus != .paused, muted: p.isMuted, volume: Double(p.volume),
                         current: p.currentTime().seconds, duration: live ? nil : dur.seconds)
     }
     private func togglePlay() {
@@ -1747,9 +1764,20 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         case 49:  togglePlay(); showControls()       // space
         case 123: skip(-5); showControls()           // ←
         case 124: skip(5); showControls()            // →
+        case 126: setVolume(Double(player?.volume ?? 1) + 0.1); showControls()   // ↑
+        case 125: setVolume(Double(player?.volume ?? 1) - 0.1); showControls()   // ↓
         default:  return false
         }
         return true
+    }
+    // The volume slider and ↑/↓: this window's volume, remembered for the next window. Any level above zero unmutes.
+    private func setVolume(_ value: Double) {
+        guard let p = player else { return }
+        let level = min(1, max(0, (value * 100).rounded() / 100))
+        p.volume = Float(level)
+        if level > 0 { p.isMuted = false }
+        Prefs.playerVolume = level
+        refreshControls()
     }
     private func showControls() {
         guard player != nil, loadingView.isHidden else { return }
@@ -1957,9 +1985,11 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     func windowShouldZoom(_ w: NSWindow, toFrame newFrame: NSRect) -> Bool { toggleSavedSize(); return false }
 
     func webView(_ wv: WKWebView, didFinish navigation: WKNavigation!) { hideLoading() }
-    // Embed page failed to load at the network level → try the full watch page once.
-    func webView(_ wv: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { loadWatchPageFallback() }
-    func webView(_ wv: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { loadWatchPageFallback() }
+    // A site's page that won't load: stop the spinner (its error stays in the log).
+    func webView(_ wv: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        hideLoading(); PlaybackLog.shared.append("\(sourceURL) — page: \(error.localizedDescription)")
+    }
+    func webView(_ wv: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { hideLoading() }
 
     func webView(_ wv: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if let u = navigationAction.request.url { wv.load(URLRequest(url: u)) }
@@ -1990,6 +2020,11 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         addUpNext(m)
         m.addItem(.separator())
         addPlaybackModes(m)
+        // Which rendition is showing — it follows the window's size (StreamLadder).
+        if let h = player?.currentItem?.presentationSize.height, let label = StreamLadder.label(height: Double(h)) {
+            let q = NSMenuItem(title: "Playing at \(label)", action: nil, keyEquivalent: ""); q.isEnabled = false
+            m.addItem(.separator()); m.addItem(q)
+        }
         if !isLocalFile {
             m.addItem(.separator())
             if isLive { addItem(m, "Record Live Stream", #selector(downloadVideo)) }
@@ -2012,6 +2047,16 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         return m
     }
     @objc func tileWindows() { manager?.tile(on: window.screen) }
+    // Read-only state for the isolated UI checks (Tests/PanelMain.swift), which drive the real click surface and keys.
+    var isPlayingNatively: Bool { player != nil && webView == nil }
+    var isPlaying: Bool { player.map { $0.timeControlStatus != .paused } ?? false }
+    var playbackTime: Double { player?.currentTime().seconds ?? 0 }
+    var playbackVolume: Double { Double(player?.volume ?? 0) }
+    var qualityLimit: CGSize { player?.currentItem?.preferredMaximumResolution ?? .zero }
+    var videoArea: NSRect { videoView?.frame ?? .zero }
+    var showsFailure: Bool { !failureView.isHidden }
+    var clickSurface: PlayerSurfaceView { surface }
+    var menuTitles: [String] { playerMenu().items.map(\.title) }
     // A grid slot from Tile Windows. It counts as a resize, so a double-click afterwards returns to the old size.
     func moveToTile(_ f: NSRect) {
         if f.size != window.frame.size { previousSize = window.frame.size }
@@ -2039,9 +2084,13 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     @objc func openInBrowser() { if let u = URL(string: sourceURL) { NSWorkspace.shared.open(u) } }
     @objc func closeSelf() { window.close() }
     func windowDidMove(_ n: Notification) { manager?.rememberFrame(window.frame) }
-    func windowDidResize(_ n: Notification) { manager?.rememberFrame(window.frame) }
+    func windowDidResize(_ n: Notification) {
+        manager?.rememberFrame(window.frame)
+        player?.currentItem?.preferredMaximumResolution = qualityCap()
+    }
     func windowWillClose(_ n: Notification) {
         manager?.rememberFrame(window.frame)
+        resolveTask?.cancel(); resolveTask = nil
         loadToken += 1; queueToken += 1; queueWaiters = []
         teardownAVPlayer(); teardownWebView()
         manager?.removed(self)
@@ -2053,13 +2102,15 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
 // ============================================================================
 final class WindowManager {
     private(set) var players: [PlayerWindowController] = []
+    // Other Watch windows a new player must not cover (AppDelegate: the music window while it's open).
+    var keepClear: () -> [NSRect] = { [] }
     private var activityToken: NSObjectProtocol?
     var onInfo: ((String, LinkInfo) -> Void)?                    // (sourceURL, what yt-dlp resolved: title, thumbnail, …)
     var onDownload: ((String, String?, DownloadKind) -> Void)?   // (sourceURL, title, kind)
 
     // `replacing` = the control panel's frame when the video takes the panel's place (see AppDelegate.play).
     @discardableResult
-    func open(_ input: String, anchor: NSStatusItem, queue: PlayQueue? = nil, replacing: NSRect? = nil) -> PlayerWindowController {
+    func open(_ input: String, anchor: NSStatusItem?, queue: PlayQueue? = nil, replacing: NSRect? = nil) -> PlayerWindowController {
         let pc = PlayerWindowController(manager: self)
         if let f = replacing { take(f, for: pc.window) } else { place(pc.window, anchor: anchor) }
         players.append(pc)
@@ -2102,16 +2153,29 @@ final class WindowManager {
     // New window: first one opens at the remembered frame (or under the menu-bar icon the very first
     // time); further ones take the remembered SIZE and sit beside an existing player without overlap.
     // Existing windows are never moved.
-    private func place(_ window: NSWindow, anchor: NSStatusItem) {
+    private func place(_ window: NSWindow, anchor: NSStatusItem?) {
         let saved = rememberedFrame()
         let size = saved?.size ?? window.frameRect(forContentRect: NSRect(origin: .zero, size: PlayerWindowController.standardSize)).size
-        if players.isEmpty {
-            if let f = saved, let vis = Self.screen(for: f)?.visibleFrame { window.setFrame(Self.clamp(f, to: vis), display: true) }
-            else { window.setFrame(NSRect(origin: window.frame.origin, size: size), display: true); positionUnderStatusItem(window, anchor: anchor) }
-            return
+        window.setFrame(freeFrame(size: size, anchor: anchor, remembered: saved, excluding: window), display: true)
+    }
+    // Where a new window of `size` goes. With nothing open: the remembered spot (players), else under the menu-bar icon.
+    // Otherwise beside an open window — players and `keepClear` (the music window) alike — without overlapping any;
+    // cascade if there's no room. Shared by players and the music window.
+    func freeFrame(size: NSSize, anchor: NSStatusItem?, remembered: NSRect? = nil, excluding: NSWindow? = nil) -> NSRect {
+        let open = players.filter { $0.window !== excluding }.map { $0.window.frame }, clear = keepClear()
+        let others = open + clear
+        if open.isEmpty {
+            // The first player goes where the last one was — unless the music window is there now.
+            if let f = remembered, let vis = Self.screen(for: f)?.visibleFrame, !clear.contains(where: { $0.intersects(Self.clamp(f, to: vis)) }) {
+                return Self.clamp(f, to: vis)
+            }
+            if clear.isEmpty {
+                if let a = anchor, let f = Self.frame(under: a, size: size) { return f }
+                let vis = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+                return NSRect(x: vis.midX - size.width / 2, y: vis.midY - size.height / 2, width: size.width, height: size.height)
+            }
         }
         let gap: CGFloat = 12
-        let others = players.map { $0.window.frame }
         for prev in others.reversed() {
             guard let vis = Self.screen(for: prev)?.visibleFrame else { continue }
             let candidates = [
@@ -2120,41 +2184,47 @@ final class WindowManager {
                 NSRect(x: prev.minX, y: prev.minY - gap - size.height, width: size.width, height: size.height),   // below
                 NSRect(x: prev.minX, y: prev.maxY + gap, width: size.width, height: size.height),                 // above
             ]
-            if let f = candidates.first(where: { c in vis.contains(c) && !others.contains(where: { $0.intersects(c) }) }) {
-                window.setFrame(f, display: true); return
-            }
+            if let f = candidates.first(where: { c in vis.contains(c) && !others.contains(where: { $0.intersects(c) }) }) { return f }
         }
         // No free spot beside any window — cascade off the most recent one.
         let last = others.last!
         let vis = Self.screen(for: last)?.visibleFrame ?? last
-        window.setFrame(Self.clamp(NSRect(x: last.minX + 28, y: last.maxY - 28 - size.height, width: size.width, height: size.height), to: vis), display: true)
+        return Self.clamp(NSRect(x: last.minX + 28, y: last.maxY - 28 - size.height, width: size.width, height: size.height), to: vis)
     }
     // Sit where the panel was: the usual player size (remembered, else standard), centred on the panel's top edge.
     private func take(_ panel: NSRect, for window: NSWindow) {
-        let size = rememberedFrame()?.size ?? window.frameRect(forContentRect: NSRect(origin: .zero, size: PlayerWindowController.standardSize)).size
-        var f = NSRect(x: panel.midX - size.width / 2, y: panel.maxY - size.height, width: size.width, height: size.height)
-        if let vis = Self.screen(for: panel)?.visibleFrame { f = Self.clamp(f, to: vis) }
-        window.setFrame(f, display: true)
+        window.setFrame(takeFrame(replacing: panel), display: true)
     }
-    private static func screen(for f: NSRect) -> NSScreen? {
+    func takeFrame(replacing panel: NSRect) -> NSRect {
+        let size = rememberedFrame()?.size ?? NSWindow.frameRect(forContentRect: NSRect(origin: .zero, size: PlayerWindowController.standardSize),
+                                                                    styleMask: [.titled, .closable, .resizable, .fullSizeContentView]).size
+        return Self.frame(replacing: panel, size: size)
+    }
+    // Shared with the artwork window: centred on the panel's top edge, kept on screen.
+    static func frame(replacing panel: NSRect, size: NSSize) -> NSRect {
+        let f = NSRect(x: panel.midX - size.width / 2, y: panel.maxY - size.height, width: size.width, height: size.height)
+        guard let vis = screen(for: panel)?.visibleFrame else { return f }
+        return clamp(f, to: vis)
+    }
+    // Just under the menu-bar icon, kept inside its screen horizontally.
+    static func frame(under anchor: NSStatusItem, size: NSSize) -> NSRect? {
+        guard let b = anchor.button, let bw = b.window else { return nil }
+        let on = bw.convertToScreen(b.convert(b.bounds, to: nil))
+        var f = NSRect(x: on.midX - size.width / 2, y: on.minY - size.height - 4, width: size.width, height: size.height)
+        if let vis = bw.screen?.visibleFrame { f.origin.x = min(max(f.origin.x, vis.minX + 8), vis.maxX - f.width - 8) }
+        return f
+    }
+    static func screen(for f: NSRect) -> NSScreen? {
         func overlap(_ s: NSScreen) -> CGFloat { let i = s.visibleFrame.intersection(f); return i.isNull ? 0 : i.width * i.height }
         guard let best = NSScreen.screens.max(by: { overlap($0) < overlap($1) }), overlap(best) > 0 else { return NSScreen.main }
         return best
     }
-    private static func clamp(_ f: NSRect, to vis: NSRect) -> NSRect {
+    static func clamp(_ f: NSRect, to vis: NSRect) -> NSRect {
         var r = f
         r.size.width = min(r.width, vis.width); r.size.height = min(r.height, vis.height)
         r.origin.x = min(max(r.minX, vis.minX), vis.maxX - r.width)
         r.origin.y = min(max(r.minY, vis.minY), vis.maxY - r.height)
         return r
-    }
-    private func positionUnderStatusItem(_ window: NSWindow, anchor: NSStatusItem) {
-        guard let b = anchor.button, let bw = b.window else { return }
-        let on = bw.convertToScreen(b.convert(b.bounds, to: nil))
-        var f = window.frame
-        f.origin.x = on.midX - f.width / 2; f.origin.y = on.minY - f.height - 4
-        if let vis = bw.screen?.visibleFrame { f.origin.x = min(max(f.origin.x, vis.minX + 8), vis.maxX - f.width - 8) }
-        window.setFrame(f, display: true)
     }
     // Disables App Nap while any player is open, so a visible-but-unfocused video isn't throttled.
     func beginPlaybackActivity() {
@@ -2209,6 +2279,7 @@ final class PlayerVideoView: NSView {
 final class PlayerSurfaceView: NSView {
     var onMultiClick: ((NSPoint, Int) -> Void)?
     var onHover: ((Bool) -> Void)?
+    var onPointer: ((NSPoint?) -> Void)?                  // where the pointer is (nil once it leaves) — the music window's caption
     var onClick: ((NSEvent, NSEvent) -> Void)?
     var onScroll: ((NSEvent) -> Void)?
     var onRightClick: ((NSEvent) -> Void)?
@@ -2222,9 +2293,9 @@ final class PlayerSurfaceView: NSView {
     override var mouseDownCanMoveWindow: Bool { false }   // we move it ourselves, and keep title-bar clicks here
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseEntered(with e: NSEvent) { onHover?(true) }
-    override func mouseMoved(with e: NSEvent) { onHover?(true) }
-    override func mouseExited(with e: NSEvent) { onHover?(false) }
+    override func mouseEntered(with e: NSEvent) { onHover?(true); onPointer?(convert(e.locationInWindow, from: nil)) }
+    override func mouseMoved(with e: NSEvent) { onHover?(true); onPointer?(convert(e.locationInWindow, from: nil)) }
+    override func mouseExited(with e: NSEvent) { onHover?(false); onPointer?(nil) }
     override func scrollWheel(with e: NSEvent) { onScroll?(e) }
     override func rightMouseDown(with e: NSEvent) { onRightClick?(e) }
     override func keyDown(with e: NSEvent) { if onKey?(e) != true { super.keyDown(with: e) } }
@@ -2249,22 +2320,30 @@ final class FadingButton: NSButton {
     override func hitTest(_ point: NSPoint) -> NSView? { alphaValue < 0.05 ? nil : super.hitTest(point) }
 }
 
-// The playback bar: ⟲10 · play/pause · ⟳10 · scrubber · time · mute. Parts drop out as the window narrows
-// (the skip buttons first, then the time, then mute).
+// The playback bar: ⟲10 · play/pause · ⟳10 · scrubber · time · volume. Parts drop out as the window narrows (the skip
+// buttons first, then the time, then the volume). The volume is the speaker icon — its glyph shows the level, a click
+// mutes — and hovering it slides a short slider out to its left (so the icon stays under the pointer), taking room
+// from the scrubber; it tucks away shortly after the pointer leaves. Both sliders are ThinSliders.
 final class PlayerControlBar: NSView {
+    static let volumeWidth: CGFloat = 50, volumeMinWidth: CGFloat = 180   // no slide-out in narrower bars
     var onPlayPause: (() -> Void)?
     var onSkip: ((Double) -> Void)?
     var onMute: (() -> Void)?
     var onSeek: ((Double) -> Void)?
-    private(set) var isScrubbing = false
+    var onVolume: ((Double) -> Void)?
+    // Dragging the scrubber or the volume: the bar stays up, and refreshes leave that slider where the finger is.
+    var isScrubbing: Bool { scrubber.isTracking || volumeSlider.isTracking }
+    private(set) var volumeOpen = false
     private let backButton = NSButton(title: "", image: NSImage(), target: nil, action: nil)
     private let playButton = NSButton(title: "", image: NSImage(), target: nil, action: nil)
     private let forwardButton = NSButton(title: "", image: NSImage(), target: nil, action: nil)
     private let muteButton = NSButton(title: "", image: NSImage(), target: nil, action: nil)
-    private let slider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
+    private let scrubber = ThinSlider()
+    private let volumeSlider = ThinSlider()
     private let timeLabel = NSTextField(labelWithString: "")
     private var isLiveStream = false
     private var longClock = false                    // an hour or more: "1:02:03 / 1:23:45" needs a wider label
+    private var closeVolumeWork: DispatchWorkItem?
     private static let symbolConfig = NSImage.SymbolConfiguration(pointSize: 10, weight: .bold)
     private static let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium)
 
@@ -2283,62 +2362,118 @@ final class PlayerControlBar: NSView {
         }
         backButton.image = sym("gobackward.10").withSymbolConfiguration(Self.symbolConfig); backButton.toolTip = "Back 10 seconds"
         forwardButton.image = sym("goforward.10").withSymbolConfiguration(Self.symbolConfig); forwardButton.toolTip = "Forward 10 seconds"
-        slider.controlSize = .small; slider.isContinuous = true
-        slider.target = self; slider.action = #selector(sliderMoved)
-        addSubview(slider)
+        muteButton.toolTip = "Volume — click to mute"
+        scrubber.onChange = { [weak self] value, _ in self?.onSeek?(value) }
+        scrubber.setAccessibilityLabel("Position")
+        addSubview(scrubber)
+        volumeSlider.onChange = { [weak self] value, finished in
+            self?.onVolume?(value)
+            if finished { self?.scheduleVolumeClose() }
+        }
+        volumeSlider.setAccessibilityLabel("Volume")
+        volumeSlider.alphaValue = 0
+        addSubview(volumeSlider)
         timeLabel.font = Self.timeFont
         timeLabel.textColor = NSColor.white.withAlphaComponent(0.8)
         timeLabel.alignment = .right
         addSubview(timeLabel)
-        setIcons(playing: false, muted: false)
+        setIcons(playing: false, volume: volumeSymbol(1))
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: nil))
         layoutParts()
     }
     required init?(coder: NSCoder) { fatalError() }
     override func hitTest(_ point: NSPoint) -> NSView? { alphaValue < 0.05 ? nil : super.hitTest(point) }
     override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); layoutParts() }
 
-    private func layoutParts() {
+    // MARK: volume slide-out
+    override func mouseEntered(with e: NSEvent) { pointerMoved(at: convert(e.locationInWindow, from: nil)) }
+    override func mouseMoved(with e: NSEvent) { pointerMoved(at: convert(e.locationInWindow, from: nil)) }
+    override func mouseExited(with e: NSEvent) { pointerMoved(at: nil) }
+    private var volumeZone: NSRect { (volumeOpen ? muteButton.frame.union(volumeSlider.frame) : muteButton.frame).insetBy(dx: -4, dy: -6) }
+    func pointerMoved(at point: NSPoint?) {
+        if let p = point, volumeZone.contains(p), !muteButton.isHidden, bounds.width >= Self.volumeMinWidth {
+            closeVolumeWork?.cancel(); closeVolumeWork = nil
+            if !volumeOpen { volumeOpen = true; layoutParts(animated: true) }
+        } else if volumeOpen {
+            scheduleVolumeClose()
+        }
+    }
+    private func scheduleVolumeClose() {
+        guard closeVolumeWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.closeVolumeWork = nil
+            guard !self.volumeSlider.isTracking else { return }          // its release schedules this again
+            if let w = self.window, self.volumeZone.contains(self.convert(w.mouseLocationOutsideOfEventStream, from: nil)) { return }
+            self.volumeOpen = false
+            self.layoutParts(animated: true)
+        }
+        closeVolumeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    private func layoutParts(animated: Bool = false) {
         let h = bounds.height, btn: CGFloat = 16, gap: CGFloat = 4, pad: CGFloat = 5, labelH: CGFloat = 12, y = (h - btn) / 2
+        var frames: [(NSView, NSRect)] = []
         let skips = bounds.width >= 150
         backButton.isHidden = !skips; forwardButton.isHidden = !skips
         var x = pad
         for b in [backButton, playButton, forwardButton] where !b.isHidden {
-            b.frame = NSRect(x: x, y: y, width: btn, height: btn); x += btn + gap
+            frames.append((b, NSRect(x: x, y: y, width: btn, height: btn))); x += btn + gap
         }
         var right = bounds.width - pad
         muteButton.isHidden = bounds.width < 100
-        if !muteButton.isHidden { muteButton.frame = NSRect(x: right - btn, y: y, width: btn, height: btn); right -= btn + gap }
+        if !muteButton.isHidden { frames.append((muteButton, NSRect(x: right - btn, y: y, width: btn, height: btn))); right -= btn + gap }
+        let showVolume = volumeOpen && !muteButton.isHidden && bounds.width >= Self.volumeMinWidth
+        let volumeW = showVolume ? Self.volumeWidth : 0
+        frames.append((volumeSlider, NSRect(x: right - volumeW, y: 0, width: volumeW, height: h)))
+        if showVolume { right -= volumeW + gap }
         let left = x + 2
         if isLiveStream {
-            slider.isHidden = true
+            scrubber.isHidden = true
             timeLabel.isHidden = false; timeLabel.alignment = .left; timeLabel.stringValue = "LIVE"
-            timeLabel.frame = NSRect(x: left, y: (h - labelH) / 2, width: max(0, right - left), height: labelH)
-            return
+            frames.append((timeLabel, NSRect(x: left, y: (h - labelH) / 2, width: max(0, right - left), height: labelH)))
+        } else {
+            scrubber.isHidden = false; timeLabel.alignment = .right
+            timeLabel.isHidden = bounds.width < 210
+            if !timeLabel.isHidden {
+                let w = Self.clockWidth(long: longClock)
+                frames.append((timeLabel, NSRect(x: right - w, y: (h - labelH) / 2, width: w, height: labelH))); right -= w + gap
+            }
+            frames.append((scrubber, NSRect(x: left, y: 0, width: max(0, right - left), height: h)))
         }
-        slider.isHidden = false; timeLabel.alignment = .right
-        timeLabel.isHidden = bounds.width < 210
-        if !timeLabel.isHidden {
-            let w = Self.clockWidth(long: longClock)
-            timeLabel.frame = NSRect(x: right - w, y: (h - labelH) / 2, width: w, height: labelH); right -= w + gap
+        let volumeAlpha: CGFloat = showVolume ? 1 : 0
+        if animated {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.2
+                for (v, f) in frames { v.animator().frame = f }
+                volumeSlider.animator().alphaValue = volumeAlpha
+            }
+        } else {
+            for (v, f) in frames { v.frame = f }
+            volumeSlider.alphaValue = volumeAlpha
         }
-        slider.frame = NSRect(x: left, y: 0, width: max(0, right - left), height: h)
     }
     private static func clockWidth(long: Bool) -> CGFloat {
         let sample = long ? "0:00:00 / 0:00:00" : "00:00 / 00:00"
         return ceil((sample as NSString).size(withAttributes: [.font: timeFont]).width) + 4
     }
-    private var iconState = (playing: false, muted: false)
-    private func setIcons(playing: Bool, muted: Bool) {
-        iconState = (playing, muted)
-        playButton.image = sym(playing ? "pause.fill" : "play.fill").withSymbolConfiguration(Self.symbolConfig)
-        muteButton.image = sym(muted ? "speaker.slash.fill" : "speaker.wave.2.fill").withSymbolConfiguration(Self.symbolConfig)
+    private var iconState = (playing: false, volume: "")
+    private func setIcons(playing: Bool, volume: String) {
+        if playing != iconState.playing || iconState.volume.isEmpty {
+            playButton.image = sym(playing ? "pause.fill" : "play.fill").withSymbolConfiguration(Self.symbolConfig)
+        }
+        if volume != iconState.volume { muteButton.image = sym(volume).withSymbolConfiguration(Self.symbolConfig) }
+        iconState = (playing, volume)
     }
-    func update(playing: Bool, muted: Bool, current: Double, duration: Double?) {
-        if playing != iconState.playing || muted != iconState.muted { setIcons(playing: playing, muted: muted) }
+    func update(playing: Bool, muted: Bool, volume: Double, current: Double, duration: Double?) {
+        setIcons(playing: playing, volume: volumeSymbol(volume, muted: muted))
+        if !volumeSlider.isTracking { volumeSlider.value = muted ? 0 : volume }
         let live = duration == nil, long = (duration ?? 0) >= 3600
         if live != isLiveStream || long != longClock { isLiveStream = live; longClock = long; layoutParts() }
         guard let d = duration, current.isFinite else { return }
-        if !isScrubbing { slider.doubleValue = min(1, max(0, current / d)) }
+        if !scrubber.isTracking { scrubber.value = min(1, max(0, current / d)) }
         timeLabel.stringValue = "\(Self.clock(current)) / \(Self.clock(d))"
     }
     private static func clock(_ s: Double) -> String {
@@ -2349,9 +2484,88 @@ final class PlayerControlBar: NSView {
     @objc private func backTapped() { onSkip?(-10) }
     @objc private func forwardTapped() { onSkip?(10) }
     @objc private func muteTapped() { onMute?() }
-    @objc private func sliderMoved() {
-        isScrubbing = NSApp.currentEvent?.type != .leftMouseUp   // continuous slider: last action arrives on mouse-up
-        onSeek?(slider.doubleValue)
+}
+
+// Shown in a player window when a YouTube video can't be played natively: what went wrong (yt-dlp's reason, tidied by
+// PlaybackFailure) and Try Again · Open in Browser · Copy Details — inside Watch's own window, never YouTube's web
+// player. Frame layout only (no Auto Layout floor on how small the window can get); parts drop out as it shrinks, and
+// clicks away from the buttons fall through to the window (drag, menu).
+final class PlayerFailureView: NSView {
+    var onRetry: (() -> Void)?
+    var onOpen: (() -> Void)?
+    var onSignIn: (() -> Void)?
+    private let icon = NSImageView(image: sym("exclamationmark.triangle"))
+    private let title = NSTextField(labelWithString: "Couldn't play this video in Watch")
+    private let reason = NSTextField(wrappingLabelWithString: "")
+    private let signIn = NSButton(title: "Sign In…", target: nil, action: nil)
+    private let retry = NSButton(title: "Try Again", target: nil, action: nil)
+    private let open = NSButton(title: "Open in Browser", target: nil, action: nil)
+    private let copy = NSButton(title: "Copy Details", target: nil, action: nil)
+    private var details = ""
+    private var wantsSignIn = false
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        appearance = NSAppearance(named: .darkAqua)
+        icon.symbolConfiguration = .init(pointSize: 20, weight: .regular); icon.contentTintColor = NSColor.white.withAlphaComponent(0.5)
+        title.font = .systemFont(ofSize: 13, weight: .semibold); title.textColor = NSColor.white.withAlphaComponent(0.9)
+        reason.font = .systemFont(ofSize: 11); reason.textColor = NSColor.white.withAlphaComponent(0.6); reason.maximumNumberOfLines = 3
+        for label in [title, reason] { label.alignment = .center; label.lineBreakMode = .byTruncatingTail }
+        for (b, a) in [(signIn, #selector(signInTapped)), (retry, #selector(retryTapped)), (open, #selector(openTapped)), (copy, #selector(copyTapped))] {
+            b.bezelStyle = .rounded; b.controlSize = .small; b.font = .systemFont(ofSize: 11)
+            b.target = self; b.action = a
+        }
+        signIn.toolTip = "Connect your YouTube account (Preferences) so Watch can play this signed in"
+        for v in [icon, title, reason, signIn, retry, open, copy] as [NSView] { addSubview(v) }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); layoutParts() }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden, let hit = super.hitTest(point) else { return nil }
+        return hit is NSButton ? hit : nil
+    }
+    // `offerSignIn`: YouTube wants a signed-in viewer and no account is connected — Sign In… leads the row.
+    func show(reason text: String, details: String, offerSignIn: Bool = false) {
+        reason.stringValue = text; reason.toolTip = text
+        self.details = details
+        wantsSignIn = offerSignIn
+        retry.keyEquivalent = offerSignIn ? "" : "\r"; signIn.keyEquivalent = offerSignIn ? "\r" : ""
+        copy.title = "Copy Details"
+        isHidden = false
+        layoutParts()
+    }
+
+    private func layoutParts() {
+        let w = bounds.width, h = bounds.height, width = max(0, min(w - 32, 380))
+        let all = [signIn, retry, open, copy]
+        for b in all { b.isHidden = false; b.sizeToFit() }
+        signIn.isHidden = !wantsSignIn
+        func rowWidth() -> CGFloat {
+            let shown = all.filter { !$0.isHidden }
+            return shown.reduce(0) { $0 + $1.frame.width } + 8 * CGFloat(max(0, shown.count - 1))
+        }
+        for b in [copy, open, retry] where rowWidth() > width { b.isHidden = true }   // the least needed go first
+        let showReason = h >= 150, showIcon = h >= 200
+        reason.isHidden = !showReason; icon.isHidden = !showIcon
+        reason.preferredMaxLayoutWidth = width
+        let reasonHeight = showReason ? min(ceil(reason.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: width, height: 1000)).height ?? 14), 44) : 0
+        let total = (showIcon ? 30 : 0) + 18 + (showReason ? 6 + reasonHeight : 0) + 12 + 22
+        var y = ((h + total) / 2).rounded()
+        let x = ((w - width) / 2).rounded()
+        if showIcon { y -= 22; icon.frame = NSRect(x: (w - 22) / 2, y: y, width: 22, height: 22); y -= 8 }
+        y -= 18; title.frame = NSRect(x: x, y: y, width: width, height: 18)
+        if showReason { y -= 6 + reasonHeight; reason.frame = NSRect(x: x, y: y, width: width, height: reasonHeight) }
+        y -= 12 + 22
+        let buttons = all.filter { !$0.isHidden }
+        var bx = ((w - rowWidth()) / 2).rounded()
+        for b in buttons { b.frame = NSRect(x: bx, y: y, width: b.frame.width, height: 22); bx += b.frame.width + 8 }
+    }
+    @objc private func signInTapped() { onSignIn?() }
+    @objc private func retryTapped() { onRetry?() }
+    @objc private func openTapped() { onOpen?() }
+    @objc private func copyTapped() {
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(details, forType: .string)
+        copy.title = "Copied"
     }
 }
 
@@ -2392,12 +2606,14 @@ final class ThumbView: NSImageView {
             DispatchQueue.main.async { Self.cache[s] = img; if self.wanted == s { self.image = img } }
         }.resume()
     }
+    func show(_ img: NSImage) { wanted = nil; image = img }   // an in-memory picture (Now Playing artwork)
 }
 
 // One row style for every list in the panel: thumbnail · title · details line · optional accessory button.
 // `compact` (Recent Links) is one title line with a small thumbnail — links don't need a big picture.
 // `favourite` puts a ★ before the details line and `watched` a ✓ (plus a dimmed thumbnail). `progress` draws a resume
-// bar along the thumbnail's bottom edge. `isHighlighted` is the keyboard selection
+// bar along the thumbnail's bottom edge. `image` shows an in-memory picture instead of loading `thumb`; `square` makes the
+// thumbnail 24×24 (album artwork, in the Now Playing row). `isHighlighted` is the keyboard selection
 // (↑/↓ from the search field); `onMenu` supplies the right-click menu.
 final class BrowseRowView: NSView {
     var onClick: (() -> Void)?
@@ -2406,12 +2622,13 @@ final class BrowseRowView: NSView {
     private var hovering = false
 
     init(thumb: String?, title: String, meta: String, accessory: NSView?, compact: Bool = false,
-         favourite: Bool = false, watched: Bool = false, progress: Double? = nil) {
+         favourite: Bool = false, watched: Bool = false, progress: Double? = nil, image: NSImage? = nil, square: Bool = false) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
         layer?.cornerRadius = 6
-        let t = ThumbView(); t.load(thumb)
+        let t = ThumbView()
+        if let img = image { t.show(img) } else { t.load(thumb) }
         t.imageScaling = .scaleProportionallyUpOrDown
         t.wantsLayer = true; t.layer?.cornerRadius = 4; t.layer?.masksToBounds = true
         t.contentTintColor = .tertiaryLabelColor
@@ -2451,7 +2668,7 @@ final class BrowseRowView: NSView {
         let h = NSStackView(views: views); h.spacing = 8; h.alignment = .centerY; h.distribution = .fill
         h.translatesAutoresizingMaskIntoConstraints = false
         addSubview(h)
-        let (w, ht, inset): (CGFloat, CGFloat, CGFloat) = compact ? (32, 18, 3) : (80, 45, 4)
+        let (w, ht, inset): (CGFloat, CGFloat, CGFloat) = square ? (24, 24, 3) : compact ? (32, 18, 3) : (80, 45, 4)
         NSLayoutConstraint.activate([
             t.widthAnchor.constraint(equalToConstant: w), t.heightAnchor.constraint(equalToConstant: ht),
             h.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4), h.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
@@ -2558,6 +2775,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     let downloads = DownloadManager()
     var mediaItems: [MediaItem] = []
     var browsersAwaitingAccess: [Browser] = []
+    // Now Playing: what another app is playing (NowPlaying.swift) — the list's first row; its artwork opens in
+    // `artworkWindow`, which then follows the music. The adapter runs only while the panel or that window shows.
+    // Every app's report comes through (Watch's own included) — isMusicSource decides what the music window follows.
+    let nowPlaying = NowPlayingMonitor(ignoring: [])
+    var musicControl = MusicAppControl()            // Music/Spotify: volume, artwork, commands addressed to that app
+    var electedApp: String?                         // what macOS calls "now playing" — may well be a video
+    let nowPlayingRemote = NowPlayingRemote()       // the artwork window's controls — only on a click
+    var nowPlayingInfo: NowPlayingInfo?
+    var nowPlayingImage: NSImage?               // decoded once per artwork change
+    var nowPlayingRow: NSStackView!
+    var artworkWindow: ArtworkWindowController?
     var lastClipboardChangeCount = NSPasteboard.general.changeCount
     var clipboardTimer: Timer?
 
@@ -2617,6 +2845,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         mediaMonitor.onUpdate = { [weak self] items, waiting in
             self?.mediaItems = items; self?.browsersAwaitingAccess = waiting; self?.rebuildMediaSection()
         }
+        nowPlaying.onUpdate = { [weak self] info in self?.nowPlayingChanged(info) }
+        // Music's and Spotify's own track-change broadcasts keep the music window right while a video holds the slot.
+        for name in NowPlayingInfo.broadcasts.keys {
+            DistributedNotificationCenter.default().addObserver(self, selector: #selector(musicBroadcast(_:)), name: Notification.Name(name), object: nil)
+        }
         windowManager.onInfo = { [weak self] url, info in
             self?.links.update(url, with: info); self?.favourites.update(url, with: info); self?.rebuildClipSection()
         }
@@ -2642,6 +2875,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         liveSearch.cancel(); browseTask?.cancel()
         windowManager.players.forEach { $0.savePosition() }
         downloads.stopAll()
+        nowPlaying.stopAll()
     }
     @objc func handleURLEvent(_ e: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
         guard let raw = e.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
@@ -2654,7 +2888,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         else { play(videoURL) }
     }
     @objc func appResignedActive() {
-        if dropdown.isVisible && !Prefs.pinned && !Prefs.detached { stopPanelSearch(); dropdown.orderOut(nil); mediaMonitor.stop() }
+        if dropdown.isVisible && !Prefs.pinned && !Prefs.detached { stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors() }
     }
 
     // MARK: status item + drag-and-drop (B4)
@@ -2755,6 +2989,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             outer.topAnchor.constraint(equalTo: doc.topAnchor, constant: 6),
             outer.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -10),
         ])
+
+        // Now Playing — another app's media with its artwork; hidden unless something is playing (rebuildNowPlayingRow).
+        nowPlayingRow = NSStackView(); nowPlayingRow.orientation = .vertical; nowPlayingRow.alignment = .leading
+        nowPlayingRow.isHidden = true
+        outer.addArrangedSubview(nowPlayingRow)
+        nowPlayingRow.widthAnchor.constraint(equalTo: outer.widthAnchor).isActive = true
+        outer.setCustomSpacing(8, after: nowPlayingRow)
 
         // Both library tabs list every stored item inside the existing compact scroll area.
         clipTitle = sectionLabel("Matching Links")
@@ -2900,6 +3141,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     // (favourites first) under a line saying what Return will do. Rows: thumbnail (with a resume bar), title,
     // ★/✓ marks, "site · resume/duration · when".
     func rebuildClipSection() {
+        rebuildNowPlayingRow()                      // hidden while the field filters
         let keep = highlighted
         clipSection.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2927,6 +3169,142 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         }
         highlighted = nil
         if browseView.isHidden, let k = keep, k < rows.count { setHighlight(k) }
+    }
+    // The list's first row while another app plays something: artwork, title, "Artist · App · Paused" (album in the
+    // tooltip). Click opens the artwork — or, without one, brings that app forward; right-click adds Copy / Save /
+    // Search YouTube. Never part of ↑/↓ (navRows reads clipSection only).
+    func rebuildNowPlayingRow() {
+        nowPlayingRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let filtering = !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard Prefs.showNowPlaying, !filtering, let info = nowPlayingInfo else { nowPlayingRow.isHidden = true; return }
+        nowPlayingRow.isHidden = false
+        let parts: [String?] = [info.artist, ArtworkActions.appName(info.appBundleID), info.isPlaying ? nil : "Paused"]
+        let meta = parts.compactMap { $0 }.joined(separator: " · ")
+        let picture = nowPlayingImage ?? ArtworkActions.appIcon(info.appBundleID) ?? sym("music.note")
+        var open: NSView?
+        if info.artwork != nil {
+            open = ClosureButton(symbol: "arrow.up.left.and.arrow.down.right", tip: "Open Artwork") { [weak self] _ in self?.openArtwork() }
+        }
+        let row = BrowseRowView(thumb: nil, title: info.title, meta: meta, accessory: open, compact: true, image: picture, square: true)
+        let tip: [String?] = [info.title, info.artist, info.album]
+        row.toolTip = tip.compactMap { $0 }.joined(separator: " — ")
+        row.onClick = { [weak self] in
+            if info.artwork == nil { ArtworkActions.showApp(info) } else { self?.openArtwork() }
+        }
+        row.onMenu = { [weak self] in
+            let m = NSMenu()
+            ArtworkActions.menuItems(info, open: { self?.openArtwork() }, fullScreen: { self?.openArtwork(fullScreen: true) },
+                                     search: { self?.searchYouTube(for: $0) }).forEach(m.addItem)
+            return m
+        }
+        nowPlayingRow.addArrangedSubview(row)
+        row.widthAnchor.constraint(equalTo: nowPlayingRow.widthAnchor).isActive = true
+    }
+    // macOS's single "now playing" report. Only music apps (NowPlayingInfo.isMusicSource) reach the row and the music
+    // window: a video — in a browser, a web page, or Watch's own player — never replaces the song. Nothing playing at all
+    // clears the music only when it was the music app that stopped.
+    func nowPlayingChanged(_ info: NowPlayingInfo?) {
+        let previous = electedApp
+        electedApp = info?.appBundleID
+        if let info = info {
+            if info.isMusicSource(ignoring: Self.ownBundleIDs) { setMusic(info) }
+        } else if previous != nil, previous == nowPlayingInfo?.appBundleID {
+            setMusic(nil)
+        }
+        artworkWindow?.setControllable(canControl(nowPlayingInfo?.appBundleID))
+    }
+    static let ownBundleIDs: Set<String> = [Bundle.main.bundleIdentifier ?? "com.jacob.watch", "com.jacob.watch"]
+    private func setMusic(_ info: NowPlayingInfo?) {
+        if info?.artwork != nowPlayingInfo?.artwork { nowPlayingImage = info?.artwork.flatMap { NSImage(data: $0) } }
+        nowPlayingInfo = info
+        rebuildNowPlayingRow()
+        if artworkWindow?.window.isVisible == true { artworkWindow?.show(info) }
+    }
+    // Music / Spotify said their track or state changed. A new track seen only this way (a video holds the "now playing"
+    // slot) gets its artwork from the app itself when Watch is allowed to ask; otherwise the window's usual grace + icon.
+    @objc func musicBroadcast(_ n: Notification) {
+        guard Prefs.showNowPlaying, let app = NowPlayingInfo.broadcasts[n.name.rawValue] else { return }
+        guard let heard = NowPlayingInfo.broadcast(n.userInfo ?? [:], app: app) else {
+            if nowPlayingInfo?.appBundleID == app { setMusic(nil) }         // stopped
+            return
+        }
+        let merged = NowPlayingInfo.merge(heard, onto: nowPlayingInfo)
+        let newTrack = merged.itemKey != nowPlayingInfo?.itemKey
+        setMusic(merged)
+        artworkWindow?.setControllable(canControl(app))
+        guard newTrack, merged.artwork == nil, electedApp != app else { return }
+        musicControl.artwork(app) { [weak self] data in
+            guard let self = self, let data = data, var current = self.nowPlayingInfo, current.itemKey == merged.itemKey, current.artwork == nil else { return }
+            current.artwork = data
+            self.setMusic(current)
+        }
+    }
+    // Music/Spotify take commands addressed to them; other music apps only through the "now playing" slot, i.e. while
+    // they hold it.
+    private func canControl(_ app: String?) -> Bool {
+        guard let app = app else { return false }
+        return AppVolume.supported.contains(app) || app == electedApp
+    }
+    private func send(_ request: NowPlayingRequest, to app: String) {
+        if AppVolume.supported.contains(app) {
+            musicControl.perform(request, bundleID: app) { [weak self] sent in
+                guard !sent, let self = self else { return }
+                if self.electedApp == app { self.nowPlayingRemote.send(request) } else { NSSound.beep() }   // not allowed: the slot, if it's theirs
+            }
+        } else if app == electedApp {
+            nowPlayingRemote.send(request)
+        } else {
+            NSSound.beep()
+        }
+    }
+    // The artwork window takes the panel's spot and the panel hides, as with the first video; it then follows the music.
+    // `fullScreen` (the row's Open Full Screen) goes straight on to macOS full screen.
+    func openArtwork(fullScreen: Bool = false) {
+        guard let info = nowPlayingInfo, info.artwork != nil else { return }
+        let viewer = artworkWindow ?? makeArtworkWindow()
+        nowPlaying.want(.viewer, true)              // before the panel lets go, so the adapter keeps running
+        let panelShown = dropdown.isVisible && dropdown.isOnActiveSpace
+        // The panel's spot when no video is there; otherwise beside the open windows — never on top of a video.
+        let players = windowManager.players.map { $0.window.frame }
+        viewer.present(info, screen: dropdown.screen ?? statusItem?.button?.window?.screen) { [weak self] size in
+            guard let self = self else { return nil }
+            if panelShown {
+                let spot = WindowManager.frame(replacing: self.dropdown.frame, size: size)
+                if !players.contains(where: { $0.intersects(spot) }) { return spot }
+            }
+            return self.windowManager.freeFrame(size: size, anchor: self.statusItem)
+        }
+        viewer.setControllable(canControl(info.appBundleID))
+        if panelShown { stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors() }
+        if fullScreen && !viewer.inFullScreen { viewer.toggleFullScreen() }
+    }
+    private func makeArtworkWindow() -> ArtworkWindowController {
+        let viewer = ArtworkWindowController()
+        viewer.onClose = { [weak self] in self?.nowPlaying.want(.viewer, false) }
+        viewer.onSearch = { [weak self] q in self?.searchYouTube(for: q) }
+        viewer.musicApp = musicControl
+        viewer.onCommand = { [weak self, weak viewer] request in
+            guard let app = viewer?.info?.appBundleID else { return }
+            self?.send(request, to: app)
+        }
+        // New players open beside the music window, never on it (full screen is its own Space).
+        windowManager.keepClear = { [weak viewer] in
+            guard let w = viewer?.window, w.isVisible, !w.styleMask.contains(.fullScreen) else { return [] }
+            return [w.frame]
+        }
+        artworkWindow = viewer
+        return viewer
+    }
+    // "Search YouTube for …" from the Now Playing row or the artwork window: results open in the panel.
+    func searchYouTube(for query: String) {
+        presentPanel()
+        searchField.stringValue = query
+        search(query)
+    }
+    func nowPlayingSettingsChanged() {
+        if !Prefs.showNowPlaying { artworkWindow?.close() }   // its onClose releases the adapter
+        nowPlaying.want(.panel, Prefs.showNowPlaying && dropdown.isVisible)
+        rebuildNowPlayingRow()
     }
     // Which videos get a ★ / ✓ — read once per redraw.
     struct LibraryMarks {
@@ -3533,7 +3911,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         else { dropdown.level = .floating }
     }
     @objc func togglePanel() {
-        if dropdown.isVisible && dropdown.isOnActiveSpace { stopPanelSearch(); dropdown.orderOut(nil); mediaMonitor.stop(); return }
+        if dropdown.isVisible && dropdown.isOnActiveSpace { stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors(); return }
         // Every open anchors under the menu-bar icon. A drag-off detaches only until the panel is hidden.
         Prefs.detached = false
         suppressMoveSave = true
@@ -3546,8 +3924,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         mainScroll.contentView.scroll(to: .zero); mainScroll.reflectScrolledClipView(mainScroll.contentView)
         dropdown.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         dropdown.makeFirstResponder(searchField)      // type to search or filter right away
-        mediaMonitor.start()
+        startPanelMonitors()
     }
+    // Only while the panel shows: browser-tab polling and the Now Playing adapter.
+    func startPanelMonitors() {
+        mediaMonitor.start()
+        if Prefs.showNowPlaying { nowPlaying.want(.panel, true) }
+    }
+    func stopPanelMonitors() { mediaMonitor.stop(); nowPlaying.want(.panel, false) }
     // Pressing the hotkey plays a copied video link directly; otherwise it toggles the panel.
     @objc func hotkeyPressed() {
         if Prefs.hotkeyPlaysClipboard, let s = NSPasteboard.general.string(forType: .string), looksLikeURL(s) { play(s); return }
@@ -3574,7 +3958,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         if case .loading? = browseStack.last?.page { browseStack.removeAll(); activeSearchQuery = nil }
         renderBrowse(keepScroll: true)
     }
-    @objc func minimizeToMenuBar() { Prefs.detached = false; stopPanelSearch(); dropdown.orderOut(nil); mediaMonitor.stop() }
+    @objc func minimizeToMenuBar() { Prefs.detached = false; stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors() }
     @objc func togglePin() { Prefs.pinned.toggle(); applyLevel() }
 
     // MARK: playback entry point — a window opens immediately and resolves its own stream (see PlayerWindowController.load)
@@ -3589,9 +3973,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         // The first video turns the panel into the player: it opens on the panel's spot and the panel hides
         // (the menu-bar icon brings it back). With players already open, new ones tile beside them.
         let panelShown = dropdown.isVisible && dropdown.isOnActiveSpace
+        let musicFrame = artworkWindow?.window.isVisible == true ? artworkWindow?.window.frame : nil
         let takeOver = panelShown && windowManager.players.isEmpty
+            && !(musicFrame.map { windowManager.takeFrame(replacing: dropdown.frame).intersects($0) } ?? false)
         let pc = windowManager.open(input, anchor: statusItem, queue: queue, replacing: takeOver ? dropdown.frame : nil)
-        if takeOver { stopPanelSearch(); dropdown.orderOut(nil); mediaMonitor.stop() }
+        if takeOver { stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors() }
         if !local { recordLink(pc.sourceURL, probe: false) }   // the player reports title/thumbnail via onInfo
     }
     // Puts a video link on top of Recent Links. `probe` asks yt-dlp for its title, thumbnail and duration when
