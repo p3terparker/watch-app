@@ -1,6 +1,6 @@
 # Watch — where everything lives
 
-A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift`, `ArtworkWindow.swift`, `ArtworkStyle.swift` and `StreamSupport.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.20** — native AVKit playback for YouTube (HD + live), in-app
+A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift`, `ArtworkWindow.swift`, `ArtworkStyle.swift` and `StreamSupport.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.21** — native AVKit playback for YouTube (HD + live), in-app
 downloads, YouTube search / History / Playlists in the panel (absorbed from the retired Tube app), an
 **Up Next** list per player window (Next/Previous · Autoplay · Repeat All/One · Shuffle), and a small library:
 watched marks, Favourites and playlist progress — plus a **Now Playing** row showing what other apps play, whose artwork
@@ -33,6 +33,15 @@ opens in a window that follows the music. See `docs/FEATURES.md` for the feature
   sample, toned for white text), `ArtworkLayout.fullScreen` (artwork + caption rects) and `ArtworkLayout.controlRow` (the music
   window's one row of controls, 3.20). Foundation (+ CoreGraphics);
   `test.sh` covers it.
+- `Sources/Queue.swift` (3.21) — `MediaSource` (`web`/`file`/`audio`/`spotify`/`music`, `of(_:)`), `SpotifyLink` (song/episode URIs,
+  `webURL`), `QueueItem` (id, url, title, subtitle, artwork, duration, source, `added`; Codable), `RepeatMode`, `QueueSections`
+  and `PlayQueue` (see "Up Next"). Foundation only; `test.sh` covers it (`Tests/QueueChecks.swift`).
+- `Sources/Handoff.swift` (3.21) — `Handoff.judge` (what a music app's next report means while one of its songs is the
+  queue's current item), `Handoff.spotifyPlayScript`, `QueueRoute.pick`. Foundation only; `test.sh` covers it.
+- `Sources/UpNext.swift` (3.21) — `UniversalQueue` (the app-wide queue under the music window and where its item plays),
+  `OwnPlaybackControl` (the music window's volume/commands for Watch's own item), `SpotifyOEmbed`.
+- `Sources/QueueDrawer.swift` (3.21) — `QueueDrawer` (the drop-down list: child window, `NSTableView`, drag/drop),
+  `QueueTableView`, `QueueRowView`.
 - `Sources/StreamSupport.swift` — `StreamLadder` (the lower H.264 renditions to offer beside yt-dlp's pick; the resolution cap
   for a video area; the "720p" label), `PlaybackFailure` (does yt-dlp's error want a signed-in viewer; the reason worth
   showing) and `PlaybackLog` (`~/Library/Logs/Watch/playback.log`, 256 KB, whole lines). Foundation (+ CoreGraphics); `test.sh` covers it.
@@ -119,12 +128,18 @@ fallbacks); the completion's second value is yt-dlp's last ERROR line ("" on suc
 - `isPlaylistLink` (→ `VideoLinks.isYouTubePlaylist`), `formatDuration`, `formatViews` — helpers. `video(_:)` falls
   back to `VideoLinks.thumbnail` and sets `YTVideo.isLive` from `live_status`.
 
-### Up Next — `QueueItem` / `RepeatMode` / `PlayQueue` / `YouTubeUpNext`
-The list Next/Previous walk through; one per player window (see `PlayerWindowController.ensureQueue`).
+### Up Next — `QueueItem` / `RepeatMode` / `PlayQueue` (`Sources/Queue.swift`) / `YouTubeUpNext`
+The list Next/Previous walk through; one per player window (see `PlayerWindowController.ensureQueue`) and the universal
+queue under the music window (`UniversalQueue`, below).
 - `PlayQueue` — `kind` (`.list` a panel page or playlist · `.recommended` · `.folder`), `name` (the Up Next
-  heading), `items`, `order` (play order — identity unless shuffled), `pos`. `peek`/`step(_:wrap:)` (wrap =
-  Repeat All), `jump(toItem:)`, `setShuffle` (randomizes the list around whatever is playing — which keeps
-  playing; off restores the real order at the same item), `append` (dedupes by URL — recommendation top-ups).
+  heading), `items`, `order` (play order — identity unless shuffled), `pos`, `handBack` (the app the universal queue hands
+  back to). `peek`/`step(_:wrap:)` (wrap = Repeat All), `jump(toItem:)` / `jump(to:)`, `setShuffle` (randomizes the list
+  around whatever is playing — which keeps playing — except Playing Next, which stays right after it; off restores the real
+  order at the same item), `append` (dedupes by URL — recommendation top-ups). 3.21: `insert(_:_:)` (`.next` right after
+  Now Playing, `.later` after the other additions, `.at(position)` a drop; marks `added`; goes into `items` right after the
+  item it follows so unshuffling keeps it there), `remove(ids:)` (never Now Playing), `move(ids:to:)`, `clearAdded`,
+  `update(_:_:)` (keeps the id), `addedAhead`, `continues(autoplay:repeatMode:)` (additions always play on),
+  `merged(into:)` (a lone video's late list with your additions after its current item), `sections(historyLimit:)`.
 - `PlayQueue.folder(for:shuffled:)` — a local file's neighbours: same-kind media in its folder, Finder order
   (`videoExts`/`audioExts` — only what AVFoundation can open).
 - `YouTubeUpNext.load(id:)` — **what youtube.com itself would play next.** yt-dlp can't list recommendations
@@ -133,6 +148,31 @@ The list Next/Previous walk through; one per player window (see `PlayerWindowCon
   the sidebar (`collect` handles both `lockupViewModel` and older `compactVideoRenderer` shapes; `dig`/`text`/
   `ytInitialData` are its helpers — the last brace-matches the object after the marker). Empty on any change
   YouTube makes; only the recommended list depends on it.
+
+### Universal queue — `UniversalQueue` / `QueueDrawer` (3.21)
+- `UniversalQueue` (AppDelegate's lazy `upNext`) — `queue`, `engine` (`.idle` · `.external(app)` · `.native` · `.video`),
+  `held`. `add(_:_:route:current:)` (`QueueRoute`: `.add` inserts; `.slotIn(app)` makes the app's song Now Playing — a
+  `spotify:`/`music:` mirror item — with `handBack`, following it; `.start` begins at the first item), `playNow`, `jump`,
+  `remove`, `move`, `insert(_:at:)`, `clearAdded`, `resume`, `advance`/`previous` → `start` (bumps `token`; `leave(for:)`
+  stops Watch's player, closes the queue's video window unless the next item is a video, pauses the app unless the next
+  item plays there) → `playNative` / `playExternal` / `playVideo`. `finish` hands back (`control.perform(.play)`).
+  `externalChanged` (from `AppDelegate.setMusic`) waits for the first report of a started song (`awaiting`, Spotify by
+  title for up to 4 s), then runs `Handoff.judge` against `followed`: finished/skipped → pause + `seek(0)` the app, advance;
+  detached → `held`. `.native`: AVPlayer, 1 s refresh into a `NowPlayingInfo` (bundle id = Watch's own) pushed through
+  `show` (AppDelegate `showQueueItem`: the music window with `OwnPlaybackControl`), tags/artwork via `commonMetadata`, a
+  folder cover as fallback. `.video`: `openVideo` (WindowManager, beside the music window), `onEnded`/`onStep`/`onClosed`
+  hooks, a 1 s refresh and the thumbnail. `command`, `setVolume`, `openSource` serve the music window for its own item;
+  `musicWindowClosed` ends the queue.
+- `QueueDrawer` — child window of the music window (`show(under:)`, `place()`: under it, flipping above; follows
+  resize/move; hides on full screen and close). `reload()` builds `rows` (`.header`, `.historyToggle`, `.item(item, section)`,
+  `.note`) and `dropTargets` (the play-order position a drop above each row means). Drag rows (private pasteboard type with
+  the ids) → `onMove`; external drops (`items(from:)`: files, folders' media, links/Spotify, one per line) → `onInsert`; ⌫ →
+  `onRemove`; double-click/Return → `onPlay`; right-click → Play Now · Play Next · Remove + `extraMenu`.
+- AppDelegate — `enqueue(_:_:)` (route; Automation asked on the action before a slot-in; flashes what happened),
+  `enqueueLink` (a playlist link queues its videos), `fillDetails` (Recent Links, Spotify oEmbed, `probeLink`), `showQueue`,
+  `toggleQueueDrawer`, `makeQueueDrawer`, `queueItemMenu`, `playSpotify`, `showQueueItem`, `presentMusicWindow`,
+  `refreshControllable`. `send(_:to:)` routes Watch's own id to the queue. Row menus have Play Next / Play Later, `rowButtons`
+  a + (⌥ = next), the field ⌥Return, `DragReceiverView.onDropMany`, `handleURLEvent` the `queue` host.
 
 ### Downloads — `DownloadKind` / `DownloadJob` / `DownloadManager`
 - `DownloadKind` — `.originalVideo` (`bv*+ba/b`, source container) · `.mp4Best` · `.originalAudio` (`-x`, no

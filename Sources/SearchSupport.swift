@@ -46,6 +46,7 @@ enum OmniboxInput: Equatable {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return .empty }
         if text.hasPrefix("file://") { return .play(text) }
+        if text.hasPrefix("spotify:") { return .play(text) }     // a Spotify URI: played by the Spotify app (UpNext.swift)
         if text.hasPrefix("/") || text.hasPrefix("~/") {
             let path = (text as NSString).expandingTildeInPath
             if fileExists(path) { return .play(path) }

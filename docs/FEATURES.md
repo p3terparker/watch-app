@@ -1,4 +1,4 @@
-# Watch — v3.20 · Beta *(reworked)*
+# Watch — v3.21 · Beta *(reworked)*
 **Plays almost any video, from anywhere — and downloads it.** Hotkey **⌥⌘Y**.
 
 **Features**
@@ -38,6 +38,20 @@
   dim). Watch only acts on another app when you click — it reads macOS's Now Playing information only while the panel
   or the artwork window is open. Hidden while you type, when nothing is playing, or with Preferences ▸ *Show what's playing in
   other apps* off.
+- **Up Next — one queue for everything (3.21):** a list that **drops down under the music window** (≡ beside its "…",
+  **⌥⌘U**, or the menu), like Music's MiniPlayer: **Now Playing**, **Playing Next** (what you added), the rest of the list,
+  **Then: Continue in Music/Spotify**, and a collapsed **History**. Add with **Play Next / Play Later** on any row's
+  right‑click menu or its **+** button (⌥‑click = Play Next), **⌥Return** in the field, several files/links dropped on
+  the menu‑bar icon (or one with ⌥), drops on the list itself (where you drop them), or `glasskit-watch://queue?url=…`.
+  It mixes **YouTube and other sites** (they open in a video window beside the music window when their turn comes),
+  **audio files and direct audio links** (played by Watch in the music window, with their own tags and artwork) and
+  **Spotify songs and episodes** (played by the Spotify app; paste or drag a Spotify link — albums and playlists just
+  open in Spotify). **While Music or Spotify plays**, additions wait for the current song: Watch pauses the app at the
+  song's end, plays your items, and when the list runs out the app carries on with **its own Up Next** (which Apple
+  doesn't let other apps see). macOS asks once for Watch to control that app. Drag rows to reorder, ⌫ removes,
+  double‑click/Return plays a row, **Clear** removes your additions. Picking something else in Music/Spotify yourself
+  makes Watch let go (**Resume** in the list); a media‑key Next while the app is in the background moves on through Up
+  Next. Closing the music window ends the queue (a queued video keeps playing in its window).
 - **Recent Links** — video links you copy or play, newest first: a **small thumbnail**, the title, and *site ·
   duration · how long ago*; a video you stopped part‑way shows where you left off (**12:34 / 45:10**) and a red
   **resume bar** on its thumbnail, a live stream shows LIVE. Each video appears **once**, whatever link shape it was copied as
@@ -162,6 +176,9 @@
   to go to until it's taught the new shape; lists you played from keep working.
 
 **Changelog**
+- **3.21** — **Up Next:** one queue under the music window for videos, audio files/links and Spotify songs, with Play Next
+  / Play Later everywhere, ⌥Return, drops, a `queue` URL, editing (drag, ⌫, Clear), History, and slotting into Music or
+  Spotify at a song's end, then handing back. Spotify links are played by the Spotify app and kept in Recent Links.
 - **3.20** — **Music window controls:** one row under the title (⏮ ⏯ ⏭ · timeline · shuffle · repeat · volume), with
   **shuffle and repeat** that set Music's/Spotify's own settings; the controls appear on hovering anywhere over the window
   and fade a second after leaving; **click anywhere** plays/pauses, **double‑click** opens the music in its app, and

@@ -1,6 +1,6 @@
 # Watch App
 
-A "plays almost any video" menu-bar player. **Current: v3.20.**
+A "plays almost any video" menu-bar player. **Current: v3.21.**
 Binary `Watch` · bundle `com.jacob.watch` · hotkey **⌥⌘Y** ·
 frameworks: Cocoa, WebKit, Carbon, ServiceManagement, **AVKit, AVFoundation**.
 
@@ -85,6 +85,13 @@ same Automation rules as the volume). Clicks use `MusicZone` (`Sources/PlayerZon
 after `clickDelay` (the double-click interval), double-click = `openSource` (bring the app forward / launch it; Music reveals
 the track when already allowed), double-click in far-edge strips (15%, ≥36 pt) = ∓10 s. Full screen only via F/⌃⌘F/menu.
 Pushes whose commit message contains `[no preview]` are built and tested but don't replace the preview (`build.yml`).
+**3.21 — Up Next under the music window:** `PlayQueue`/`QueueItem` (+ `MediaSource`, `SpotifyLink`) moved to
+`Sources/Queue.swift` with Play Next/Later insertion, edits, sections and `handBack` (tested); `Sources/Handoff.swift` has the
+pure song-boundary reducer and `QueueRoute` (tested). `UniversalQueue` (`Sources/UpNext.swift`) plays the current item in
+Music/Spotify (`.external`, waiting for the song to end, pausing + rewinding the app, handing back), Watch's own AVPlayer
+(`.native`, shown in the music window via `NowPlayingInfo` with `OwnPlaybackControl`) or a queue-driven video window
+(`PlayerWindowController.onEnded/onStep/onClosed`). `QueueDrawer` (`Sources/QueueDrawer.swift`) is the drop-down list.
+AppDelegate: `enqueue`, `enqueueLink`, `showQueue`, `playSpotify`; `setMusic` feeds `upNext.externalChanged`.
 
 **Gotchas (see GOTCHAS.md):** never AppleScript an app by name unless it's running (uninstalled names pop a
 "Where is …?" chooser) and never send Apple Events without checking `AEDeterminePermissionToAutomateTarget`

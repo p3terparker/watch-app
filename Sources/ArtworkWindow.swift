@@ -125,6 +125,8 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     private let titleLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
     private let dotButton = FadingButton(title: "", image: sym("ellipsis.circle.fill"), target: nil, action: nil)
+    private let queueButton = FadingButton(title: "", image: sym("list.bullet.circle.fill"), target: nil, action: nil)
+    var onQueue: (() -> Void)?                         // ≡, ⌥⌘U, the menu: the Up Next list drops down under the window
     let controls = ArtworkControlsView()
     private let flashView = CentreFlashView()
     private var chromeVisible = false
@@ -202,6 +204,11 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         dotButton.isBordered = false; dotButton.contentTintColor = NSColor.white.withAlphaComponent(0.55)
         dotButton.imageScaling = .scaleProportionallyDown; dotButton.toolTip = "Menu"
         content.addSubview(dotButton)
+        queueButton.target = self; queueButton.action = #selector(queueTapped)
+        queueButton.alphaValue = 0
+        queueButton.isBordered = false; queueButton.contentTintColor = NSColor.white.withAlphaComponent(0.55)
+        queueButton.imageScaling = .scaleProportionallyDown; queueButton.toolTip = "Up Next (⌥⌘U)"
+        content.addSubview(queueButton)
         controls.alphaValue = 0
         controls.previous.onPress = { [weak self] in self?.onCommand?(.command(.previous)) }
         controls.next.onPress = { [weak self] in self?.onCommand?(.command(.next)) }
@@ -328,11 +335,13 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
             artHolder.frame = spot.art
             shadeFrame = spot.caption; controlsFrame = spot.controls
             dotButton.frame = NSRect(x: b.width - 40, y: b.height - 56, width: 16, height: 16)
+            queueButton.frame = NSRect(x: b.width - 62, y: b.height - 56, width: 16, height: 16)
         } else {
             artHolder.frame = b
             shadeFrame = NSRect(x: 0, y: 0, width: b.width, height: ArtworkLayout.windowBand + lift)
             controlsFrame = NSRect(x: 12, y: 6, width: max(0, b.width - 24), height: ArtworkLayout.controlsHeight)
             dotButton.frame = NSRect(x: b.width - 20, y: b.height - 20, width: 16, height: 16)
+            queueButton.frame = NSRect(x: b.width - 40, y: b.height - 20, width: 16, height: 16)
         }
         imageView.frame = artHolder.bounds
         flashView.frame = NSRect(x: (artHolder.frame.midX - 28).rounded(), y: (artHolder.frame.midY - 28).rounded(), width: 56, height: 56)
@@ -469,6 +478,7 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = visible ? 0.15 : 0.25
             dotButton.animator().alphaValue = target
+            queueButton.animator().alphaValue = target
             shade.animator().alphaValue = target
             controls.animator().alphaValue = controlsTarget
         }
@@ -534,6 +544,7 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         let key = e.charactersIgnoringModifiers?.lowercased()
         if e.keyCode == 53 { if inFullScreen { toggleFullScreen() } else { close() }; return true }
         if mods == .command && key == "w" { close(); return true }
+        if mods == [.option, .command] && key == "u" { onQueue?(); return true }
         if key == "f" && (mods.isEmpty || mods == [.control, .command]) { toggleFullScreen(); return true }
         guard mods.isEmpty else { return false }
         switch e.keyCode {
@@ -597,12 +608,12 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     // The app's own shuffle and repeat. Same permission as its volume: read only when already allowed; a click asks once.
     private func refreshModes() {
         guard let id = volumeApp else { return }
-        controls.setModes(appModes, access: volumeAccess, appName: ArtworkActions.appName(id))
-        guard volumeAccess == .granted else { return }
+        controls.setModes(appModes, access: volumeAccess, appName: ArtworkActions.appName(id), available: AppVolume.modesScript(id) != nil)
+        guard volumeAccess == .granted, AppVolume.modesScript(id) != nil else { return }
         musicApp.modes(id) { [weak self] modes in
             guard let self = self, self.volumeApp == id, let modes = modes else { return }
             self.appModes = modes
-            self.controls.setModes(modes, access: self.volumeAccess, appName: ArtworkActions.appName(id))
+            self.controls.setModes(modes, access: self.volumeAccess, appName: ArtworkActions.appName(id), available: true)
         }
     }
     private func toggleShuffle() {
@@ -621,7 +632,7 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         var modes = appModes ?? AppModes(shuffle: false, repeatMode: .off)
         change(&modes)
         appModes = modes
-        controls.setModes(modes, access: volumeAccess, appName: ArtworkActions.appName(id))
+        controls.setModes(modes, access: volumeAccess, appName: ArtworkActions.appName(id), available: true)
         musicApp.setMode(script, bundleID: id) { [weak self] done in
             guard let self = self, self.volumeApp == id else { return }
             if !done { self.appModes = before; NSSound.beep() }
@@ -660,6 +671,11 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         let full = ClosureMenuItem(inFullScreen ? "Exit Full Screen" : "Enter Full Screen") { [weak self] in self?.toggleFullScreen() }
         full.keyEquivalent = "f"; full.keyEquivalentModifierMask = [.control, .command]   // shown only; the content view handles the keys
         m.addItem(full)
+        if let toggle = onQueue {
+            let up = ClosureMenuItem("Up Next", handler: toggle)
+            up.keyEquivalent = "u"; up.keyEquivalentModifierMask = [.option, .command]   // shown only; handleKey has the keys
+            m.addItem(up)
+        }
         let backgrounds = NSMenu()
         for (title, colours) in [("Artwork Colours", true), ("Black", false)] {
             let item = ClosureMenuItem(title) { [weak self] in
@@ -678,6 +694,7 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         }
         return m
     }
+    @objc private func queueTapped() { onQueue?() }
     @objc private func showMenu() {
         makeMenu().popUp(positioning: nil, at: NSPoint(x: dotButton.frame.minX - 150, y: dotButton.frame.minY - 4), in: content)
     }
@@ -793,6 +810,7 @@ final class ArtworkControlsView: NSView {
     private static let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium)
     var showsTimeline = true { didSet { if showsTimeline != oldValue { layoutParts() } } }
     private(set) var access: AppVolumeAccess = .unsupported
+    private var modesAvailable = false                  // the app has its own shuffle/repeat Watch can set
     private var longClock = false
     var isInteracting: Bool { timeline.isTracking || volume.isTracking }
 
@@ -846,7 +864,8 @@ final class ArtworkControlsView: NSView {
     }
     // The app's own shuffle and repeat (nil: not known yet — shown off). Same permission as the volume: hidden for an app
     // Watch can't script, dimmed when it isn't allowed.
-    func setModes(_ modes: AppModes?, access: AppVolumeAccess, appName: String) {
+    func setModes(_ modes: AppModes?, access: AppVolumeAccess, appName: String, available: Bool) {
+        modesAvailable = available
         let shuffleOn = modes?.shuffle ?? false, repeating = modes?.repeatMode ?? .off
         shuffle.lit = shuffleOn
         repeatButton.lit = repeating != .off
@@ -866,7 +885,7 @@ final class ArtworkControlsView: NSView {
     private func layoutParts() {
         let slides = access == .granted || access == .undetermined
         let row = ArtworkLayout.controlRow(width: bounds.width, height: bounds.height, timeline: showsTimeline, longClock: longClock,
-                                           modes: access != .unsupported, volume: access == .unsupported ? .none : slides ? .slider : .icon)
+                                           modes: modesAvailable && access != .unsupported, volume: access == .unsupported ? .none : slides ? .slider : .icon)
         func place(_ view: NSView, _ frame: CGRect?) {
             view.isHidden = frame == nil
             if let f = frame { view.frame = f }
@@ -938,6 +957,31 @@ class MusicAppControl {
             if access == .undetermined { access = Self.access(automationPermission(bundleID, ask: true)) }
             let done = access == .granted && Self.run(script) != nil
             DispatchQueue.main.async { completion(done) }
+        }
+    }
+    // Plays a Spotify song or episode (Handoff.spotifyPlayScript) — always from the user's own action (adding it to the
+    // queue, a link), so macOS may ask once. Spotify is opened in the background first if it isn't running, and given a
+    // moment to start answering.
+    func playSpotify(_ script: String, completion: @escaping (Bool) -> Void) {
+        let id = SpotifyLink.bundleID
+        if !Self.isRunning(id) {
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { completion(false); return }
+            let options = NSWorkspace.OpenConfiguration(); options.activates = false
+            NSWorkspace.shared.openApplication(at: url, configuration: options) { _, _ in }
+        }
+        queue.async {
+            var waited = 0
+            while !Self.isRunning(id) && waited < 40 { Thread.sleep(forTimeInterval: 0.25); waited += 1 }
+            var access = Self.access(automationPermission(id, ask: false))
+            if access == .undetermined { access = Self.access(automationPermission(id, ask: true)) }
+            var played = false
+            if access == .granted {
+                for attempt in 0..<3 where !played {
+                    if attempt > 0 { Thread.sleep(forTimeInterval: 1) }
+                    played = Self.run(script) != nil
+                }
+            }
+            DispatchQueue.main.async { completion(played) }
         }
     }
     // Double-click: Music shows the playing song in its window — only if Watch is already allowed.

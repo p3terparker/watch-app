@@ -1,5 +1,22 @@
 # Watch verification
 
+## 3.21 (53) — Up Next under the music window, 2026-10-30 (preview; hands-on acceptance pending)
+
+One app-wide queue that drops down under the music window: Play Next / Play Later everywhere, audio files and links played
+by Watch in the music window, queued videos in a video window beside it, Spotify songs/episodes in the Spotify app, and
+slotting into Music/Spotify at a song's end with a hand-back when the list runs out (`Sources/Queue.swift`,
+`Sources/Handoff.swift`, `Sources/UpNext.swift`, `Sources/QueueDrawer.swift`). No preference keys added; bundle ID, hotkey
+and URL handlers unchanged (a new `queue` host joins `play`). The Automation usage description now mentions controlling
+Music/Spotify for the queue.
+
+### Verification
+
+- Authored without a local Swift toolchain; GitHub Actions on macOS compiles and tests it. Results are recorded here once the
+  run finishes.
+- Manual (pending, needs a real Mac): slot-in with real Music and Spotify (the boundary pause and rewind, how much of the next
+  song is heard, the hand-back), the one-time Automation prompts, Spotify launching in the background, media-key Next
+  during a Spotify song, drag-and-drop from Finder/Spotify into the list, and the list's look under small and large windows.
+
 ## 3.20 (52) — music window controls, 2026-10-30 (preview; hands-on acceptance pending)
 
 Music window only (video windows unchanged): one row of controls under the caption (`ArtworkLayout.controlRow`), the app's

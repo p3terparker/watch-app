@@ -51,6 +51,8 @@ enum VideoLinks {
         "x.com", "twitter.com", "reddit.com", "redd.it", "instagram.com", "facebook.com", "fb.watch",
         "bsky.app", "threads.net",
     ]
+    // Whether the Spotify app is there to play copied Spotify songs/episodes (AppDelegate sets it at launch).
+    static var spotifyInstalled = false
     static let mediaExtensions: Set<String> = ["mp4", "m4v", "mov", "webm", "mkv", "avi", "ts", "m3u8", "mpd",
                                                "mp3", "m4a", "aac", "wav", "flac", "ogg", "opus"]
 
@@ -61,6 +63,7 @@ enum VideoLinks {
         guard looksLikeURL(text), let u = URL(string: text), let host = u.host?.lowercased(), !host.isEmpty else { return .other }
         if parseYouTube(text) != nil || isYouTubePlaylist(text) { return .video }
         if host.contains("youtube.com") || host.contains("youtu.be") { return .other }   // channel, home, feed pages
+        if host == "open.spotify.com" { return spotifyInstalled && SpotifyLink.uri(text) != nil ? .video : .other }   // songs/episodes
         if mediaExtensions.contains(u.pathExtension.lowercased()) { return .video }
         return isVideoSite(host) ? .maybe : .other
     }
@@ -91,6 +94,7 @@ enum VideoLinks {
         if url.hasPrefix("/") || url.hasPrefix("file://") { return "File" }
         guard let host = URL(string: url)?.host?.lowercased() else { return "" }
         if host.contains("youtube.com") || host.contains("youtu.be") { return "YouTube" }
+        if host == "open.spotify.com" { return "Spotify" }
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 }

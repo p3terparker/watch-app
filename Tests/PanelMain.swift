@@ -226,6 +226,8 @@ final class FixtureMusicApp: MusicAppControl {
         completion(true)
     }
     override func reveal(_ bundleID: String) { revealed.append(bundleID) }
+    var spotifyScripts: [String] = []
+    override func playSpotify(_ script: String, completion: @escaping (Bool) -> Void) { spotifyScripts.append(script); completion(true) }
 }
 let fixtureMusic = FixtureMusicApp()
 panel.musicControl = fixtureMusic
@@ -550,6 +552,83 @@ if let player = fixturePlayer {
 }
 panel.nowPlayingChanged(nil)
 check(panel.nowPlayingRow.isHidden, "nothing playing hides the row")
+// Up Next under the music window (3.21): Play Next / Play Later on rows; while Music plays, additions wait for its song,
+// play in Watch (a file in the music window, a video in a video window beside it), then Music carries on. Fixture Music only.
+let queueRowMenu = panel.linkMenu("https://youtu.be/fixture", title: "Fixture", removable: true).items.map(\.title)
+check(Array(queueRowMenu.prefix(3)) == ["Play", "Play Next", "Play Later"], "rows offer Play Next and Play Later under Play: \(queueRowMenu)")
+check(!panel.linkMenu("https://open.spotify.com/track/6rqhFgbbKwnb9MLmUQDhG6", title: nil, removable: false).items.map(\.title).contains("Download"),
+      "no Download for a Spotify link")
+func drawerTitles(_ d: QueueDrawer) -> [String] { d.rows.compactMap { if case .item(let item, _) = $0 { return item.title }; return nil } }
+func windowSnapshot(_ window: NSWindow, _ name: String) {
+    guard let view = window.contentView else { return }
+    view.layoutSubtreeIfNeeded(); pump()
+    guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+    view.cacheDisplay(in: view.bounds, to: rep)
+    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent(name + ".png"))
+}
+if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
+    let tone = URL(fileURLWithPath: video).deletingLastPathComponent().appendingPathComponent("a.m4a").path
+    var ending = nowPlayingFixture("Ending Song", square)
+    ending.duration = 200; ending.elapsed = 198.8; ending.elapsedAt = Date(); ending.rate = 1
+    panel.nowPlayingChanged(ending); pump(0.2)
+    fixtureMusic.performed = []
+    let up = panel.upNext
+    up.appIsRunning = { _ in true }                     // fixture Music "runs" (the real app never does here)
+    panel.enqueue([QueueItem(url: tone, title: "Fixture Tone")], .later); pump(0.5)
+    check(up.queue?.handBack == "com.apple.Music" && up.queue?.current?.source == .music && up.queue?.sections().playingNext.map(\.title) == ["Fixture Tone"],
+          "while Music plays, Play Later waits for its song")
+    check(up.engine == .external("com.apple.Music") && fixtureMusic.performed.isEmpty, "nothing is sent to Music yet")
+    let musicWindow = panel.artworkWindow!
+    let drawer = panel.queueDrawer
+    check(musicWindow.window.isVisible && drawer?.isShown == true, "the music window opens with Up Next under it")
+    if let d = drawer {
+        check(drawerTitles(d) == ["Ending Song", "Fixture Tone"], "the list: Music's song now, the file next: \(drawerTitles(d))")
+        check(d.rows.contains { if case .note(let text, _, _) = $0 { return text.contains("Continue in Music") }; return false }, "then: continue in Music")
+        let w = d.window.frame, m = musicWindow.window.frame
+        check(w.maxY <= m.minY || w.minY >= m.maxY, "the list sits under (or above) the window, never over it (\(w) vs \(m))")
+        check(abs(w.width - max(QueueDrawer.minWidth, m.width)) < 1, "as wide as the window, at least 300 pt")
+        windowSnapshot(d.window, "up-next")
+    }
+    // Music moves on to its own next song: Watch pauses it there, from the start, and plays the file in the music window.
+    musicBroadcast(["Name": "Music's Next", "Artist": "Fixture Artist", "Album": "Fixture Album", "Player State": "Playing", "Total Time": 180_000])
+    pump(0.5)
+    check(fixtureMusic.performed.map { $0.request } == [.command(.pause), .seek(0)] && fixtureMusic.performed.allSatisfy { $0.app == "com.apple.Music" },
+          "at the song's end Watch pauses Music on its next song, rewound: \(fixtureMusic.performed)")
+    check(up.engine == .native && musicWindow.info?.appBundleID == UniversalQueue.ownID, "the file plays in Watch, shown in the music window")
+    check(waitFor(6) { (musicWindow.info?.position(at: Date()) ?? 0) > 0.5 && musicWindow.info?.isPlaying == true }, "Watch's own player is playing it")
+    musicWindow.pointerMoved(at: NSPoint(x: 20, y: 20)); pump(0.3)
+    check(musicWindow.controls.shuffle.isHidden && !musicWindow.controls.volume.isHidden, "Watch's own item: no shuffle/repeat (those are the apps'), Watch's volume")
+    viewerSnapshot("music-window-own-item")
+    musicWindow.controls.playPause.performClick(nil); pump(0.3)
+    check(musicWindow.info?.isPlaying == false && fixtureMusic.performed.count == 2, "⏯ pauses Watch's player, not Music")
+    musicWindow.controls.playPause.performClick(nil); pump(0.2)
+    // A video queued next opens in a video window beside the music window and runs from the queue.
+    let before = panel.windowManager.players.count
+    up.insert([QueueItem(url: video, title: "Fixture Video")], at: (up.queue?.pos ?? 0) + 1)
+    if let id = up.queue?.peek(1, wrap: false)?.id { up.jump(to: id) }
+    pump(0.5)
+    let queued = panel.windowManager.players.last
+    check(panel.windowManager.players.count == before + 1 && up.engine == .video && queued?.onEnded != nil,
+          "a queued video opens in a video window that the queue drives")
+    check(queued.map { !$0.window.frame.intersects(musicWindow.window.frame) } ?? false, "beside the music window, not on it")
+    check(waitFor(10) { queued?.isPlaying == true } && musicWindow.info?.title == "Fixture Video", "the music window shows the video playing beside it")
+    // Up Next runs out: the video window closes and Music carries on with its own Up Next.
+    fixtureMusic.performed = []
+    up.advance(); pump(0.4)
+    check(up.queue == nil && panel.windowManager.players.count == before, "the queue's video window closes when the queue moves on")
+    check(fixtureMusic.performed.map { $0.request } == [.command(.play)] && fixtureMusic.performed.first?.app == "com.apple.Music",
+          "when Up Next runs out, Music carries on: \(fixtureMusic.performed)")
+    check(musicWindow.info?.title == "Music's Next" && musicWindow.musicApp === fixtureMusic, "the music window follows Music again")
+    // A Spotify link plays in the Spotify app as the queue's item (fixture: the script is recorded, never run).
+    panel.nowPlayingChanged(nil); musicBroadcast(["Player State": "Stopped"]); pump(0.1)
+    panel.playSpotify("https://open.spotify.com/track/6rqhFgbbKwnb9MLmUQDhG6"); pump(0.3)
+    check(fixtureMusic.spotifyScripts == [#"tell application id "com.spotify.client" to play track "spotify:track:6rqhFgbbKwnb9MLmUQDhG6""#]
+          && up.engine == .external("com.spotify.client"), "a Spotify link plays in Spotify, by its URI")
+    musicWindow.close(); pump(0.3)
+    check(up.queue == nil && panel.queueDrawer?.isShown != true, "closing the music window ends the queue and its list")
+} else {
+    print("SKIP queue playback checks: no fixture media")
+}
 panel.dropdown.appearance = NSAppearance(named: .aqua)
 snapshot("recent-light")
 panel.dropdown.setContentSize(NSSize(width: 260, height: 200)); layout()

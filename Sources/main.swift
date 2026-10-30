@@ -324,96 +324,7 @@ func probeLink(_ link: String, completion: @escaping (LinkInfo?) -> Void) {
     }
 }
 
-// ----------------------------------------------------------------------------
-// MARK: - Up Next — the list Next/Previous walk through
-// ----------------------------------------------------------------------------
-// Every player window has one (built on demand, see PlayerWindowController.ensureQueue): the panel list a
-// video was started from (a playlist, search results, History), what YouTube would roll into next for a
-// video opened on its own, or the other media files sitting next to a local file. Autoplay / Repeat /
-// Shuffle all act on this list.
-struct QueueItem: Equatable { let url: String; let title: String? }
-enum RepeatMode: String { case off, all, one }
-
-struct PlayQueue {
-    enum Kind { case list, recommended, folder }
-    let kind: Kind
-    let name: String                  // shown as the Up Next heading: "History", a playlist's title, a folder…
-    private(set) var items: [QueueItem]
-    private(set) var order: [Int]     // indices into items, in play order — identity unless shuffled
-    private(set) var pos = 0          // where we are in `order`
-    private(set) var shuffled = false
-
-    init(kind: Kind, name: String, items: [QueueItem], startAt: Int = 0, shuffled: Bool = false) {
-        self.kind = kind; self.name = name; self.items = items
-        self.order = Array(items.indices)
-        self.pos = items.isEmpty ? 0 : min(max(0, startAt), items.count - 1)
-        if shuffled { setShuffle(true) }
-    }
-    var currentIndex: Int { order.indices.contains(pos) ? order[pos] : -1 }
-    var current: QueueItem? { items.indices.contains(currentIndex) ? items[currentIndex] : nil }
-    private func target(_ delta: Int, wrap: Bool) -> Int? {
-        guard !order.isEmpty else { return nil }
-        let p = pos + delta
-        if order.indices.contains(p) { return p }
-        guard wrap, order.count > 1 else { return nil }
-        return p < 0 ? order.count - 1 : 0
-    }
-    func peek(_ delta: Int, wrap: Bool) -> QueueItem? { target(delta, wrap: wrap).map { items[order[$0]] } }
-    @discardableResult mutating func step(_ delta: Int, wrap: Bool) -> QueueItem? {
-        guard let p = target(delta, wrap: wrap) else { return nil }
-        pos = p
-        return items[order[p]]
-    }
-    mutating func jump(toItem i: Int) -> QueueItem? {
-        guard let p = order.firstIndex(of: i) else { return nil }
-        pos = p
-        return items[i]
-    }
-    // Shuffle randomizes everything around whatever is playing, which stays put and keeps playing; turning it
-    // back off restores the real order at the same item. (Randomizing only what's "behind" the cursor would
-    // strand the items above a list you joined in the middle — they'd never come up.)
-    mutating func setShuffle(_ on: Bool) {
-        let here = max(0, currentIndex)
-        guard items.count > 1 else { shuffled = on; return }
-        if on {
-            order = [here] + items.indices.filter { $0 != here }.shuffled()
-            pos = 0
-        } else {
-            order = Array(items.indices)
-            pos = here
-        }
-        shuffled = on
-    }
-    // Recommendations arrive ~25 at a time; when they run out we append the next video's own.
-    @discardableResult mutating func append(_ more: [QueueItem]) -> Int {
-        let known = Set(items.map { $0.url })
-        let fresh = more.filter { !known.contains($0.url) }
-        guard !fresh.isEmpty else { return 0 }
-        order += Array(items.count..<(items.count + fresh.count))
-        items += fresh
-        return fresh.count
-    }
-
-    // A local file's neighbours: the other media of the same kind in its folder, in Finder order.
-    // Only what AVFoundation can actually open — a .webm sitting next door would just fail to play.
-    static let videoExts: Set<String> = ["mp4", "m4v", "mov", "qt", "3gp", "3g2"]
-    static let audioExts: Set<String> = ["mp3", "m4a", "m4b", "aac", "wav", "aif", "aiff", "aifc", "caf", "flac"]
-    static func mediaKind(_ ext: String) -> Int? {
-        let e = ext.lowercased()
-        return videoExts.contains(e) ? 0 : (audioExts.contains(e) ? 1 : nil)
-    }
-    static func folder(for path: String, shuffled: Bool) -> PlayQueue? {
-        let file = URL(fileURLWithPath: path.hasPrefix("file://") ? (URL(string: path)?.path ?? path) : path)
-        guard let kind = mediaKind(file.pathExtension),
-              let names = try? FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path) else { return nil }
-        let dir = file.deletingLastPathComponent()
-        let items = names.filter { mediaKind(($0 as NSString).pathExtension) == kind }
-            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-            .map { QueueItem(url: dir.appendingPathComponent($0).path, title: ($0 as NSString).deletingPathExtension) }
-        guard items.count > 1, let start = items.firstIndex(where: { $0.url == file.path }) else { return nil }
-        return PlayQueue(kind: .folder, name: dir.lastPathComponent, items: items, startAt: start, shuffled: shuffled)
-    }
-}
+// Up Next — QueueItem / PlayQueue (the list Next/Previous walk through) — lives in Queue.swift (compiled by the tests too).
 
 // ----------------------------------------------------------------------------
 // MARK: - YouTubeUpNext — "what would play next on youtube.com"
@@ -1278,6 +1189,11 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     var autoplay = Prefs.autoplay
     var repeatMode = RepeatMode(rawValue: Prefs.repeatMode) ?? .off
     var shuffle = Prefs.shuffle
+    // Run by the universal queue (UpNext.swift), which decides what comes next: `onEnded` replaces Autoplay's step when the
+    // video ends, `onStep` replaces Next/Previous (⌘←/⌘→, the menu), and `onClosed` says the window went.
+    var onEnded: (() -> Void)?
+    var onStep: ((Int) -> Void)?
+    var onClosed: (() -> Void)?
 
     init(manager: WindowManager) {
         self.manager = manager
@@ -1811,7 +1727,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
 
     // MARK: Up Next — Next/Previous, and what happens when a video ends
     // This window can have an Up Next list as long as there's somewhere to look for one.
-    private var canQueue: Bool { isLocalFile || youtubeID != nil }
+    private var canQueue: Bool { onStep == nil && (isLocalFile || youtubeID != nil) }
     // Build the list if this window doesn't have one yet: the playlist a `list=` link carried, what
     // YouTube would play next after a lone video, or the folder a local file sits in. `done` runs either
     // way — callers check `queue` themselves.
@@ -1861,6 +1777,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     }
     // Step through Up Next. `auto` = the video ended by itself, so stay quiet when there's nowhere to go.
     private func advance(_ delta: Int, auto: Bool = false) {
+        if let step = onStep { step(delta); return }
         if queue == nil, canQueue, !auto { showLoading("Up Next…") }
         ensureQueue { [weak self] in
             guard let self = self else { return }
@@ -1889,6 +1806,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     private func itemDidEnd() {
         if let k = positionKey { markWatched(k) }
         if repeatMode == .one { player?.seek(to: .zero); player?.play(); refreshControls(); return }
+        if let ended = onEnded { ended(); return }
         guard autoplay || repeatMode == .all else { refreshControls(); return }
         advance(1, auto: true)
     }
@@ -2057,6 +1975,19 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     var showsFailure: Bool { !failureView.isHidden }
     var clickSurface: PlayerSurfaceView { surface }
     var menuTitles: [String] { playerMenu().items.map(\.title) }
+    // Driven from the music window while this video is the universal queue's current item.
+    var playbackDuration: Double? {
+        guard let d = player?.currentItem?.duration, d.isNumeric, d.seconds > 0 else { return nil }
+        return d.seconds
+    }
+    func setPaused(_ paused: Bool) { if player != nil, paused == isPlaying { togglePlay() } }
+    func seek(toSeconds t: Double) {
+        guard let p = player else { return }
+        skipTarget = nil
+        p.seek(to: CMTime(seconds: max(0, t), preferredTimescale: 600), toleranceBefore: Self.skipTolerance, toleranceAfter: Self.skipTolerance)
+        refreshControls()
+    }
+    func setPlaybackVolume(_ level: Double) { setVolume(level) }
     // A grid slot from Tile Windows. It counts as a resize, so a double-click afterwards returns to the old size.
     func moveToTile(_ f: NSRect) {
         if f.size != window.frame.size { previousSize = window.frame.size }
@@ -2093,7 +2024,10 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         resolveTask?.cancel(); resolveTask = nil
         loadToken += 1; queueToken += 1; queueWaiters = []
         teardownAVPlayer(); teardownWebView()
+        let closed = onClosed
+        onClosed = nil; onEnded = nil; onStep = nil
         manager?.removed(self)
+        closed?()
     }
 }
 
@@ -2241,6 +2175,7 @@ final class WindowManager {
 // ============================================================================
 final class DragReceiverView: NSView {
     var onDrop: ((String) -> Void)?
+    var onDropMany: (([QueueItem]) -> Void)?             // several items, or any with ⌥ held: Up Next
     override init(frame: NSRect) { super.init(frame: frame); registerForDraggedTypes([.fileURL, .URL, .string]) }
     required init?(coder: NSCoder) { fatalError() }
     // Forward ordinary clicks to the button underneath so the icon still opens the panel.
@@ -2250,6 +2185,8 @@ final class DragReceiverView: NSView {
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let pb = sender.draggingPasteboard
+        let items = QueueDrawer.items(from: pb)
+        if let many = onDropMany, items.count > 1 || (!items.isEmpty && NSEvent.modifierFlags.contains(.option)) { many(items); return true }
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL], let u = urls.first {
             onDrop?(u.isFileURL ? u.path : u.absoluteString); return true
         }
@@ -2786,6 +2723,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     var nowPlayingImage: NSImage?               // decoded once per artwork change
     var nowPlayingRow: NSStackView!
     var artworkWindow: ArtworkWindowController?
+    // The universal queue under the music window (UpNext.swift) and its drop-down list (QueueDrawer.swift).
+    lazy var upNext: UniversalQueue = makeUpNext()
+    lazy var ownControl: OwnPlaybackControl = { let c = OwnPlaybackControl(); c.queue = self.upNext; return c }()
+    var queueDrawer: QueueDrawer?
     var lastClipboardChangeCount = NSPasteboard.general.changeCount
     var clipboardTimer: Timer?
 
@@ -2841,6 +2782,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         applyHotkey(keyCode: Prefs.hotkeyKeyCode, carbonModifiers: Prefs.hotkeyCarbon)
         registerLoginItem()
         favourites.importPins(from: links)          // once: 3.12's Recent Links pins become favourites
+        VideoLinks.spotifyInstalled = NSWorkspace.shared.urlForApplication(withBundleIdentifier: SpotifyLink.bundleID) != nil
         startClipboardWatch()
         mediaMonitor.onUpdate = { [weak self] items, waiting in
             self?.mediaItems = items; self?.browsersAwaitingAccess = waiting; self?.rebuildMediaSection()
@@ -2878,6 +2820,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         nowPlaying.stopAll()
     }
     @objc func handleURLEvent(_ e: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        // glasskit-watch://queue?url=…[&url=…][&at=next|later] — onto Up Next under the music window.
+        if let raw = e.paramDescriptor(forKeyword: keyDirectObject)?.stringValue, let comps = URLComponents(string: raw),
+           comps.scheme == "glasskit-watch", comps.host == "queue", statusItem != nil {
+            let urls = (comps.queryItems ?? []).filter { $0.name == "url" }.compactMap(\.value).filter { !$0.isEmpty }
+            let next = comps.queryItems?.first { $0.name == "at" }?.value == "next"
+            enqueue(urls.map { QueueItem(url: $0) }, next ? .next : .later)
+            return
+        }
         guard let raw = e.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
               let comps = URLComponents(string: raw),
               comps.scheme == "glasskit-watch",
@@ -2901,6 +2851,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             let drag = DragReceiverView(frame: b.bounds)
             drag.autoresizingMask = [.width, .height]
             drag.onDrop = { [weak self] s in self?.play(s) }
+            drag.onDropMany = { [weak self] items in self?.enqueue(items, .later) }   // several, or ⌥-drop: Up Next
             b.addSubview(drag)
             dragView = drag
         }
@@ -3211,14 +3162,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         } else if previous != nil, previous == nowPlayingInfo?.appBundleID {
             setMusic(nil)
         }
-        artworkWindow?.setControllable(canControl(nowPlayingInfo?.appBundleID))
+        refreshControllable()
     }
     static let ownBundleIDs: Set<String> = [Bundle.main.bundleIdentifier ?? "com.jacob.watch", "com.jacob.watch"]
     private func setMusic(_ info: NowPlayingInfo?) {
         if info?.artwork != nowPlayingInfo?.artwork { nowPlayingImage = info?.artwork.flatMap { NSImage(data: $0) } }
         nowPlayingInfo = info
         rebuildNowPlayingRow()
-        if artworkWindow?.window.isVisible == true { artworkWindow?.show(info) }
+        upNext.externalChanged(info)                // a queue waiting for this song to end
+        if artworkWindow?.window.isVisible == true, !upNext.showsOwnItem { artworkWindow?.show(info) }
+        queueDrawer?.reload()
+    }
+    // The music window's buttons dim when what it shows can't be controlled (Watch's own queue items always can).
+    private func refreshControllable() {
+        artworkWindow?.setControllable(upNext.showsOwnItem || canControl(nowPlayingInfo?.appBundleID))
     }
     // Music / Spotify said their track or state changed. A new track seen only this way (a video holds the "now playing"
     // slot) gets its artwork from the app itself when Watch is allowed to ask; otherwise the window's usual grace + icon.
@@ -3231,7 +3188,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         let merged = NowPlayingInfo.merge(heard, onto: nowPlayingInfo)
         let newTrack = merged.itemKey != nowPlayingInfo?.itemKey
         setMusic(merged)
-        artworkWindow?.setControllable(canControl(app))
+        refreshControllable()
         guard newTrack, merged.artwork == nil, electedApp != app else { return }
         musicControl.artwork(app) { [weak self] data in
             guard let self = self, let data = data, var current = self.nowPlayingInfo, current.itemKey == merged.itemKey, current.artwork == nil else { return }
@@ -3243,9 +3200,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     // they hold it.
     private func canControl(_ app: String?) -> Bool {
         guard let app = app else { return false }
-        return AppVolume.supported.contains(app) || app == electedApp
+        return AppVolume.supported.contains(app) || app == electedApp || app == UniversalQueue.ownID
     }
     private func send(_ request: NowPlayingRequest, to app: String) {
+        if app == UniversalQueue.ownID { upNext.command(request); return }       // the queue's own item: Watch plays it
         if AppVolume.supported.contains(app) {
             musicControl.perform(request, bundleID: app) { [weak self] sent in
                 guard !sent, let self = self else { return }
@@ -3262,38 +3220,225 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     func openArtwork(fullScreen: Bool = false) {
         guard let info = nowPlayingInfo, info.artwork != nil else { return }
         let viewer = artworkWindow ?? makeArtworkWindow()
+        presentMusicWindow(viewer, upNext.ownInfo ?? info, takePanelSpot: true)
+        refreshControllable()
+        if fullScreen && !viewer.inFullScreen { viewer.toggleFullScreen() }
+    }
+    // The panel's spot when no video is there (and `takePanelSpot`: the panel then hides); otherwise beside the open
+    // windows — never on top of a video.
+    private func presentMusicWindow(_ viewer: ArtworkWindowController, _ info: NowPlayingInfo, takePanelSpot: Bool) {
         nowPlaying.want(.viewer, true)              // before the panel lets go, so the adapter keeps running
         let panelShown = dropdown.isVisible && dropdown.isOnActiveSpace
-        // The panel's spot when no video is there; otherwise beside the open windows — never on top of a video.
         let players = windowManager.players.map { $0.window.frame }
         viewer.present(info, screen: dropdown.screen ?? statusItem?.button?.window?.screen) { [weak self] size in
             guard let self = self else { return nil }
-            if panelShown {
+            if panelShown && takePanelSpot {
                 let spot = WindowManager.frame(replacing: self.dropdown.frame, size: size)
                 if !players.contains(where: { $0.intersects(spot) }) { return spot }
             }
             return self.windowManager.freeFrame(size: size, anchor: self.statusItem)
         }
-        viewer.setControllable(canControl(info.appBundleID))
-        if panelShown { stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors() }
-        if fullScreen && !viewer.inFullScreen { viewer.toggleFullScreen() }
+        if panelShown && takePanelSpot { stopPanelSearch(); dropdown.orderOut(nil); stopPanelMonitors() }
+        else if panelShown { dropdown.makeKeyAndOrderFront(nil) }      // adding from the panel: keep typing there
     }
     private func makeArtworkWindow() -> ArtworkWindowController {
         let viewer = ArtworkWindowController()
-        viewer.onClose = { [weak self] in self?.nowPlaying.want(.viewer, false) }
+        viewer.onClose = { [weak self] in
+            self?.nowPlaying.want(.viewer, false)
+            self?.queueDrawer?.hide()
+            self?.upNext.musicWindowClosed()
+        }
         viewer.onSearch = { [weak self] q in self?.searchYouTube(for: q) }
+        viewer.onQueue = { [weak self] in self?.toggleQueueDrawer() }
+        // Double-click: the music in its app — or, for the queue's own item, the file / page / Spotify.
+        viewer.onOpenSource = { [weak self] info in
+            guard let self = self else { return }
+            if info.appBundleID == UniversalQueue.ownID { self.upNext.openSource(); return }
+            ArtworkActions.showApp(info)
+            self.musicControl.reveal(info.appBundleID)
+        }
         viewer.musicApp = musicControl
         viewer.onCommand = { [weak self, weak viewer] request in
             guard let app = viewer?.info?.appBundleID else { return }
             self?.send(request, to: app)
         }
         // New players open beside the music window, never on it (full screen is its own Space).
-        windowManager.keepClear = { [weak viewer] in
+        windowManager.keepClear = { [weak viewer, weak self] in
             guard let w = viewer?.window, w.isVisible, !w.styleMask.contains(.fullScreen) else { return [] }
-            return [w.frame]
+            guard let list = self?.queueDrawer, list.isShown else { return [w.frame] }
+            return [w.frame, list.window.frame]                // and its Up Next list
         }
         artworkWindow = viewer
         return viewer
+    }
+
+    // MARK: the universal queue — Play Next / Play Later from anywhere, played under the music window (UpNext.swift)
+    private func makeUpNext() -> UniversalQueue {
+        let q = UniversalQueue()
+        q.control = musicControl
+        q.onChange = { [weak self] in self?.queueDrawer?.reload(); self?.refreshControllable() }
+        q.show = { [weak self] info in self?.showQueueItem(info) }
+        q.openVideo = { [weak self] link, _ in
+            guard let self = self else { return nil }
+            let pc = self.windowManager.open(link, anchor: self.statusItem)
+            if !isLocalMedia(link) { self.recordLink(pc.sourceURL, probe: false) }
+            return pc
+        }
+        return q
+    }
+    // The queue's own item (Watch's audio player, or a video playing beside) in the music window — nil: back to the music app.
+    private func showQueueItem(_ info: NowPlayingInfo?) {
+        guard let info = info else {
+            guard let viewer = artworkWindow else { return }
+            viewer.musicApp = musicControl
+            if viewer.window.isVisible { viewer.show(nowPlayingInfo) }
+            refreshControllable()
+            return
+        }
+        let viewer = artworkWindow ?? makeArtworkWindow()
+        viewer.musicApp = ownControl
+        if viewer.window.isVisible { viewer.show(info) } else { presentMusicWindow(viewer, info, takePanelSpot: false) }
+        viewer.setControllable(true)
+    }
+    // Shows the music window (what the queue or the music app is playing) with the Up Next list under it.
+    func showQueue() {
+        let viewer = artworkWindow ?? makeArtworkWindow()
+        if !viewer.window.isVisible {
+            let first = upNext.queue?.current
+            let info = upNext.ownInfo ?? nowPlayingInfo
+                ?? NowPlayingInfo(title: first?.title ?? "Up Next", artist: first?.subtitle, album: nil, bundleID: UniversalQueue.ownID, isPlaying: false)
+            presentMusicWindow(viewer, info, takePanelSpot: false)
+        }
+        refreshControllable()
+        (queueDrawer ?? makeQueueDrawer()).show(under: viewer.window)
+    }
+    func toggleQueueDrawer() {
+        guard let viewer = artworkWindow, viewer.window.isVisible else { showQueue(); return }
+        (queueDrawer ?? makeQueueDrawer()).toggle(under: viewer.window)
+    }
+    private func makeQueueDrawer() -> QueueDrawer {
+        let d = QueueDrawer()
+        d.queue = { [weak self] in self?.upNext.queue }
+        // No queue yet: the song the music window follows.
+        d.nowPlaying = { [weak self] in
+            guard let info = self?.nowPlayingInfo else { return nil }
+            let source: MediaSource = info.appBundleID == SpotifyLink.bundleID ? .spotify : info.appBundleID == UniversalQueue.musicID ? .music : .audio
+            return QueueItem(url: "", title: info.title, subtitle: info.artist, duration: info.duration, source: source)
+        }
+        d.continueIn = { [weak self] in
+            guard let self = self else { return nil }
+            if let q = self.upNext.queue { return q.handBack.map(ArtworkActions.appName) }
+            guard let app = self.nowPlayingInfo?.appBundleID, AppVolume.supported.contains(app) else { return nil }
+            return ArtworkActions.appName(app)
+        }
+        d.held = { [weak self] in self?.upNext.held ?? false }
+        d.onPlay = { [weak self] id in self?.upNext.jump(to: id) }
+        d.onRemove = { [weak self] ids in self?.upNext.remove(ids) }
+        d.onMove = { [weak self] ids, position in self?.upNext.move(ids, to: position) }
+        d.onInsert = { [weak self] items, position in
+            guard let self = self else { return }
+            if let p = position, self.upNext.isRunning { self.upNext.insert(items, at: p); self.fillDetails(items) }
+            else { self.enqueue(items, .later) }
+        }
+        d.onClear = { [weak self] in self?.upNext.clearAdded() }
+        d.onResume = { [weak self] in self?.upNext.resume() }
+        d.extraMenu = { [weak self] item in self?.queueItemMenu(item) ?? [] }
+        queueDrawer = d
+        return d
+    }
+    // A queue row's own menu: where it lives, Copy Link, Favourites.
+    private func queueItemMenu(_ item: QueueItem) -> [NSMenuItem] {
+        var items: [NSMenuItem] = []
+        if item.url.hasPrefix("/") || item.url.hasPrefix("file://") {
+            let path = item.url.hasPrefix("file://") ? (URL(string: item.url)?.path ?? item.url) : item.url
+            items.append(ClosureMenuItem("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) })
+        } else if SpotifyLink.uri(item.url) != nil {
+            items.append(ClosureMenuItem("Open in Spotify") { if let u = URL(string: SpotifyLink.uri(item.url) ?? "") { NSWorkspace.shared.open(u) } })
+        } else if let page = VideoLinks.webURL(item.url) {
+            items.append(ClosureMenuItem("Open in Browser") { NSWorkspace.shared.open(page) })
+        }
+        if !item.url.isEmpty, !item.url.hasSuffix(":") {
+            let link = SpotifyLink.isSpotify(item.url) ? SpotifyLink.webURL(item.url) : item.url
+            items.append(ClosureMenuItem("Copy Link") { [weak self] in
+                let pb = NSPasteboard.general
+                pb.clearContents(); pb.setString(link, forType: .string)
+                self?.lastClipboardChangeCount = pb.changeCount
+            })
+        }
+        if item.source == .web || item.source == .file {
+            let favourite = favourites.contains(item.url)
+            items.append(ClosureMenuItem(favourite ? "Remove from Favourites" : "Add to Favourites") { [weak self] in
+                self?.setFavourite(item.url, !favourite, info: LinkInfo(title: item.title, thumbnail: item.artwork, duration: item.duration))
+            })
+        }
+        return items
+    }
+    // Play Next / Play Later from anywhere (row menus, the + buttons, ⌥Return, drops, the URL scheme). While Music or
+    // Spotify plays (and no queue runs) the items wait for its song to end, then it carries on afterwards; macOS is asked
+    // once — this is the user's own action — for Watch to pause it at that moment.
+    func enqueue(_ items: [QueueItem], _ placement: PlayQueue.Placement) {
+        guard !items.isEmpty else { return }
+        let playingApp = nowPlayingInfo.flatMap { $0.isPlaying ? $0.appBundleID : nil }
+        let route = QueueRoute.pick(queueRunning: upNext.isRunning, playingApp: playingApp)
+        let what = items.count == 1 ? "“\(items[0].title ?? QueueRowView.fallbackTitle(items[0]))”" : "\(items.count) items"
+        let go: (QueueRoute) -> Void = { [weak self] r in
+            guard let self = self else { return }
+            self.upNext.add(items, placement, route: r, current: self.nowPlayingInfo)
+            self.fillDetails(items)
+            self.showQueue()
+            switch r {
+            case .slotIn(let app): self.flash("After this song in \(ArtworkActions.appName(app)): \(what)")
+            case .add:             self.flash(placement == .next ? "Playing next: \(what)" : "Added to Up Next: \(what)")
+            case .start:           self.flash("Playing \(what)")
+            }
+        }
+        if items.contains(where: { $0.source == .spotify }) { musicControl.requestAccess(SpotifyLink.bundleID) { _ in } }
+        guard case .slotIn(let app) = route else { go(route); return }
+        musicControl.requestAccess(app) { [weak self] access in
+            if access == .granted { go(route); return }
+            go(.start)
+            self?.flash("Allow Watch to control \(ArtworkActions.appName(app)) so it can wait for the song")
+        }
+    }
+    // A link from a row or the field: a playlist link queues its videos (one flat read), anything else itself.
+    func enqueueLink(_ url: String, title: String?, info: LinkInfo? = nil, _ placement: PlayQueue.Placement) {
+        if YouTube.isPlaylistLink(url) {
+            flash("Reading the playlist…")
+            YouTube.playlist(url) { [weak self] _, videos in
+                guard let self = self else { return }
+                guard !videos.isEmpty else { self.flash("Couldn't read that playlist"); return }
+                self.enqueue(videos.map { QueueItem(url: $0.url, title: $0.title, subtitle: $0.channel.isEmpty ? nil : $0.channel,
+                                                    artwork: $0.thumbnail, duration: $0.duration) }, placement)
+            }
+            return
+        }
+        enqueue([QueueItem(url: url, title: title ?? info?.title ?? links.link(for: url)?.title,
+                           artwork: VideoLinks.thumbnail(url) ?? info?.thumbnail, duration: info?.duration)], placement)
+    }
+    // Titles and pictures for queued links that arrived bare (a drop, a pasted link): Recent Links, Spotify's oEmbed, yt-dlp.
+    private func fillDetails(_ items: [QueueItem]) {
+        for item in items where item.title == nil {
+            if let known = links.link(for: item.url), known.title != nil {
+                upNext.update(item.id, title: known.title, artwork: VideoLinks.thumbnail(item.url) ?? known.thumbnail); continue
+            }
+            if item.source == .spotify {
+                SpotifyOEmbed.info(item.url) { [weak self] info in self?.upNext.update(item.id, title: info?.title, artwork: info?.thumbnail) }
+            } else if item.source == .web {
+                probeLink(item.url) { [weak self] info in self?.upNext.update(item.id, title: info?.title, artwork: VideoLinks.thumbnail(item.url) ?? info?.thumbnail) }
+            }
+        }
+    }
+    // A Spotify link: a song or episode plays in Spotify as the queue's next item; an album, playlist or artist opens there.
+    func playSpotify(_ link: String) {
+        guard SpotifyLink.uri(link) != nil else {
+            if let u = URL(string: SpotifyLink.isSpotify(link) && link.hasPrefix("spotify:") ? link : SpotifyLink.webURL(link)) { NSWorkspace.shared.open(u) }
+            return
+        }
+        let item = QueueItem(url: link)
+        upNext.playNow([item])
+        fillDetails([item])
+        showQueue()
+        if looksLikeURL(link) { recordLink(link, probe: false) }
     }
     // "Search YouTube for …" from the Now Playing row or the artwork window: results open in the panel.
     func searchYouTube(for query: String) {
@@ -3316,8 +3461,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     private func returnHint(for query: String) -> NSTextField {
         let text: String
         switch OmniboxInput.parse(query) {
-        case .play:            text = "Return plays this link."
-        case .playlist:        text = "Return lists this playlist."
+        case .play:            text = "Return plays this link · ⌥Return adds it to Up Next."
+        case .playlist:        text = "Return lists this playlist · ⌥Return adds its videos to Up Next."
         case .search(let q):   text = "Searching YouTube for “\(q)”… Return searches now."
         case .empty:           text = ""
         }
@@ -3368,19 +3513,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         row.toolTip = url
         return row
     }
-    // A row's trailing buttons: ↗ opens the video's page in the browser (a YouTube video where you left off),
-    // ⬇ downloads. Local files get only ⬇.
+    // A row's trailing buttons: + puts it on Up Next (Play Later; ⌥-click Play Next), ↗ opens the video's page in the
+    // browser (a YouTube video where you left off), ⬇ downloads. Local files get no ↗, Spotify links no ⬇.
     func rowButtons(_ url: String, title: String?) -> NSView {
+        let later = ClosureButton(symbol: "text.badge.plus", tip: "Play Later — ⌥-click: Play Next") { [weak self] _ in
+            self?.enqueueLink(url, title: title, NSEvent.modifierFlags.contains(.option) ? .next : .later)
+        }
         let dl = ClosureButton(symbol: "arrow.down.circle", tip: "Download") { [weak self] b in
             self?.popDownloadMenu(for: url, title: title, from: b)
         }
-        guard VideoLinks.webURL(url) != nil else { return dl }
-        let site = VideoLinks.site(url)
-        let open = ClosureButton(symbol: "arrow.up.right.square", tip: site == "YouTube" ? "Open in YouTube" : "Open on \(site)") { _ in
-            let resume = PlaybackPositions.shared.position(for: VideoLinks.key(url))
-            if let page = VideoLinks.webURL(url, resumeAt: resume) { NSWorkspace.shared.open(page) }
+        var views: [NSView] = [later]
+        if VideoLinks.webURL(url) != nil {
+            let site = VideoLinks.site(url)
+            let open = ClosureButton(symbol: "arrow.up.right.square", tip: site == "YouTube" ? "Open in YouTube" : "Open on \(site)") { _ in
+                let resume = PlaybackPositions.shared.position(for: VideoLinks.key(url))
+                if let page = VideoLinks.webURL(url, resumeAt: resume) { NSWorkspace.shared.open(page) }
+            }
+            views.append(open)
         }
-        let s = NSStackView(views: [open, dl]); s.spacing = 4
+        if !SpotifyLink.isSpotify(url) { views.append(dl) }           // Spotify's audio is the app's (DRM)
+        let s = NSStackView(views: views); s.spacing = 4
         return s
     }
     func rebuildDownloadsSection() {
@@ -3514,8 +3666,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     func linkMenu(_ url: String, title: String?, removable: Bool, info: LinkInfo? = nil, play playAction: (() -> Void)? = nil) -> NSMenu {
         let m = NSMenu()
         m.addItem(ClosureMenuItem("Play") { [weak self] in if let p = playAction { p() } else { self?.play(url) } })
-        let dl = NSMenuItem(title: "Download", action: nil, keyEquivalent: "")
-        dl.submenu = downloadMenu(for: url, title: title); m.addItem(dl)
+        // Up Next under the music window (UpNext.swift): right after what's playing, or after your other additions.
+        m.addItem(ClosureMenuItem("Play Next") { [weak self] in self?.enqueueLink(url, title: title, info: info, .next) })
+        m.addItem(ClosureMenuItem("Play Later") { [weak self] in self?.enqueueLink(url, title: title, info: info, .later) })
+        if !SpotifyLink.isSpotify(url) {
+            let dl = NSMenuItem(title: "Download", action: nil, keyEquivalent: "")
+            dl.submenu = downloadMenu(for: url, title: title); m.addItem(dl)
+        }
         m.addItem(.separator())
         m.addItem(ClosureMenuItem("Copy Link") { [weak self] in
             let pb = NSPasteboard.general
@@ -3612,6 +3769,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             if let i = highlighted, i < rows.count { liveSearch.cancel(); rows[i].onClick?() } else { submitField() }
             return true
         case #selector(NSResponder.cancelOperation(_:)): escapePressed(); return true
+        case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):   // ⌥Return: a link or file goes to Up Next
+            switch OmniboxInput.parse(searchField.stringValue) {
+            case .play(let link), .playlist(let link):
+                liveSearch.cancel()
+                searchField.stringValue = ""; fieldTextChanged()
+                enqueueLink(link, title: nil, .later)
+            default: submitField()
+            }
+            return true
         default: return false
         }
     }
@@ -3968,6 +4134,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         liveSearch.cancel()
         let input = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }
+        if SpotifyLink.isSpotify(input) { playSpotify(input); return }       // the Spotify app plays it, as Up Next's item
         let local = isLocalMedia(input)
         guard local || looksLikeURL(input) else { flash("Not a recognizable video link"); return }
         // The first video turns the panel into the player: it opens on the panel's spot and the panel hides
@@ -3986,6 +4153,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         links.add(url)
         rebuildClipSection()
         guard probe, links.link(for: url)?.title == nil else { return }
+        if SpotifyLink.isSpotify(url) {                       // yt-dlp can't read Spotify; its public oEmbed can
+            SpotifyOEmbed.info(url) { [weak self] info in
+                guard let self = self, let info = info else { return }
+                self.links.update(url, with: info); self.rebuildClipSection()
+            }
+            return
+        }
         probeLink(url) { [weak self] info in
             guard let self = self, let info = info else { return }
             self.links.update(url, with: info); self.rebuildClipSection()
