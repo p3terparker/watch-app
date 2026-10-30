@@ -685,4 +685,5 @@ Sources and tests are at the repository root. `scripts/watch_build.py` handles t
 - `Sources/PlayerZones.swift` — `VolumeGesture` (relative drag, slop, span), `VolumeHover.zone`.
 - `Sources/ThinSlider.swift` — `ThinSlider.relative`, `DragButton` (click vs sideways drag; `GlyphButton` is one), used by the music window's speaker and `PlayerControlBar.muteButton`.
 - `Sources/Marquee.swift` (pure, tested) / `Sources/MenuBarTicker.swift` — the ticker; `AppDelegate.refreshTicker/tickerSettingChanged`, `Prefs.showTicker`, `SettingsController.tickerChanged`.
+- `scripts/watch-update.sh` — the Mac-side updater (Current build or `--stable`; `--install-agent` for the launchd agent; `--dry-run`).
 - `Sources/main.swift` `PlayerSurfaceView.dragIsResize/onResizeDrag` — a drag resizes the picture in full screen instead of moving the window.

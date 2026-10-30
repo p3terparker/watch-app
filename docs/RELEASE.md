@@ -33,3 +33,19 @@ The workflow takes the installer already attached to the current build (it doesn
 Builds are signed ad hoc and not notarized, and nothing here sets up notarization. The first-run notes tell people how to get past Gatekeeper. `./check.sh --release` only checks that a built bundle meets the bar for a signed and notarized release (Developer ID, hardened runtime); it doesn't sign anything.
 
 Don't claim support for something that hasn't been run: a clean Mac, the oldest macOS, real Intel hardware. Record what's been tried and what hasn't in [AUDIT.md](AUDIT.md).
+
+## Testing builds on a Mac without the dmg dance
+
+`scripts/watch-update.sh` replaces the installed Watch with the newest **Current build** (or, with `--stable`, the release marked
+Latest). It downloads the disk image with `curl`, so macOS never marks it as quarantined and shows no "unidentified developer"
+dialog, checks the SHA-256 the build workflow prints in the release notes, quits Watch, replaces the app where it lives and opens
+it again. Settings stay (they are in your user preferences). One-time setup that also keeps it updated in the background (every
+10 minutes, with a notification when it has updated):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/p3terparker/watch-app/main/scripts/watch-update.sh -o /tmp/watch-update.sh && bash /tmp/watch-update.sh --install-agent
+```
+
+By hand afterwards: `~/Library/Application\ Support/Watch\ Updater/watch-update` (`--dry-run` to look, `--force` to reinstall,
+`--uninstall-agent` to stop the background checks). This never makes a stable release: that is still the Promote to stable
+workflow, run only when the owner says so.
