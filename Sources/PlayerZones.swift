@@ -26,3 +26,20 @@ enum PlayerZone: Equatable {
         }
     }
 }
+
+// The music window's clicks (3.20): a single click anywhere plays/pauses, so only double-clicks have zones — narrow strips
+// at the far left/right edges skip ∓10 s, and anywhere else opens the source in its app. A strip is 15% of the width but
+// at least 36 pt (never more than a third). Points are AppKit view coordinates. Pure, so `test.sh` covers it.
+enum MusicZone: Equatable {
+    case skipBack, skipForward, main
+    static let stripFraction: CGFloat = 0.15, minStrip: CGFloat = 36
+
+    static func strip(width: CGFloat) -> CGFloat { min(width / 3, max(minStrip, width * stripFraction)) }
+    static func at(_ p: CGPoint, in size: CGSize) -> MusicZone {
+        guard size.width > 0 else { return .main }
+        let s = strip(width: size.width)
+        if p.x < s { return .skipBack }
+        if p.x >= size.width - s { return .skipForward }
+        return .main
+    }
+}

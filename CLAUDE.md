@@ -1,6 +1,6 @@
 # Watch App
 
-A "plays almost any video" menu-bar player. **Current: v3.19.**
+A "plays almost any video" menu-bar player. **Current: v3.20.**
 Binary `Watch` · bundle `com.jacob.watch` · hotkey **⌥⌘Y** ·
 frameworks: Cocoa, WebKit, Carbon, ServiceManagement, **AVKit, AVFoundation**.
 
@@ -77,6 +77,14 @@ Music/Spotify commands by AppleScript to that app, `MusicAppControl`) and uses t
 (centre = play/pause, sides ∓10 s, top/bottom middle = full screen). `WindowManager.freeFrame`/`keepClear`: players and the
 music window open beside each other, never on top (cascade only when the screen is full). Pure parts in `Sources/StreamSupport.swift` (tested). UX_SPEC's **Always works** list
 is checked by `Tests/panel.py` with an FFmpeg-made fixture video and fixture renditions.
+**3.20 (music window only):** the controls are **one row** under the caption (`ArtworkLayout.controlRow`, pure + tested:
+⏮ ⏯ ⏭ · elapsed · timeline · remaining · 🔀 🔁 · volume, dropping parts in a fixed order when narrow), shown on hovering
+**anywhere** over the window and fading `exitGrace` (1 s) after it leaves. 🔀/🔁 set **Music's/Spotify's own** shuffle and
+repeat (`AppVolume.modesScript`/`shuffleScript`/`repeatScript`, `AppRepeat`, `AppModes`; `MusicAppControl.modes`/`setMode`,
+same Automation rules as the volume). Clicks use `MusicZone` (`Sources/PlayerZones.swift`): a click anywhere = play/pause
+after `clickDelay` (the double-click interval), double-click = `openSource` (bring the app forward / launch it; Music reveals
+the track when already allowed), double-click in far-edge strips (15%, ≥36 pt) = ∓10 s. Full screen only via F/⌃⌘F/menu.
+Pushes whose commit message contains `[no preview]` are built and tested but don't replace the preview (`build.yml`).
 
 **Gotchas (see GOTCHAS.md):** never AppleScript an app by name unless it's running (uninstalled names pop a
 "Where is …?" chooser) and never send Apple Events without checking `AEDeterminePermissionToAutomateTarget`

@@ -1,6 +1,6 @@
 # Watch — where everything lives
 
-A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift`, `ArtworkWindow.swift`, `ArtworkStyle.swift` and `StreamSupport.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.19** — native AVKit playback for YouTube (HD + live), in-app
+A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift`, `ArtworkWindow.swift`, `ArtworkStyle.swift` and `StreamSupport.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.20** — native AVKit playback for YouTube (HD + live), in-app
 downloads, YouTube search / History / Playlists in the panel (absorbed from the retired Tube app), an
 **Up Next** list per player window (Next/Previous · Autoplay · Repeat All/One · Shuffle), and a small library:
 watched marks, Favourites and playlist progress — plus a **Now Playing** row showing what other apps play, whose artwork
@@ -22,14 +22,16 @@ opens in a window that follows the music. See `docs/FEATURES.md` for the feature
   windows, centred, short last row centred) and `readingOrder(_:columns:)` (which window takes which slot).
   Foundation + CoreGraphics only; `test.sh` covers it.
 - `Sources/PlayerZones.swift` — `PlayerZone.at(_:in:)`: which third of the player a click hit (top row + bottom middle
-  = resize, centre = play/pause, left/right below the top = skip back/forward). Foundation + CoreGraphics; `test.sh` covers it.
+  = resize, centre = play/pause, left/right below the top = skip back/forward), and the music window's `MusicZone.at(_:in:)`
+  (3.20: far-edge strips, 15% of the width ≥ 36 pt, skip; the rest is `.main`). Foundation + CoreGraphics; `test.sh` covers it.
 - `Sources/NowPlaying.swift` — what another app is playing (see "Now Playing" below): `NowPlayingInfo` (+ `parse(line:ignoring:)`,
   file naming), `LineBuffer`, `NowPlayingAdapter` (bundled paths, arguments, clean environment) and `NowPlayingMonitor` (the
   demand-driven adapter process). Foundation only; `test.sh` covers it with fixture lines and a `/bin/sh` stand-in.
 - `Sources/ArtworkWindow.swift` — `ArtworkActions` (Copy / Save / Open in Preview / Show ‹App› / the shared menu items) and
   `ArtworkWindowController` (the floating artwork window, incl. full screen) with its views.
 - `Sources/ArtworkStyle.swift` — full-screen look: `ArtworkPalette.gradient` (the artwork's two main colours from a small RGBA
-  sample, toned for white text) and `ArtworkLayout.fullScreen` (artwork + caption rects). Foundation (+ CoreGraphics);
+  sample, toned for white text), `ArtworkLayout.fullScreen` (artwork + caption rects) and `ArtworkLayout.controlRow` (the music
+  window's one row of controls, 3.20). Foundation (+ CoreGraphics);
   `test.sh` covers it.
 - `Sources/StreamSupport.swift` — `StreamLadder` (the lower H.264 renditions to offer beside yt-dlp's pick; the resolution cap
   for a video area; the "720p" label), `PlaybackFailure` (does yt-dlp's error want a signed-in viewer; the reason worth
@@ -270,9 +272,11 @@ run only from a click on the artwork window's controls (`NowPlayingRemote`); `te
   scale (240 pt … min(600 pt, 70% of the screen height)). `show(_:)` (every update while visible): new artwork cross-fades
   (0.25 s); a new track without artwork keeps the old picture `placeholderDelay` (1.5 s) then shows the app icon; nothing
   playing keeps the picture and says "Not playing"; `fitAspect` keeps the top-left corner when the ratio changes. Hover fades
-  in the caption (`GradientView`) and "…". Input goes through the player's own `PlayerSurfaceView` (`surface`) and `PlayerZone`:
-  `clicked` (centre → `playPause` + `CentreFlashView` ▶/⏸), `multiClicked` (left/right → `skip(∓10)`, stacking on `seekTarget`;
-  top / bottom middle double-click → `toggleFullScreen`), `handleKey` (Space, ←/→ ±5 s, F / ⌃⌘F, Esc, ⌘W), right-click → menu,
+  in the caption (`GradientView`) and "…". Input goes through the player's own `PlayerSurfaceView` (`surface`) with the
+  music window's `MusicZone` (3.20): `clicked` (anywhere → `pendingClick` after `clickDelay` = the double-click interval
+  + 0.05 s → `playPause` + `CentreFlashView` ▶/⏸), `multiClicked` (cancels the pending click; far-edge strips → `skip(∓10)`,
+  stacking on `seekTarget`; anywhere else a double-click → `openSource`: `onOpenSource` hook in tests, else
+  `ArtworkActions.showApp` + `MusicAppControl.reveal`), `handleKey` (Space, ←/→ ±5 s, F / ⌃⌘F, Esc, ⌘W), right-click → menu,
   `onPointer` → `pointerMoved(at:)`. `ArtworkContentView` only lays everything out on every size change (`setFrameSize` →
   `layoutViews`); `ArtworkImageView` never takes clicks; `windowShouldZoom` is false. `close()` leaves
   full screen first. Menu (`makeMenu`): Close · Enter/Exit Full Screen · Full-Screen Background ▸ Artwork Colours / Black · actions.
@@ -283,18 +287,24 @@ run only from a click on the artwork window's controls (`NowPlayingRemote`); `te
   caption centred under it (larger, no gradient), "…" clear of the menu bar. `ArtworkBackgroundView` shows
   `ArtworkWindowController.palette` (16×16 sRGB sample → `ArtworkPalette`) as a diagonal gradient, or black (placeholder / Black),
   cross-fading on changes. Idle: caption, "…" and the pointer hide after `idleDelay` (2.5 s) of no movement.
-- **Playback controls** (`ArtworkControlsView`, build 50) — `pointerMoved(at:)` (from `surface.onPointer`) reveals them after
-  `revealDelay` (0.15 s) while the pointer is on the caption band (`controlsZone`: the band, grown while revealed; in full screen
-  the caption + the reserved controls row) and collapses them `collapseDelay` (0.4 s) after it leaves (at once when it leaves
-  the window), never mid-drag. Revealing grows the window's band by `ArtworkLayout.controlsHeight` and lifts the text
-  (`layoutViews(animated:)`). Timeline: `refreshControls` every 0.5 s while shown, from `NowPlayingInfo.position(at:)`; a drag
-  previews the time and its release sends `.seek` and shows the target until the app reports it (`seekHold`, 2 s). ⏯ sends play
-  or pause from the shown state and updates the shown info at once; ⏮ ⏭ send previous/next. Everything goes through `onCommand`
-  (AppDelegate `send(_:to:)`). Volume: `MusicAppControl.check` (off-main, never prompts) when revealed → `.granted`
-  (slider at the app's level; drags coalesce through `CoalescingSender`), `.undetermined` (slider; the first drag's release
-  calls `requestAccess` — macOS asks once), `.denied` (dimmed icon whose tooltip names the Automation setting), `.unsupported`
-  (not Music/Spotify, or not running: nothing). The icon toggles mute (0 ↔ last level). Layout: timeline row (times hide under
-  170pt), ⏮ ⏯ ⏭ centred, the volume at the right edge when it fits beside them (slider, else the icon alone).
+- **Playback controls** (`ArtworkControlsView`; one row since 3.20) — `pointerMoved(at:)` (from `surface.onPointer`): any
+  point over the window shows the chrome and the controls at once (`setControls(revealed: true)`); leaving (nil) schedules
+  `exitWork` after `exitGrace` (1 s; re-entry cancels it, a drag in progress re-arms it). Full screen keeps its idle hiding
+  (`idleWork`, 2.5 s, unless on `controlsZone`). Revealing grows the window's band by `ArtworkLayout.controlsHeight` (26 pt)
+  and lifts the text (`layoutViews(animated:)`). Layout: `ArtworkLayout.controlRow` (pure, `ArtworkStyle.swift`) places
+  ⏮ ⏯ ⏭ · elapsed · timeline · remaining · shuffle · repeat · speaker · slider on one line and drops, in order, the elapsed
+  time, shuffle/repeat, the slider, the remaining time and ⏮/⏭ until a 48 pt timeline fits. Timeline: `refreshControls` every
+  0.5 s while shown, from `NowPlayingInfo.position(at:)`; a drag previews the time and its release sends `.seek` and shows the
+  target until the app reports it (`seekHold`, 2 s). ⏯ sends play or pause from the shown state and updates the shown info at
+  once; ⏮ ⏭ send previous/next. Everything goes through `onCommand` (AppDelegate `send(_:to:)`). Volume:
+  `MusicAppControl.check` (off-main, never prompts) when revealed → `.granted` (slider at the app's level; drags coalesce
+  through `CoalescingSender`), `.undetermined` (slider; the first drag's release calls `requestAccess` — macOS asks once),
+  `.denied` (dimmed icon whose tooltip names the Automation setting), `.unsupported` (not Music/Spotify, or not running:
+  nothing). The icon toggles mute (0 ↔ last level). **Shuffle/repeat** (3.20): `refreshModes` after each volume check —
+  `MusicAppControl.modes` (only when granted) → `appModes` → `setModes` (lit `GlyphButton`s, `repeat.1` for repeat-one,
+  hidden when `.unsupported`, dimmed when `.denied`); a click → `changeMode` shows the new value at once, runs
+  `AppVolume.shuffleScript`/`repeatScript` through `MusicAppControl.setMode` (asks once if undetermined), reverts and beeps on
+  failure, then re-reads. `AppRepeat.next(for:)`: Music off → all → one, Spotify off ↔ all.
 - `ArtworkActions` — `copy` (original bytes under their UTI + TIFF), `save` (`NSSavePanel.runModal`, original bytes),
   `openInPreview` (one reused file in `~/Library/Caches/com.jacob.watch/artwork/`), `showApp` (`NSRunningApplication.activate`),
   `appName` / `appIcon` (cached), `menuItems`.

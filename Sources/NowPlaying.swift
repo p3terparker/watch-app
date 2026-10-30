@@ -298,8 +298,59 @@ enum AppVolume {
         default: return nil
         }
     }
+    // Double-clicking the music window: Music shows the playing song in its own window (Spotify just comes forward).
+    static func revealScript(_ bundleID: String) -> String? {
+        bundleID == "com.apple.Music" ? "tell application id \"com.apple.Music\" to reveal current track" : nil
+    }
+
+    // The app's own shuffle and repeat (the music window's 🔀 🔁) — never Watch's queue. Music has repeat-one; Spotify's
+    // scripting only has repeat on/off. The read script answers {shuffle, repeat}: Music's repeat as "off"/"all"/"one",
+    // Spotify's as a boolean (AppModes.parse).
+    static func modesScript(_ bundleID: String) -> String? {
+        switch bundleID {
+        case "com.apple.Music": return "tell application id \"com.apple.Music\" to get {shuffle enabled, (song repeat as string)}"
+        case "com.spotify.client": return "tell application id \"com.spotify.client\" to get {shuffling, repeating}"
+        default: return nil
+        }
+    }
+    static func shuffleScript(_ bundleID: String, on: Bool) -> String? {
+        switch bundleID {
+        case "com.apple.Music": return "tell application id \"com.apple.Music\" to set shuffle enabled to \(on)"
+        case "com.spotify.client": return "tell application id \"com.spotify.client\" to set shuffling to \(on)"
+        default: return nil
+        }
+    }
+    static func repeatScript(_ bundleID: String, _ mode: AppRepeat) -> String? {
+        switch bundleID {
+        case "com.apple.Music": return "tell application id \"com.apple.Music\" to set song repeat to \(mode.rawValue)"
+        case "com.spotify.client": return "tell application id \"com.spotify.client\" to set repeating to \(mode != .off)"
+        default: return nil
+        }
+    }
+
     static func percent(_ level: Double) -> Int { Int((min(1, max(0, level.isFinite ? level : 0)) * 100).rounded()) }
     static func level(percent: Int) -> Double { min(1, max(0, Double(percent) / 100)) }
+}
+
+// Music's / Spotify's repeat setting. A click on 🔁 moves to `next(for:)`: off → all → one → off in Music, off ↔ on in Spotify.
+enum AppRepeat: String, Equatable {
+    case off, all, one
+    func next(for bundleID: String) -> AppRepeat {
+        switch self {
+        case .off: return .all
+        case .all: return bundleID == "com.apple.Music" ? .one : .off
+        case .one: return .off
+        }
+    }
+}
+struct AppModes: Equatable {
+    var shuffle: Bool
+    var repeatMode: AppRepeat
+    // From the read script's two answers (AppVolume.modesScript): Music's repeat is text, Spotify's a boolean.
+    static func parse(shuffle: Bool, repeatText: String?, repeatFlag: Bool?) -> AppModes {
+        let mode = repeatText.flatMap { AppRepeat(rawValue: $0.lowercased()) } ?? (repeatFlag == true ? .all : .off)
+        return AppModes(shuffle: shuffle, repeatMode: mode)
+    }
 }
 
 // Hands `work` the newest value only, one at a time on `queue`: a slider moves far faster than an app answers Apple

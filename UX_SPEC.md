@@ -41,7 +41,7 @@ Requested 2026-10-29 after build 50 seemed to lose basics. Every change keeps th
 - ★ Player keys: Space, ←/→ ±5 s, ↑/↓ volume; ⌘←/⌘→ Up Next. ★ The volume slider slides out of the speaker.
 - ★ Resizing resizes the video, and the quality follows the window (the "…" menu shows "Playing at …p").
 - ★ Videos and the music window are separate windows that open beside each other, never on top, while the screen has room (then they cascade). A video never replaces the song in the music window.
-- ★ Music window: click the middle = play/pause; double-click the sides = ∓10 s; Space, ←/→, F, Esc. Commands reach the music app, never the video.
+- ★ Music window (3.20): a click anywhere = play/pause (after the double-click interval); double-click = the music in its app; double-click a far-edge strip = ∓10 s, stacking; Space, ←/→, F, Esc. Controls in one row under the title, shown while the pointer is over the window. Commands, shuffle and repeat reach the music app, never the video.
 - Resume where left off, Up Next, downloads, drop-to-replace and the panel's search all keep working (their own checks above).
 
 ## Build 51 (requested 2026-10-29)
@@ -51,3 +51,14 @@ Requested 2026-10-29 after build 50 seemed to lose basics. Every change keeps th
 - Music window: music sources only (allowlist of music apps, or a non-browser app reporting audio); Music/Spotify broadcasts keep it current; Music/Spotify commands by AppleScript to that app (Automation asked on the click), other apps only while they hold the slot (else dimmed).
 - Music window input = the player's `PlayerSurfaceView`/`PlayerZone`: centre click play/pause with a brief ▶/⏸, side double-clicks ∓10 s stacking, top/bottom-middle double-click full screen, Space, ←/→ ±5 s, F, Esc.
 - Placement: a new player avoids the music window; the music window opens beside players; neither replaces the other.
+
+## Watch 3.20: music window controls (requested 2026-10-29)
+
+Applies to the music window only; video windows keep their bar and click zones.
+
+- One row under the caption (title, artist line): ⏮ ⏯ ⏭ left-justified, then elapsed · timeline · remaining, then 🔀 shuffle and 🔁 repeat, then the speaker and volume slider at the right edge. As the window narrows, the elapsed time goes first, then shuffle/repeat, then the volume slider (the speaker stays), then the remaining time, then ⏮/⏭; ⏯ and the timeline stay (`ArtworkLayout.controlRow`). Full screen reserves the same single row under the caption.
+- Shuffle and repeat act on the app that's playing (Music or Spotify), never on Watch's own queue; lit while on. Music: shuffle on/off, repeat off → all → one. Spotify: shuffle on/off, repeat on/off. Read only when Automation is already allowed; the first click asks macOS once (the same per-app permission as the volume). Hidden for apps Watch can't script; dimmed with a System Settings hint when denied.
+- Reveal: hovering anywhere over the window shows the caption, "…" and the controls at once; they stay while the pointer is over the window and fade one second after it leaves (re-entering cancels), never mid-drag. Full screen keeps its 2.5 s idle hiding.
+- Clicks: a single click anywhere plays/pauses after `NSEvent.doubleClickInterval` (+0.05 s), so a double-click's first click doesn't toggle. A double-click opens the source in its app (bring it forward, launching it if it quit; Music also reveals the current song when already allowed — never a prompt). Only double-clicks in strips at the far left/right edges (15% of the width, at least 36 pt, at most a third) skip ∓10 s, stacking with more clicks. Full screen moves to F / ⌃⌘F / the "…" menu.
+
+Acceptance: deterministic `MusicZone` and control-row checks (order, one line, no overlaps, drop-out order, widths 100–376 pt, no length, unscriptable app, denied volume, long clock); shuffle/repeat scripts and repeat cycling; isolated AppKit checks for the row geometry, shuffle/repeat clicks and lit state against a fixture app, reveal anywhere + exit grace, the delayed single click (corner and bottom edge too), double-click opening the source without toggling, edge-strip skips stacking and a double-click a quarter in opening instead; manual: feel of the reveal and click timing, shuffle/repeat in real Music and Spotify.

@@ -62,6 +62,8 @@ final class GlyphButton: NSButton {
     private let pointSize: CGFloat
     private var hovering = false { didSet { tint() } }
     var dimmed = false { didSet { tint() } }               // e.g. volume the app won't let Watch set
+    // A setting that's on (shuffle, repeat) sits on a soft white pill; off shows quieter.
+    var lit: Bool? { didSet { if lit != oldValue { tint() } } }
 
     init(symbol: String, pointSize: CGFloat, tip: String) {
         self.pointSize = pointSize
@@ -75,7 +77,13 @@ final class GlyphButton: NSButton {
     }
     required init?(coder: NSCoder) { fatalError() }
     func setSymbol(_ name: String) { image = sym(name).withSymbolConfiguration(.init(pointSize: pointSize, weight: .semibold)) }
-    private func tint() { contentTintColor = NSColor.white.withAlphaComponent(dimmed ? 0.35 : hovering ? 1 : 0.85) }
+    private func tint() {
+        let off = lit == false
+        contentTintColor = NSColor.white.withAlphaComponent(dimmed ? 0.35 : hovering ? 1 : off ? 0.6 : 0.85)
+        wantsLayer = true
+        layer?.cornerRadius = 4
+        layer?.backgroundColor = lit == true ? NSColor.white.withAlphaComponent(0.22).cgColor : nil
+    }
     @objc private func fire() { onPress?() }
     override func hitTest(_ point: NSPoint) -> NSView? { alphaValue < 0.05 || isHidden ? nil : super.hitTest(point) }
     override func mouseEntered(with e: NSEvent) { hovering = true }

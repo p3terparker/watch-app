@@ -1,5 +1,21 @@
 # Watch verification
 
+## 3.20 (52) — music window controls, 2026-10-30 (preview; hands-on acceptance pending)
+
+Music window only (video windows unchanged): one row of controls under the caption (`ArtworkLayout.controlRow`), the app's
+own shuffle and repeat (`AppVolume` scripts, `MusicAppControl.modes`/`setMode`), reveal on hovering anywhere with a 1 s exit
+grace, and the `MusicZone` click model (click anywhere = play/pause after the double-click interval, double-click = open the
+source in its app, ∓10 s only in far-edge strips). Full screen moved off double-click to F / ⌃⌘F / the menu. `build.yml`
+skips publishing for commits marked `[no preview]`. No preference keys added; bundle ID, hotkey and URL handlers unchanged.
+
+### Verification
+
+- Authored in a Linux cloud session without a Swift toolchain (its download host is blocked there and running downloaded
+  compilers isn't permitted), so nothing was compiled locally. GitHub Actions on macOS is the compiler and test runner;
+  results are recorded below once the run finishes.
+- Manual (pending, needs a real Mac): reveal and click timing feel; shuffle/repeat changing real Music and Spotify settings
+  (and the one-time Automation prompt on the first click); double-click opening/revealing in Music, Spotify and Podcasts.
+
 ## 3.19 (49–51) — Now Playing artwork, 2026-10-28/29 (preview; hands-on acceptance pending)
 
 Adds the panel's Now Playing row and a floating artwork window that follows the music, with a full-screen mode over a gradient of the artwork's colours or black (`Sources/NowPlaying.swift`, `Sources/ArtworkWindow.swift`, `Sources/ArtworkStyle.swift`). macOS Now Playing is read through the bundled mediaremote-adapter (BSD-3, commit `0e82bf1c44ec39554fbfc402ec88a48c6ae2a0fd`, fetched by git and verified by commit hash), built universal for macOS 13 into `Contents/Frameworks/MediaRemoteAdapter.framework`. Only the adapter's read-only `stream` command is used, and only while the panel or the artwork window is showing. The bundle ID, preference keys (new: `showNowPlaying`, `artworkColourBackground`), hotkey and URL handler are unchanged. The prepared FFmpeg payload's fingerprint is unchanged, so existing helper caches stay valid.

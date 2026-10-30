@@ -193,9 +193,9 @@ func checkArtworkStyle() {
 
     let screen = CGSize(width: 1440, height: 900)
     let square = ArtworkLayout.fullScreen(artwork: CGSize(width: 600, height: 600), in: screen)
-    expect(square.art == CGRect(x: 441, y: 240, width: 558, height: 558), "square art: 62% of the height, centred with its caption and controls")
-    expect(square.caption == CGRect(x: 441, y: 156, width: 558, height: 64), "caption centred under the art")
-    expect(square.controls == CGRect(x: 441, y: 102, width: 558, height: 54), "controls' row reserved under the caption")
+    expect(square.art == CGRect(x: 441, y: 226, width: 558, height: 558), "square art: 62% of the height, centred with its caption and controls")
+    expect(square.caption == CGRect(x: 441, y: 142, width: 558, height: 64), "caption centred under the art")
+    expect(square.controls == CGRect(x: 441, y: 116, width: 558, height: 26), "the controls' one row reserved under the caption")
     expect(square.caption.origin.y + square.caption.size.height + ArtworkLayout.gap == square.art.origin.y, "gap between art and caption")
     expect(square.controls.origin.y + square.controls.size.height == square.caption.origin.y, "controls directly under the caption")
     let wide = ArtworkLayout.fullScreen(artwork: CGSize(width: 640, height: 360), in: screen)
@@ -205,6 +205,48 @@ func checkArtworkStyle() {
     let small = ArtworkLayout.fullScreen(artwork: CGSize(width: 100, height: 100), in: screen)
     expect(small.caption.size.width == 558 && small.art.size.width == 558, "small art is scaled up to the same spot")
     expect(ArtworkLayout.fullScreen(artwork: .zero, in: screen).art.size == CGSize(width: 558, height: 558), "unknown shape: square")
+    checkControlRow()
+}
+
+// The music window's one row of controls: ⏮ ⏯ ⏭ from the left, elapsed · timeline · remaining, shuffle · repeat, volume at
+// the right; what doesn't fit drops out in a fixed order and the timeline keeps a usable length.
+func checkControlRow() {
+    func row(_ w: CGFloat, timeline: Bool = true, long: Bool = false, modes: Bool = true, volume: ControlRowVolume = .slider) -> ControlRow {
+        ArtworkLayout.controlRow(width: w, timeline: timeline, longClock: long, modes: modes, volume: volume)
+    }
+    let wide = row(376)                                       // a 400 pt window
+    let all = [wide.previous, wide.playPause, wide.next, wide.elapsed, wide.timeline, wide.remaining, wide.shuffle, wide.repeatMode,
+               wide.volumeIcon, wide.volume].compactMap { $0 }
+    expect(all.count == 10, "a wide window shows every part")
+    expect(wide.previous!.minX == 0 && wide.previous!.maxX < wide.playPause!.minX && wide.playPause!.maxX < wide.next!.minX,
+           "⏮ ⏯ ⏭ from the left edge")
+    expect(wide.next!.maxX < wide.elapsed!.minX && wide.elapsed!.maxX <= wide.timeline!.minX && wide.timeline!.maxX <= wide.remaining!.minX,
+           "then elapsed, the timeline and remaining")
+    expect(wide.remaining!.maxX < wide.shuffle!.minX && wide.shuffle!.maxX < wide.repeatMode!.minX && wide.repeatMode!.maxX < wide.volumeIcon!.minX
+           && wide.volumeIcon!.maxX < wide.volume!.minX && wide.volume!.maxX == 376, "then shuffle, repeat and the volume at the right edge")
+    expect(all.allSatisfy { abs($0.midY - ArtworkLayout.controlsHeight / 2) <= 1 && $0.maxY <= ArtworkLayout.controlsHeight && $0.minY >= 0 },
+           "one row: everything centred on the same line")
+    for i in all.indices { for j in all.indices where j > i { expect(!all[i].intersects(all[j]), "parts \(i) and \(j) don't overlap") } }
+    expect(wide.timeline!.width >= 120, "a 400 pt window has a long timeline (\(wide.timeline!.width))")
+    let usual = row(276)                                      // the usual 300 pt window
+    expect(usual.elapsed == nil && usual.remaining != nil && usual.shuffle != nil && usual.repeatMode != nil && usual.volume != nil
+           && usual.previous != nil && usual.timeline!.width >= ArtworkLayout.minTimeline, "300 pt: only the elapsed time gives way")
+    let smaller = row(220)
+    expect(smaller.shuffle == nil && smaller.repeatMode == nil && smaller.volume != nil, "then shuffle/repeat")
+    let narrow = row(200)
+    expect(narrow.volume == nil && narrow.volumeIcon != nil && narrow.remaining != nil, "then the volume slider (the speaker stays)")
+    let tiny = row(100)
+    expect(tiny.previous == nil && tiny.next == nil && tiny.remaining == nil && tiny.playPause != nil && tiny.timeline != nil,
+           "a tiny window keeps ⏯ and the timeline")
+    expect([usual, narrow, tiny].allSatisfy { ($0.timeline?.maxX ?? 0) <= ($0.shuffle ?? $0.volumeIcon ?? CGRect(x: 10_000, y: 0, width: 0, height: 0)).minX },
+           "the timeline never runs into the right-hand parts")
+    let noLength = row(376, timeline: false)
+    expect(noLength.timeline == nil && noLength.elapsed == nil && noLength.remaining == nil && noLength.shuffle != nil, "no length: no timeline or times")
+    let other = row(376, modes: false, volume: .none)
+    expect(other.shuffle == nil && other.volumeIcon == nil && other.timeline!.maxX > 340, "an app Watch can't script: the timeline takes the room")
+    let denied = row(376, volume: .icon)
+    expect(denied.volume == nil && denied.volumeIcon != nil, "not allowed: the speaker alone")
+    expect(row(376, long: true).elapsed!.width > wide.elapsed!.width, "hour-long tracks get wider times")
 }
 
 // The artwork window's playback controls: timing from the stream, the requests they send, the app volume scripts.
@@ -320,4 +362,25 @@ func checkMusicSources() {
     expect(AppVolume.commandScript(.command(.play), bundleID: "com.google.Chrome") == nil, "no script for other apps")
     expect(AppVolume.artworkScript("com.apple.Music")?.contains("raw data of artwork 1 of current track") == true
            && AppVolume.artworkScript("com.spotify.client")?.contains("artwork url of current track") == true && AppVolume.artworkScript("x") == nil, "artwork scripts")
+    // The music window's 🔀 🔁: the app's own settings, addressed by bundle id; never Watch's queue.
+    expect(AppVolume.modesScript("com.apple.Music") == #"tell application id "com.apple.Music" to get {shuffle enabled, (song repeat as string)}"#
+           && AppVolume.modesScript("com.spotify.client") == #"tell application id "com.spotify.client" to get {shuffling, repeating}"#
+           && AppVolume.modesScript("com.apple.podcasts") == nil, "reading shuffle and repeat")
+    expect(AppVolume.shuffleScript("com.apple.Music", on: true) == #"tell application id "com.apple.Music" to set shuffle enabled to true"#
+           && AppVolume.shuffleScript("com.spotify.client", on: false) == #"tell application id "com.spotify.client" to set shuffling to false"#
+           && AppVolume.shuffleScript("com.google.Chrome", on: true) == nil, "setting shuffle")
+    expect(AppVolume.repeatScript("com.apple.Music", .one) == #"tell application id "com.apple.Music" to set song repeat to one"#
+           && AppVolume.repeatScript("com.apple.Music", .off)?.hasSuffix("song repeat to off") == true
+           && AppVolume.repeatScript("com.spotify.client", .all)?.hasSuffix("set repeating to true") == true
+           && AppVolume.repeatScript("com.spotify.client", .off)?.hasSuffix("set repeating to false") == true, "setting repeat")
+    expect(AppRepeat.off.next(for: "com.apple.Music") == .all && AppRepeat.all.next(for: "com.apple.Music") == .one
+           && AppRepeat.one.next(for: "com.apple.Music") == .off, "Music: off → all → one → off")
+    expect(AppRepeat.off.next(for: "com.spotify.client") == .all && AppRepeat.all.next(for: "com.spotify.client") == .off,
+           "Spotify: on/off only")
+    expect(AppModes.parse(shuffle: true, repeatText: "one", repeatFlag: nil) == AppModes(shuffle: true, repeatMode: .one)
+           && AppModes.parse(shuffle: false, repeatText: "ALL", repeatFlag: nil).repeatMode == .all
+           && AppModes.parse(shuffle: false, repeatText: nil, repeatFlag: true) == AppModes(shuffle: false, repeatMode: .all)
+           && AppModes.parse(shuffle: false, repeatText: "bogus", repeatFlag: nil).repeatMode == .off, "reading the answers")
+    expect(AppVolume.revealScript("com.apple.Music")?.hasSuffix("to reveal current track") == true && AppVolume.revealScript("com.spotify.client") == nil,
+           "double-click reveals the song in Music only")
 }

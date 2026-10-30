@@ -19,9 +19,12 @@ enum ArtworkActions {
         if let icon = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.icon { return icon }
         return NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID).map { NSWorkspace.shared.icon(forFile: $0.path) }
     }
-    // Brings the app forward the way the Dock would — no Apple Events, so no Automation prompt.
+    // Brings the app forward the way the Dock would — no Apple Events, so no Automation prompt — launching it again if it
+    // has quit since (the music window's double-click).
     static func showApp(_ info: NowPlayingInfo) {
-        NSRunningApplication.runningApplications(withBundleIdentifier: info.appBundleID).first?.activate(options: [])
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: info.appBundleID).first { app.activate(options: []); return }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: info.appBundleID) else { return }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
     }
     // The original bytes; only a format we can't name is re-encoded (as PNG).
     static func fileData(_ info: NowPlayingInfo) -> (data: Data, ext: String)? {
@@ -83,18 +86,24 @@ enum ArtworkActions {
 
 // The Now Playing artwork in a floating, borderless window styled like the players. It follows the music: each
 // update replaces the picture (a short cross-fade) and the caption without ordering the window front or taking
-// focus. Hovering shows the caption and "…"; right-click shows the same menu; Esc or ⌘W closes.
-// Full screen (double-click, ⌃⌘F or F, or the menu) is macOS full screen on its own Space: the artwork centred over
+// focus. Hovering anywhere shows the caption, "…" and the playback controls; right-click shows the same menu; Esc or ⌘W
+// closes. Clicks (MusicZone): a single click anywhere plays/pauses, a double-click opens the source in its app, and only
+// double-clicks in narrow strips at the far left/right edges skip ∓10 s.
+// Full screen (⌃⌘F or F, or the menu) is macOS full screen on its own Space: the artwork centred over
 // a gradient of its own colours or black (Full-Screen Background ▸, `Prefs.artworkColourBackground`) with the caption
 // under it; the caption, "…" and the pointer hide after a few idle seconds. Esc leaves full screen.
-// Playback controls (ArtworkControlsView) slide in under the caption while the pointer is on it: timeline, ⏮ ⏯ ⏭ and
-// Music's / Spotify's own volume. They act on the other app only when clicked (`onCommand` → NowPlayingRemote).
+// Playback controls (ArtworkControlsView) sit in one row under the caption: ⏮ ⏯ ⏭, the timeline, the app's own shuffle and
+// repeat, and Music's / Spotify's own volume. They act on the other app only when clicked (`onCommand` → NowPlayingRemote).
 final class ArtworkWindowController: NSObject, NSWindowDelegate {
     static let minSide: CGFloat = 240, maxSide: CGFloat = 600
     static let placeholderDelay: TimeInterval = 1.5    // Music often sends a new track's artwork just after its title
     static let idleDelay: TimeInterval = 2.5           // full screen: caption, "…" and pointer hide after this
-    static let revealDelay: TimeInterval = 0.15, collapseDelay: TimeInterval = 0.4
+    static let exitGrace: TimeInterval = 1             // caption and controls fade this long after the pointer leaves
     static let seekHold: TimeInterval = 2              // show a seek's target until the app reports it (or this long)
+    // A single click waits this long before playing/pausing, so a double-click's first click doesn't toggle too.
+    var clickDelay: TimeInterval = NSEvent.doubleClickInterval + 0.05
+    // Double-click in the middle: the source in its app. Replaceable in tests, which must never bring real apps forward.
+    var onOpenSource: ((NowPlayingInfo) -> Void)?
 
     let window: NSWindow
     var onClose: (() -> Void)?
@@ -119,11 +128,12 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     let controls = ArtworkControlsView()
     private let flashView = CentreFlashView()
     private var chromeVisible = false
-    private var revealWork: DispatchWorkItem?
-    private var collapseWork: DispatchWorkItem?
+    private var exitWork: DispatchWorkItem?
+    private var pendingClick: DispatchWorkItem?
     private var tick: Timer?
     private var seekTarget: (seconds: Double, at: Date)?
     private var volumeApp: String?                     // the app `volumeAccess` belongs to
+    private(set) var appModes: AppModes?               // that app's own shuffle/repeat, as last read or set
     private var askingVolume = false
     private var lastVolume = 0.5                       // what the speaker icon restores after muting
     private let artShadow: NSShadow = {
@@ -158,11 +168,11 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         content.frame = NSRect(x: 0, y: 0, width: side, height: side)
         content.appearance = NSAppearance(named: .darkAqua)
         content.onLayout = { [weak self] in self?.layoutViews() }
-        // Clicks, drags, keys and hover go through the player's PlayerSurfaceView, so the music window answers like a
-        // video window (PlayerZone): click the middle = play/pause; double-click the left/right side = ∓10 s; double-click
-        // the top or bottom middle = full screen (a video window switches size there).
+        // Clicks, drags, keys and hover go through the player's PlayerSurfaceView (drag anywhere moves the window), with the
+        // music window's own zones (MusicZone): a click anywhere = play/pause; double-click = the source in its app;
+        // double-click a far edge = ∓10 s.
         surface.onPointer = { [weak self] point in self?.pointerMoved(at: point) }
-        surface.onClick = { [weak self] down, _ in self?.clicked(down) }
+        surface.onClick = { [weak self] _, _ in self?.clicked() }
         surface.onMultiClick = { [weak self] point, clicks in self?.multiClicked(at: point, clicks: clicks) }
         surface.onRightClick = { [weak self] e in
             guard let self = self else { return }
@@ -199,6 +209,8 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         controls.timeline.onChange = { [weak self] value, finished in self?.scrubbed(to: value, finished: finished) }
         controls.volume.onChange = { [weak self] value, finished in self?.volumeChanged(to: value, finished: finished) }
         controls.volumeIcon.onPress = { [weak self] in self?.toggleMute() }
+        controls.shuffle.onPress = { [weak self] in self?.toggleShuffle() }
+        controls.repeatButton.onPress = { [weak self] in self?.cycleRepeat() }
         content.addSubview(controls)
         content.addSubview(flashView)
         layoutViews()
@@ -414,22 +426,20 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         if refit, pictureData != nil, let image = imageView.image { fitAspect(Self.pixelSize(image)) }   // the track may have changed
     }
 
-    // Hover shows the caption and "…"; resting on the caption (or the revealed controls) slides the controls in. In
-    // full screen they — and the pointer — hide again after idleDelay, unless the pointer is on the controls.
+    // Hovering anywhere over the window shows the caption, "…" and the playback controls at once. They stay while the
+    // pointer is over the window and fade `exitGrace` after it leaves (never mid-drag), so overshooting an edge doesn't
+    // snap them away. In full screen they — and the pointer — hide again after idleDelay, unless the pointer is on the controls.
     func pointerMoved(at point: NSPoint?) {
-        fadeChrome(visible: point != nil)
-        let over = point.map { controlsZone.contains($0) } ?? false
-        if over {
-            collapseWork?.cancel(); collapseWork = nil
-            if !controlsRevealed && revealWork == nil { revealWork = after(Self.revealDelay) { $0.revealWork = nil; $0.setControls(revealed: true) } }
-        } else {
-            revealWork?.cancel(); revealWork = nil
-            if point == nil, !controls.isInteracting { collapseWork?.cancel(); collapseWork = nil; setControls(revealed: false) }
-            else if controlsRevealed && collapseWork == nil {
-                collapseWork = after(Self.collapseDelay) { me in
-                    me.collapseWork = nil
-                    if !me.controls.isInteracting { me.setControls(revealed: false) }
-                }
+        if point != nil {
+            exitWork?.cancel(); exitWork = nil
+            fadeChrome(visible: true)
+            setControls(revealed: true)
+        } else if exitWork == nil, chromeVisible || controlsRevealed {
+            exitWork = after(Self.exitGrace) { me in
+                me.exitWork = nil
+                if me.controls.isInteracting { me.pointerMoved(at: nil); return }   // check again once the drag ends
+                me.fadeChrome(visible: false)
+                me.setControls(revealed: false)
             }
         }
         idleWork?.cancel()
@@ -490,20 +500,33 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
         }
         controls.setTime(position: position, duration: duration)
     }
-    // MARK: clicks and keys — the player's zones (PlayerZone) and keys, so music and video answer alike
-    private func clicked(_ down: NSEvent) {
-        let at = surface.convert(down.locationInWindow, from: nil)
-        guard PlayerZone.at(at, in: surface.bounds.size) == .playPause else { return }
-        playPause()
-        flashView.show(info?.isPlaying == true ? "play.fill" : "pause.fill")
+    // MARK: clicks and keys — the music window's zones (MusicZone), the player's keys
+    // A single click anywhere plays/pauses — once `clickDelay` has passed without a second click.
+    private func clicked() {
+        pendingClick?.cancel()
+        pendingClick = after(clickDelay) { me in
+            me.pendingClick = nil
+            me.playPause()
+            me.flashView.show(me.info?.isPlaying == true ? "play.fill" : "pause.fill")
+        }
     }
+    // The rest of a quick run of clicks: the far edges skip ∓10 s per click (stacking), the double-click anywhere else opens
+    // the source. Either way the run's first click doesn't play/pause.
     private func multiClicked(at point: NSPoint, clicks: Int) {
-        switch PlayerZone.at(point, in: surface.bounds.size) {
+        pendingClick?.cancel(); pendingClick = nil
+        switch MusicZone.at(point, in: surface.bounds.size) {
         case .skipBack:    skip(-10)
         case .skipForward: skip(10)
-        case .resize:      if clicks == 2 { toggleFullScreen() }
-        case .playPause:   break
+        case .main:        if clicks == 2 { openSource() }
         }
+    }
+    // The app the music comes from, brought forward (launched if it quit); Music also shows the song in its window when
+    // Watch may already script it (never asks here).
+    func openSource() {
+        guard let info = info else { return }
+        if let open = onOpenSource { open(info); return }
+        ArtworkActions.showApp(info)
+        musicApp.reveal(info.appBundleID)
     }
     // Space plays/pauses and ←/→ skip 5 s, as in the player; F or ⌃⌘F full screen; Esc leaves it (else closes); ⌘W closes.
     private func handleKey(_ e: NSEvent) -> Bool {
@@ -560,12 +583,49 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     // allowed app asks macOS once, on release, then applies.
     private func refreshVolume() {
         guard let id = info?.appBundleID else { return }
+        if id != volumeApp { appModes = nil }
         volumeApp = id
         musicApp.check(id) { [weak self] access, level in
             guard let self = self, self.volumeApp == id else { return }
             self.volumeAccess = access
             if let level = level, !self.controls.volume.isTracking { self.controls.volume.value = level; if level > 0 { self.lastVolume = level } }
             self.controls.setVolume(access: access, appName: ArtworkActions.appName(id))
+            self.refreshModes()
+        }
+    }
+
+    // The app's own shuffle and repeat. Same permission as its volume: read only when already allowed; a click asks once.
+    private func refreshModes() {
+        guard let id = volumeApp else { return }
+        controls.setModes(appModes, access: volumeAccess, appName: ArtworkActions.appName(id))
+        guard volumeAccess == .granted else { return }
+        musicApp.modes(id) { [weak self] modes in
+            guard let self = self, self.volumeApp == id, let modes = modes else { return }
+            self.appModes = modes
+            self.controls.setModes(modes, access: self.volumeAccess, appName: ArtworkActions.appName(id))
+        }
+    }
+    private func toggleShuffle() {
+        guard let id = volumeApp else { return }
+        let on = !(appModes?.shuffle ?? false)
+        changeMode(AppVolume.shuffleScript(id, on: on), app: id) { $0.shuffle = on }
+    }
+    private func cycleRepeat() {
+        guard let id = volumeApp else { return }
+        let mode = (appModes?.repeatMode ?? .off).next(for: id)
+        changeMode(AppVolume.repeatScript(id, mode), app: id) { $0.repeatMode = mode }
+    }
+    // Shows the new setting at once, then reads back what the app did (and whether macOS allowed it).
+    private func changeMode(_ script: String?, app id: String, _ change: (inout AppModes) -> Void) {
+        let before = appModes
+        var modes = appModes ?? AppModes(shuffle: false, repeatMode: .off)
+        change(&modes)
+        appModes = modes
+        controls.setModes(modes, access: volumeAccess, appName: ArtworkActions.appName(id))
+        musicApp.setMode(script, bundleID: id) { [weak self] done in
+            guard let self = self, self.volumeApp == id else { return }
+            if !done { self.appModes = before; NSSound.beep() }
+            self.refreshVolume()                    // macOS may just have allowed it: volume and modes read afresh
         }
     }
     private func volumeChanged(to value: Double, finished: Bool) {
@@ -624,7 +684,7 @@ final class ArtworkWindowController: NSObject, NSWindowDelegate {
     func windowShouldZoom(_ window: NSWindow, toFrame newFrame: NSRect) -> Bool { false }   // the hidden title bar's double-click
     func windowWillClose(_ notification: Notification) {
         placeholderToken += 1
-        idleWork?.cancel(); revealWork?.cancel(); collapseWork?.cancel(); revealWork = nil; collapseWork = nil
+        idleWork?.cancel(); exitWork?.cancel(); pendingClick?.cancel(); exitWork = nil; pendingClick = nil
         tick?.invalidate(); tick = nil
         controlsRevealed = false; chromeVisible = false
         layoutViews()
@@ -717,17 +777,20 @@ final class GradientView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-// The artwork window's playback controls, revealed by hovering its caption: a timeline with elapsed / remaining time,
-// ⏮ ⏯ ⏭ in the middle and — for an app whose volume Watch can set — that app's volume at the right. Clicks on empty
-// space fall through (the window still drags from there); nothing is clickable while it's faded out.
+// The music window's playback controls, in one row under the caption (ArtworkLayout.controlRow): ⏮ ⏯ ⏭ from the left,
+// elapsed · timeline · remaining, then the app's own shuffle and repeat and — for an app whose volume Watch can set — that
+// app's volume at the right. Clicks on empty space fall through (the window still drags and plays/pauses from there);
+// nothing is clickable while it's faded out.
 final class ArtworkControlsView: NSView {
     let timeline = ThinSlider(), volume = ThinSlider()
-    let previous = GlyphButton(symbol: "backward.fill", pointSize: 13, tip: "Previous")
-    let playPause = GlyphButton(symbol: "play.fill", pointSize: 15, tip: "Play")
-    let next = GlyphButton(symbol: "forward.fill", pointSize: 13, tip: "Next")
-    let volumeIcon = GlyphButton(symbol: "speaker.wave.2.fill", pointSize: 11, tip: "Volume")
+    let previous = GlyphButton(symbol: "backward.fill", pointSize: 11, tip: "Previous")
+    let playPause = GlyphButton(symbol: "play.fill", pointSize: 14, tip: "Play")
+    let next = GlyphButton(symbol: "forward.fill", pointSize: 11, tip: "Next")
+    let shuffle = GlyphButton(symbol: "shuffle", pointSize: 10, tip: "Shuffle")
+    let repeatButton = GlyphButton(symbol: "repeat", pointSize: 10, tip: "Repeat")
+    let volumeIcon = GlyphButton(symbol: "speaker.wave.2.fill", pointSize: 10, tip: "Volume")
     private let elapsedLabel = NSTextField(labelWithString: "0:00"), remainingLabel = NSTextField(labelWithString: "-0:00")
-    private static let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 9.5, weight: .medium)
+    private static let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium)
     var showsTimeline = true { didSet { if showsTimeline != oldValue { layoutParts() } } }
     private(set) var access: AppVolumeAccess = .unsupported
     private var longClock = false
@@ -739,10 +802,11 @@ final class ArtworkControlsView: NSView {
             label.font = Self.timeFont; label.textColor = NSColor.white.withAlphaComponent(0.6)
             addSubview(label)
         }
-        elapsedLabel.alignment = .left; remainingLabel.alignment = .right
-        for v in [timeline, previous, playPause, next, volumeIcon, volume] as [NSView] { addSubview(v) }
+        elapsedLabel.alignment = .right; remainingLabel.alignment = .left    // the times hug the timeline
+        for v in [previous, playPause, next, timeline, shuffle, repeatButton, volumeIcon, volume] as [NSView] { addSubview(v) }
         timeline.setAccessibilityLabel("Position")
         volume.setAccessibilityLabel("Volume")
+        shuffle.lit = false; repeatButton.lit = false
         layoutParts()
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -780,35 +844,37 @@ final class ArtworkControlsView: NSView {
         }
         layoutParts()
     }
+    // The app's own shuffle and repeat (nil: not known yet — shown off). Same permission as the volume: hidden for an app
+    // Watch can't script, dimmed when it isn't allowed.
+    func setModes(_ modes: AppModes?, access: AppVolumeAccess, appName: String) {
+        let shuffleOn = modes?.shuffle ?? false, repeating = modes?.repeatMode ?? .off
+        shuffle.lit = shuffleOn
+        repeatButton.lit = repeating != .off
+        repeatButton.setSymbol(repeating == .one ? "repeat.1" : "repeat")
+        for b in [shuffle, repeatButton] { b.dimmed = access == .denied }
+        if access == .denied {
+            let tip = "Watch isn't allowed to change \(appName)'s shuffle and repeat. Allow it in System Settings ▸ Privacy & Security ▸ Automation."
+            shuffle.toolTip = tip; repeatButton.toolTip = tip
+        } else {
+            let ask = access == .undetermined ? " (macOS asks once)" : ""
+            shuffle.toolTip = "Shuffle in \(appName): \(shuffleOn ? "on" : "off")\(ask)"
+            repeatButton.toolTip = "Repeat in \(appName): \(repeating == .one ? "this song" : repeating == .all ? "on" : "off")\(ask)"
+        }
+        layoutParts()
+    }
 
-    // Timeline row on top (times hide below 170 pt), buttons centred underneath; the volume takes the right edge when
-    // it fits beside them (slider, else just the icon).
     private func layoutParts() {
-        let w = bounds.width, h = bounds.height, row = h - 18
-        let times = showsTimeline && w >= 170, labelWidth: CGFloat = longClock ? 46 : 34
-        timeline.isHidden = !showsTimeline
-        elapsedLabel.isHidden = !times; remainingLabel.isHidden = !times
-        if times {
-            elapsedLabel.frame = NSRect(x: 0, y: row + 2, width: labelWidth, height: 13)
-            remainingLabel.frame = NSRect(x: w - labelWidth, y: row + 2, width: labelWidth, height: 13)
-            timeline.frame = NSRect(x: labelWidth + 4, y: row, width: max(0, w - 2 * labelWidth - 8), height: 18)
-        } else {
-            timeline.frame = NSRect(x: 0, y: row, width: w, height: 18)
-        }
-        let size: CGFloat = 26, gap: CGFloat = 10, mid = (w / 2).rounded()
-        previous.frame = NSRect(x: mid - size * 1.5 - gap, y: 2, width: size, height: size)
-        playPause.frame = NSRect(x: mid - size / 2, y: 2, width: size, height: size)
-        next.frame = NSRect(x: mid + size / 2 + gap, y: 2, width: size, height: size)
-        let clear = next.frame.maxX + 8, icon: CGFloat = 18, slider: CGFloat = 48
         let slides = access == .granted || access == .undetermined
-        volumeIcon.isHidden = access == .unsupported || w - icon < clear
-        volume.isHidden = volumeIcon.isHidden || !slides || w - icon - 4 - slider < clear
-        if volume.isHidden {
-            volumeIcon.frame = NSRect(x: w - icon, y: 6, width: icon, height: 18)
-        } else {
-            volume.frame = NSRect(x: w - slider, y: 6, width: slider, height: 18)
-            volumeIcon.frame = NSRect(x: w - slider - 4 - icon, y: 6, width: icon, height: 18)
+        let row = ArtworkLayout.controlRow(width: bounds.width, height: bounds.height, timeline: showsTimeline, longClock: longClock,
+                                           modes: access != .unsupported, volume: access == .unsupported ? .none : slides ? .slider : .icon)
+        func place(_ view: NSView, _ frame: CGRect?) {
+            view.isHidden = frame == nil
+            if let f = frame { view.frame = f }
         }
+        place(previous, row.previous); place(playPause, row.playPause); place(next, row.next)
+        place(elapsedLabel, row.elapsed); place(timeline, row.timeline); place(remainingLabel, row.remaining)
+        place(shuffle, row.shuffle); place(repeatButton, row.repeatMode)
+        place(volumeIcon, row.volumeIcon); place(volume, row.volume)
     }
 }
 
@@ -849,6 +915,35 @@ class MusicAppControl {
             let sent = access == .granted && Self.run(script) != nil
             DispatchQueue.main.async { completion(sent) }
         }
+    }
+    // The app's own shuffle and repeat, only if Watch is already allowed (never asks); nil when they can't be read.
+    func modes(_ bundleID: String, completion: @escaping (AppModes?) -> Void) {
+        guard let script = AppVolume.modesScript(bundleID), Self.isRunning(bundleID) else { completion(nil); return }
+        queue.async {
+            var modes: AppModes?
+            if Self.access(automationPermission(bundleID, ask: false)) == .granted, let result = Self.run(script), result.numberOfItems >= 2,
+               let shuffle = result.atIndex(1), let repeating = result.atIndex(2) {
+                let music = bundleID == "com.apple.Music"   // Music answers its repeat as text, Spotify as a boolean
+                modes = AppModes.parse(shuffle: shuffle.booleanValue, repeatText: music ? repeating.stringValue : nil,
+                                       repeatFlag: music ? nil : repeating.booleanValue)
+            }
+            DispatchQueue.main.async { completion(modes) }
+        }
+    }
+    // A click on 🔀 / 🔁: one of AppVolume's shuffle/repeat scripts. The user's own click, so macOS may ask once.
+    func setMode(_ script: String?, bundleID: String, completion: @escaping (Bool) -> Void) {
+        guard let script = script, Self.isRunning(bundleID) else { completion(false); return }
+        queue.async {
+            var access = Self.access(automationPermission(bundleID, ask: false))
+            if access == .undetermined { access = Self.access(automationPermission(bundleID, ask: true)) }
+            let done = access == .granted && Self.run(script) != nil
+            DispatchQueue.main.async { completion(done) }
+        }
+    }
+    // Double-click: Music shows the playing song in its window — only if Watch is already allowed.
+    func reveal(_ bundleID: String) {
+        guard let script = AppVolume.revealScript(bundleID), Self.isRunning(bundleID) else { return }
+        queue.async { if Self.access(automationPermission(bundleID, ask: false)) == .granted { _ = Self.run(script) } }
     }
     // The current track's artwork, only if Watch is already allowed: Music's image bytes, or the image at Spotify's URL.
     func artwork(_ bundleID: String, completion: @escaping (Data?) -> Void) {

@@ -219,6 +219,19 @@ expect(zone(420, 123) == .skipForward && zone(420, 240) == .skipForward, "right 
 expect(zone(220, 240) == .resize, "bottom middle resizes")
 expect(zone(146, 123) == .skipBack && zone(147, 123) == .playPause, "column edges split at a third of the width")
 expect(zone(220, 82) == .resize && zone(220, 83) == .playPause, "row edges split at a third of the height")
+// The music window: only double-clicks have zones — ∓10 s in strips at the far edges (15% of the width, at least 36 pt,
+// at most a third), the rest opens the source.
+let musicSide = CGSize(width: 300, height: 300)
+expect(MusicZone.strip(width: 300) == 45 && MusicZone.strip(width: 200) == 36 && MusicZone.strip(width: 600) == 90, "strip widths")
+expect(MusicZone.strip(width: 90) == 30, "never more than a third of a tiny window")
+expect(MusicZone.at(CGPoint(x: 0, y: 150), in: musicSide) == .skipBack && MusicZone.at(CGPoint(x: 44.9, y: 299), in: musicSide) == .skipBack,
+       "the left strip skips back, top to bottom")
+expect(MusicZone.at(CGPoint(x: 45, y: 150), in: musicSide) == .main && MusicZone.at(CGPoint(x: 254.9, y: 150), in: musicSide) == .main,
+       "everything between the strips opens the source")
+expect(MusicZone.at(CGPoint(x: 255, y: 0), in: musicSide) == .skipForward && MusicZone.at(CGPoint(x: 300, y: 150), in: musicSide) == .skipForward,
+       "the right strip skips forward")
+expect(MusicZone.at(CGPoint(x: 75, y: 150), in: musicSide) == .main, "where a video window would skip, the music window opens the source")
+expect(MusicZone.at(CGPoint(x: 10, y: 10), in: .zero) == .main, "no size: no strips")
 expect(PlayerZone.at(CGPoint(x: 500, y: -5), in: player) == .skipForward, "points just outside clamp to the nearest zone")
 expect(PlayerZone.at(.zero, in: .zero) == .resize, "an empty view has no play/skip zones")
 

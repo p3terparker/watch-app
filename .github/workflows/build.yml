@@ -89,8 +89,10 @@ jobs:
           path: dist/Watch.dmg
           retention-days: 30
 
+      # A commit message containing "[no preview]" (work in progress) is built and tested but not published, so the
+      # preview only changes when an iteration is finished.
       - name: Publish preview pre-release
-        if: startsWith(github.ref, 'refs/heads/claude/') || github.event_name == 'workflow_dispatch'
+        if: (startsWith(github.ref, 'refs/heads/claude/') && !contains(github.event.head_commit.message, '[no preview]')) || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
