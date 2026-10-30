@@ -677,7 +677,7 @@ func serviceTabs() -> NSSegmentedControl? {
     panel.browseList.arrangedSubviews.lazy.compactMap { ($0 as? NSStackView)?.arrangedSubviews.first as? NSSegmentedControl }.first
 }
 panel.searchService = .youtube
-type("fixture talk"); pump(0.42)
+type("fixture talk"); _ = waitFor(3) { panel.requests.last?.query == "fixture talk" }   // the 0.35 s debounce, however busy the runner
 let youtubeAsked = panel.requests.last
 check(youtubeAsked?.query == "fixture talk" && serviceTabs()?.selectedSegment == 0, "a search starts on YouTube, with the YouTube | Podcasts tabs")
 if let tabs = serviceTabs() {
@@ -692,7 +692,7 @@ check(rows(panel.browseList).count == 2 && serviceTabs()?.selectedSegment == 1, 
 check(serviceTabs()?.refusesFirstResponder == true, "the tabs never take the field's typing focus")
 snapshot("podcast-results")
 let youtubeCount = panel.requests.count
-type("fixture news"); pump(0.42)
+type("fixture news"); _ = waitFor(3) { panel.podcastSearches.last?.query == "fixture news" }
 check(panel.podcastSearches.last?.query == "fixture news" && panel.requests.count == youtubeCount, "typing again searches podcasts until the tab changes")
 panel.podcastSearches.last?.done([PodcastShow(title: "Fixture Talk", author: "Fixture FM", feedURL: nil, artwork: nil, appleID: "1234567890")], "")
 rows(panel.browseList).first?.onClick?()
@@ -747,7 +747,7 @@ if let video = ProcessInfo.processInfo.environment["WATCH_FIXTURE_VIDEO"] {
 func messageButton() -> NSButton? {
     panel.browseList.arrangedSubviews.compactMap { $0 as? NSStackView }.flatMap { $0.arrangedSubviews }.compactMap { $0 as? NSButton }.first
 }
-type("back in black"); pump(0.42)
+type("back in black"); _ = waitFor(3) { panel.podcastSearches.last?.query == "back in black" }
 if let tabs = serviceTabs() {
     tabs.selectedSegment = 2
     panel.searchServiceChosen(tabs)
