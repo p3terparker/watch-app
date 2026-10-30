@@ -15,7 +15,13 @@ instead of being swallowed by the next. No preference keys, bundle ID, hotkey or
 ### Verification
 
 - Authored without a local Swift toolchain; GitHub Actions on macOS compiles and tests it.
-- CI results: pending (recorded below once the run has finished).
+- Run [40995671082](https://github.com/p3terparker/watch-app/actions/runs/40995671082) (`d6c4523`): every step green on the
+  first push — type-check, `./check.sh` (unit + tooling, including the new reveal-zone and click-run checks), universal build
+  and package, bundled tools + Now Playing adapter, installer verification, GUI harness 261 checks / 0 failures (3.24: 231; the
+  new ones drive hover, the dwell, the keep zone, the hide delay, quick/late/stacked click runs). Published
+  [v3.25-preview](https://github.com/p3terparker/watch-app/releases/tag/v3.25-preview), "Watch 3.25 preview (57)", asset
+  `Watch-3.25.dmg`, 230,863,811 bytes, SHA-256 `ff4fca6173d786bedb2d611f663ff24538bfa1050d5d9e959acf6906711d1d73`. The
+  informational live YouTube step resolved 1 of 3 (bot checks from GitHub's address).
 - Manual (pending, needs a real Mac): the feel of the reveal (dwell, reach, ease in/out, the delay on leaving) with a mouse and a
   trackpad, at the default window size and a small one; that sweeping across the bottom doesn't flash the controls; dragging the
   timeline/volume out of the zone keeps them until release; the click timing (single click ≈ a third of a second, a quick
