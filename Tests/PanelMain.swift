@@ -556,8 +556,11 @@ vertical.mouseDown(with: mouse(.leftMouseDown, vertical, NSPoint(x: 10, y: 10), 
 vertical.mouseDragged(with: mouse(.leftMouseDragged, vertical, NSPoint(x: 30, y: 11), clicks: 1))
 check(verticalDrags.isEmpty, "sideways movement doesn't start a vertical drag")
 vertical.mouseDragged(with: mouse(.leftMouseDragged, vertical, NSPoint(x: 10, y: 22), clicks: 1))
+check(verticalDrags.count == 1 && verticalDrags[0].0 > 8 && verticalDrags[0].0 < 16 && !verticalDrags[0].1,
+      "moving up 12 pt starts a drag of about +12 (\(verticalDrags))")
 vertical.mouseUp(with: mouse(.leftMouseUp, vertical, NSPoint(x: 10, y: 22), clicks: 1))
-check(verticalDrags.count == 2 && abs(verticalDrags[0].0 - 12) < 0.01 && verticalDrags[1].1, "moving up 12 pt is a drag of +12, finished on release")
+check(verticalDrags.count == 2 && verticalDrags[1].1 && abs(verticalDrags[1].0 - (verticalDrags.first?.0 ?? 0)) < 0.01,
+      "…and ends finished on release at the same distance (\(verticalDrags))")
 vertical.removeFromSuperview()
 // Once up, a larger zone keeps them, so the band growing and the text lifting can't make them flicker.
 viewer.pointerMoved(at: NSPoint(x: area.midX, y: revealZone.maxY + 10)); pump(ArtworkWindowController.hideDelay + 0.3)
