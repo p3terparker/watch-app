@@ -12,8 +12,13 @@ Bundle ID, hotkey and URL handlers unchanged.
 
 ### Verification
 
-- Authored without a local Swift toolchain; GitHub Actions on macOS compiles and tests it. Results are recorded here once the
-  run finishes.
+- Authored without a local Swift toolchain; GitHub Actions on macOS compiles and tests it.
+- Run [40988748474](https://github.com/p3terparker/watch-app/actions/runs/40988748474) (`9f155d1`): every step green on the
+  first push — type-check, `./check.sh` (unit + tooling), universal build and package, bundled tools + Now Playing adapter,
+  installer verification, GUI harness 231 checks / 0 failures. Published
+  [v3.24-preview](https://github.com/p3terparker/watch-app/releases/tag/v3.24-preview), "Watch 3.24 preview (56)", DMG
+  231,304,655 bytes, SHA-256 `107da7b31fb94e337184a057939cefe929d2dca5e999f41eea7f3b82fd2aaf32`. The informational live
+  YouTube step resolved 1 of 3 (bot checks from GitHub's address).
 - Manual (pending, needs a real Mac): media keys, Control Center and AirPods with a video and with an episode; the keys going
   back to Music when only Music plays; the pause/resume with real Music and Spotify (and the one Automation prompt); Up Next
   after quitting and reopening; Finder ▸ Open With ▸ Watch on a video, an audio file, several files and a folder.
