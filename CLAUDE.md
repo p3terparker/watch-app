@@ -164,6 +164,10 @@ macOS's edge resistance. `EdgeDrag`/`EdgeAxis`/`WindowEdges` (`Sources/WindowEdg
 meets a screen's edge (frame and visible frame) from inside or another window's edge from outside; pushing `breakDistance` (24 pt) on, or a
 throw faster than `passSpeed` (1600 pt/s), goes through; pulling back lets go; a passed stop holds again once back on its side. Other
 windows: `EdgeTargets.windows` (CGWindowList bounds, layer 0, no Screen Recording needed; own child/parent skipped).
+**3.27 — long YouTube videos:** `DashHLSBridge` declares each variant's measured peak/average (`SegmentIndex`, `Sources/StreamSupport.swift`,
+tested) — yt-dlp's `tbr` is an average and AVPlayer flagged busy segments (-12318); `fetchIndex` retries once and logs a dropped rendition;
+a failure after playback started reloads and resumes (`recoverMidPlay`, once a minute). Diagnostic: `Tests/youtube_probe.py` +
+`youtube-probe.yml` (real links on GitHub's Mac — most get bot-checked there — plus 3 h and past-4 GB fixtures).
 
 **Working routine (the owner's standing rules, 2026-10-30):** for each batch of changes asked for: make them, push to the session's
 `claude/` branch (that publishes the **Current build** pre-release once the tests pass), and when the build is finalized and
