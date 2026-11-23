@@ -2329,6 +2329,7 @@ final class PlayerSurfaceView: NSView {
         let startMouse = NSEvent.mouseLocation, startOrigin = win.frame.origin
         let resizing = dragIsResize?() == true, pressed = convert(e.locationInWindow, from: nil)
         var dragging = false
+        var edges: EdgeDrag?                                // 3.27: stops at screen and window edges (WindowEdges)
         while let next = win.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
             if next.type == .leftMouseUp {
                 if !dragging { onClick?(e, next) } else if resizing { onResizeDrag?(pressed, convert(next.locationInWindow, from: nil), true) }
@@ -2339,7 +2340,36 @@ final class PlayerSurfaceView: NSView {
             if !dragging && hypot(dx, dy) < 3 { continue }
             dragging = true
             if resizing { onResizeDrag?(pressed, convert(next.locationInWindow, from: nil), false) }
-            else { win.setFrameOrigin(NSPoint(x: startOrigin.x + dx, y: startOrigin.y + dy)) }
+            else {
+                if edges == nil {
+                    edges = EdgeDrag(size: win.frame.size, origin: startOrigin, time: e.timestamp,
+                                     screens: EdgeTargets.screens(), windows: EdgeTargets.windows(besides: win))
+                }
+                win.setFrameOrigin(edges!.move(to: NSPoint(x: startOrigin.x + dx, y: startOrigin.y + dy), time: next.timestamp))
+            }
+        }
+    }
+}
+
+// What a dragged window's edges stop at (WindowEdges), read once when the drag begins: every screen, whole and clear of the
+// menu bar and Dock, and every ordinary window on screen, any app's, except this one and what moves with it (its Up Next
+// list). Window bounds need no Screen Recording permission (only names and pictures do), so this never asks for anything.
+enum EdgeTargets {
+    static func screens() -> [CGRect] { NSScreen.screens.flatMap { [$0.frame, $0.visibleFrame] } }
+    static func windows(besides win: NSWindow) -> [CGRect] {
+        var skip: Set<Int> = [win.windowNumber]
+        (win.childWindows ?? []).forEach { skip.insert($0.windowNumber) }
+        if let parent = win.parent { skip.insert(parent.windowNumber) }
+        guard let top = NSScreen.screens.first?.frame.maxY,      // CG window bounds are top-down from the main screen
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        else { return [] }
+        return list.compactMap { info in
+            guard (info[kCGWindowLayer as String] as? Int) == 0,
+                  let number = info[kCGWindowNumber as String] as? Int, !skip.contains(number),
+                  (info[kCGWindowAlpha as String] as? Double ?? 1) > 0.05,
+                  let bounds = info[kCGWindowBounds as String] as? NSDictionary,
+                  let r = CGRect(dictionaryRepresentation: bounds as CFDictionary), r.width >= 40, r.height >= 40 else { return nil }
+            return CGRect(x: r.minX, y: top - r.maxY, width: r.width, height: r.height)
         }
     }
 }
