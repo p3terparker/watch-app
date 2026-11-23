@@ -47,6 +47,10 @@ func probeIndex(_ s: StreamRef) {
     _ = spin(40) { result != nil }
     guard let idx = result ?? nil else {
         say("      index: NONE — \(rawHead(s))")
+        var again: DashHLSBridge.Index??
+        DashHLSBridge.fetchIndex(s) { again = .some($0) }
+        _ = spin(40) { again != nil }
+        say("      index, second try: \((again ?? nil) == nil ? "NONE again" : "ok — the first failure was transient")")
         return
     }
     let total = idx.segments.reduce(0) { $0 + $1.duration }
@@ -132,12 +136,59 @@ func playCheck(_ asset: AVURLAsset, indent: String) -> Bool {
     return true
 }
 
+// The player's order: the first plan that becomes ready is the one that plays.
+func runPlans(_ plans: [StreamPlan]) {
+    for (i, plan) in plans.enumerated() {
+        say("  trying plan \(i + 1):")
+        var asset: AVURLAsset?
+        var bridge: DashHLSBridge?
+        switch plan {
+        case .single(let s): asset = AVURLAsset(url: s.url, options: s.assetOptions)
+        case .split(let videos, let audio):
+            var made = false
+            let t0 = Date()
+            DashHLSBridge.make(videos: videos, audio: audio) { b, a in bridge = b; asset = a; made = true }
+            _ = spin(60) { made }
+            guard let b = bridge else { say("    bridge: NONE after \(String(format: "%.1f", Date().timeIntervalSince(t0))) s (player moves on)"); continue }
+            let sizes = b.playlists.sorted { $0.key < $1.key }.map { "\($0.key) \(mb($0.value.count))" }.joined(separator: ", ")
+            say("    bridge in \(String(format: "%.1f", Date().timeIntervalSince(t0))) s — playlists: \(sizes)")
+        }
+        guard let a = asset else { continue }
+        let ready = playCheck(a, indent: "    ")
+        withExtendedLifetime(bridge) {}
+        if ready { say("  → the player would stay on plan \(i + 1)"); return }
+    }
+    say("  → no plan played: the player shows its failure card")
+}
+
+// Long videos without YouTube: fixture renditions hours long (youtube_probe.py makes them with the bundled FFmpeg and serves
+// them by range), behind URLs as long as YouTube's, so the bridge builds playlists the size a long video gets.
+if let fixtures = ProcessInfo.processInfo.environment["WATCH_PROBE_FIXTURES"] {
+    let parts = fixtures.split(separator: "|").map(String.init)
+    let base = parts[0], pad = String(repeating: "x", count: 1200)
+    for name in parts.dropFirst() {
+        say("\n=== fixture \(name): renditions hours long, YouTube-length URLs")
+        func ref(_ file: String, _ tag: Int, video: Bool) -> StreamRef {
+            var f: [String: Any] = ["url": "\(base)\(file)?v=\(tag)&pad=\(pad)", "protocol": "https", "ext": video ? "mp4" : "m4a",
+                                    "vcodec": video ? "avc1.64001e" : "none", "acodec": video ? "none" : "mp4a.40.2",
+                                    "tbr": video ? Double(800 - tag * 150) : 16.0]
+            if video { f["width"] = 160; f["height"] = 90 }
+            return StreamRef(f)!
+        }
+        let videos = (0..<4).map { ref("v\(name).mp4", $0, video: true) }
+        let audio = ref("a\(name).m4a", 9, video: false)
+        say("    video:"); probeIndex(videos[0])
+        say("    audio:"); probeIndex(audio)
+        runPlans([.split(videos: videos, audio: audio), .split(videos: [videos[0]], audio: audio)])
+    }
+}
+
 let links = Array(CommandLine.arguments.dropFirst())
 for link in links {
     say("\n=== \(link)")
     var resolved: ResolvedStream?
     var lastError = ""
-    for attempt in 1...6 where resolved == nil {
+    for attempt in 1...3 where resolved == nil {
         var done = false
         let t0 = Date()
         resolveStream(link) { res, err in resolved = res; lastError = err; done = true }
@@ -164,27 +215,7 @@ for link in links {
             say("    \(s.height.map { "\($0)p" } ?? "audio"):"); probeIndex(s)
         }
     }
-    // The player's order: the first plan that becomes ready is the one that plays.
-    for (i, plan) in res.plans.enumerated() {
-        say("  trying plan \(i + 1):")
-        var asset: AVURLAsset?
-        var bridge: DashHLSBridge?
-        switch plan {
-        case .single(let s): asset = AVURLAsset(url: s.url, options: s.assetOptions)
-        case .split(let videos, let audio):
-            var made = false
-            let t0 = Date()
-            DashHLSBridge.make(videos: videos, audio: audio) { b, a in bridge = b; asset = a; made = true }
-            _ = spin(60) { made }
-            guard let b = bridge else { say("    bridge: NONE after \(String(format: "%.1f", Date().timeIntervalSince(t0))) s (player moves on)"); continue }
-            let sizes = b.playlists.sorted { $0.key < $1.key }.map { "\($0.key) \(mb($0.value.count))" }.joined(separator: ", ")
-            say("    bridge in \(String(format: "%.1f", Date().timeIntervalSince(t0))) s — playlists: \(sizes)")
-        }
-        guard let a = asset else { continue }
-        let ready = playCheck(a, indent: "    ")
-        withExtendedLifetime(bridge) {}
-        if ready { say("  → the player would stay on plan \(i + 1)"); break }
-    }
+    runPlans(res.plans)
 }
 say("\nprobe finished")
 exit(0)
