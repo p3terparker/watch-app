@@ -163,20 +163,22 @@ func runPlans(_ plans: [StreamPlan]) {
 
 // Long videos without YouTube: fixture renditions hours long (youtube_probe.py makes them with the bundled FFmpeg and serves
 // them by range), behind URLs as long as YouTube's, so the bridge builds playlists the size a long video gets.
+// Fixture sets: "base|label,video file,audio file,declared video kb/s;…" (Tests/youtube_probe.py serves them).
 if let fixtures = ProcessInfo.processInfo.environment["WATCH_PROBE_FIXTURES"] {
     let parts = fixtures.split(separator: "|").map(String.init)
     let base = parts[0], pad = String(repeating: "x", count: 1200)
-    for name in parts.dropFirst() {
-        say("\n=== fixture \(name): renditions hours long, YouTube-length URLs")
+    for set in parts.dropFirst().joined(separator: "|").split(separator: ";").map({ $0.split(separator: ",").map(String.init) }) where set.count == 4 {
+        let (name, vfile, afile, kbps) = (set[0], set[1], set[2], Double(set[3]) ?? 800)
+        say("\n=== fixture \(name): \(vfile) + \(afile), video declared at \(Int(kbps)) kb/s, YouTube-length URLs")
         func ref(_ file: String, _ tag: Int, video: Bool) -> StreamRef {
             var f: [String: Any] = ["url": "\(base)\(file)?v=\(tag)&pad=\(pad)", "protocol": "https", "ext": video ? "mp4" : "m4a",
                                     "vcodec": video ? "avc1.64001e" : "none", "acodec": video ? "none" : "mp4a.40.2",
-                                    "tbr": video ? Double(800 - tag * 150) : 16.0]
+                                    "tbr": video ? kbps * Double(4 - tag) / 4 : 16.0]
             if video { f["width"] = 160; f["height"] = 90 }
             return StreamRef(f)!
         }
-        let videos = (0..<4).map { ref("v\(name).mp4", $0, video: true) }
-        let audio = ref("a\(name).m4a", 9, video: false)
+        let videos = (0..<4).map { ref(vfile, $0, video: true) }
+        let audio = ref(afile, 9, video: false)
         say("    video:"); probeIndex(videos[0])
         say("    audio:"); probeIndex(audio)
         runPlans([.split(videos: videos, audio: audio), .split(videos: [videos[0]], audio: audio)])

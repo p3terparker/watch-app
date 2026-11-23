@@ -18,7 +18,7 @@ root = pathlib.Path(__file__).resolve().parents[1]
 helpers = pathlib.Path(sys.argv[1]).resolve()
 links = sys.argv[2:]
 app = json.loads((root / 'scripts/app.json').read_text())
-HOURS = [3, 10]   # fixture lengths: a long video, and one whose sidx no longer fits the bridge's first 64 KB read
+HOURS = [3]   # 3.27 probe: 3 h and 10 h both played; 10 h (sidx past 64 KB, 8.8 MB playlists) is covered
 
 
 class RangeHandler(http.server.SimpleHTTPRequestHandler):
@@ -60,10 +60,37 @@ class RangeHandler(http.server.SimpleHTTPRequestHandler):
         self.remaining = None
 
 
+def boxes(data):
+    out, offset = [], 0
+    while offset + 8 <= len(data):
+        size = int.from_bytes(data[offset:offset + 4], 'big')
+        if size < 8:
+            break
+        out.append((data[offset + 4:offset + 8].decode('latin-1'), offset, size))
+        offset += size
+    return out
+
+
+def beyond_4gb(source, target):
+    """The same rendition with its media moved past byte 4 GB (a sparse hole after the sidx, its first_offset moved to
+    match), like a 2-3 hour 1080p60 YouTube file."""
+    data = source.read_bytes()
+    _, offset, size = next(b for b in boxes(data[:1 << 20]) if b[0] == 'sidx')
+    assert data[offset + 8] == 0, 'version 0 sidx expected'
+    field = offset + 8 + 4 + 4 + 4 + 4                                   # version/flags, reference_ID, timescale, earliest_pt
+    gap = 0xFFFF0000
+    first = int.from_bytes(data[field:field + 4], 'big') + gap
+    assert first < 1 << 32
+    with open(target, 'wb') as f:
+        f.write(data[:field] + first.to_bytes(4, 'big') + data[field + 4:offset + size])
+        f.seek(offset + size + gap)
+        f.write(data[offset + size:])
+
+
 def fixtures(folder):
     """Hours-long renditions laid out like YouTube's (ftyp, moov, one sidx, moof/mdat): video in 5 s fragments, audio in 10 s."""
     ffmpeg = str(helpers / 'ffmpeg')
-    names = []
+    sets = []
     for hours in HOURS:
         seconds = str(hours * 3600)
         jobs = {
@@ -81,12 +108,20 @@ def fixtures(folder):
             else:
                 print(f'fixture {name}: {(folder / name).stat().st_size / 1048576:.1f} MB', flush=True)
         if made:
-            names.append(f'{hours}h')
-    if not names:
+            sets.append(f'{hours}h,v{hours}h.mp4,a{hours}h.m4a,800')
+    if (folder / 'v3h.mp4').exists():
+        sets.append('3h declared below its real bit rate,v3h.mp4,a3h.m4a,8')
+        try:
+            beyond_4gb(folder / 'v3h.mp4', folder / 'vbig.mp4')
+            print(f'fixture vbig.mp4: {(folder / "vbig.mp4").stat().st_size / 1e9:.2f} GB (sparse)', flush=True)
+            sets.append('3h past 4 GB,vbig.mp4,a3h.m4a,800')
+        except Exception as error:
+            print(f'fixture vbig.mp4: {error!r}', flush=True)
+    if not sets:
         return {}
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(RangeHandler, directory=str(folder)))
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    return {'WATCH_PROBE_FIXTURES': '|'.join([f'http://127.0.0.1:{server.server_port}/'] + names)}
+    return {'WATCH_PROBE_FIXTURES': f'http://127.0.0.1:{server.server_port}/|' + ';'.join(sets)}
 
 
 with tempfile.TemporaryDirectory(prefix='watch-youtube-probe-') as scratch:
