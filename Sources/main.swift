@@ -2917,7 +2917,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     private(set) var systemSource = OwnPlayback.Source.none
     private weak var systemPlayer: PlayerWindowController?
     private var lastPlayed: [ObjectIdentifier: Date] = [:]
-    private var watchWasPlaying = false
+    private var watchWasPlaying: Set<ObjectIdentifier> = []      // what of Watch's played at the last tick (a window, or the queue)
     private(set) var pausedForWatch: String?          // the music app Watch paused, to play again when Watch is done
     private var musicPlaying: [String: Bool] = [:]    // Music/Spotify's own broadcasts, whatever the Now Playing preference
     private var playerArtwork: (url: String, data: Data?)?
@@ -3523,8 +3523,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         case .player(let i): systemPlayer = players[i]; systemNowPlaying.publish(playerInfo(players[i]))
         }
         // Watch began playing: pause the music app (only if already allowed — this isn't a click). Watch is done: play it again.
-        let watchPlaying = own?.isPlaying == true || players.contains { $0.isPlaying }
-        if watchPlaying && !watchWasPlaying { pauseMusicForWatch(asking: false) }
+        // A window closed since the last tick doesn't count as still playing: closing one video and opening another within
+        // the second is a fresh start, so the music app (playing again by then) pauses for it too.
+        var watchPlaying = Set(players.filter { $0.isPlaying }.map { ObjectIdentifier($0) })
+        if own?.isPlaying == true { watchPlaying.insert(ObjectIdentifier(upNext)) }
+        let open = Set(windowManager.players.map { ObjectIdentifier($0) })
+        let stillPlaying = watchWasPlaying.filter { open.contains($0) || $0 == ObjectIdentifier(upNext) }
+        if !watchPlaying.isEmpty && stillPlaying.isEmpty { pauseMusicForWatch(asking: false) }
         watchWasPlaying = watchPlaying
         let active = !windowManager.players.isEmpty || upNext.showsOwnItem
         if let app = pausedForWatch,
@@ -3532,11 +3537,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             pausedForWatch = nil
             musicControl.performIfAllowed(.command(.play), bundleID: app) { _ in }
         }
-        let open = Set(windowManager.players.map { ObjectIdentifier($0) })
         lastPlayed = lastPlayed.filter { open.contains($0.key) }
         if windowManager.players.isEmpty && !upNext.showsOwnItem && pausedForWatch == nil {
             systemTimer?.invalidate(); systemTimer = nil
-            watchWasPlaying = false
+            watchWasPlaying = []
             systemNowPlaying.publish(nil)
         }
     }
