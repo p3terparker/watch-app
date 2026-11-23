@@ -41,7 +41,49 @@ func rawHead(_ s: StreamRef) -> String {
     return answer.text
 }
 
-func probeIndex(_ s: StreamRef) {
+// One ranged GET, as AVPlayer makes it for a segment: status, bytes, seconds.
+func fetchRange(_ s: StreamRef, _ offset: Int, _ length: Int) -> (status: Int, bytes: Int, seconds: Double) {
+    var r = URLRequest(url: s.url, timeoutInterval: 20)
+    r.setValue("bytes=\(offset)-\(offset + length - 1)", forHTTPHeaderField: "Range")
+    s.headers.forEach { r.setValue($1, forHTTPHeaderField: $0) }
+    final class Answer { var status = 0, bytes = 0, finished = false }
+    let answer = Answer(), t0 = Date()
+    URLSession.shared.dataTask(with: r) { d, resp, _ in
+        answer.status = (resp as? HTTPURLResponse)?.statusCode ?? 0; answer.bytes = d?.count ?? 0; answer.finished = true
+    }.resume()
+    _ = spin(25) { answer.finished }
+    return (answer.status, answer.bytes, Date().timeIntervalSince(t0))
+}
+
+// Does the server keep answering further into the file, and for a whole run of segments in a row?
+func rangeCheck(_ s: StreamRef, _ idx: DashHLSBridge.Index) {
+    let segs = idx.segments, n = segs.count
+    var spots: [String] = []
+    for f in [0.0, 0.1, 0.5, 0.9, 1.0] {
+        let i = min(n - 1, Int(Double(n - 1) * f)), seg = segs[i]
+        let start = segs[..<i].reduce(0) { $0 + $1.duration }
+        let r = fetchRange(s, seg.offset, seg.length)
+        spots.append("\(clock(start)) → \(r.status)\(r.bytes == seg.length ? "" : " (\(r.bytes)/\(seg.length) B)")")
+    }
+    say("      ranges: " + spots.joined(separator: ", "))
+    var total = 0, t = 0.0
+    let began = Date()
+    for (i, seg) in segs.enumerated() {
+        let r = fetchRange(s, seg.offset, seg.length)
+        guard (200..<300).contains(r.status), r.bytes == seg.length else {
+            say("      in a row: FAILED at segment \(i + 1) (\(clock(t))) — HTTP \(r.status), \(r.bytes)/\(seg.length) B, after \(mb(total)) in \(Int(Date().timeIntervalSince(began))) s")
+            return
+        }
+        total += seg.length; t += seg.duration
+        if total > 60 << 20 || Date().timeIntervalSince(began) > 75 || i == n - 1 {
+            say("      in a row: \(i + 1) segments ok, \(clock(t)) of video, \(mb(total)) in \(Int(Date().timeIntervalSince(began))) s")
+            return
+        }
+    }
+}
+
+@discardableResult
+func probeIndex(_ s: StreamRef) -> DashHLSBridge.Index? {
     var result: DashHLSBridge.Index??
     DashHLSBridge.fetchIndex(s) { result = .some($0) }
     _ = spin(40) { result != nil }
@@ -51,13 +93,14 @@ func probeIndex(_ s: StreamRef) {
         DashHLSBridge.fetchIndex(s) { again = .some($0) }
         _ = spin(40) { again != nil }
         say("      index, second try: \((again ?? nil) == nil ? "NONE again" : "ok — the first failure was transient")")
-        return
+        return again ?? nil
     }
     let total = idx.segments.reduce(0) { $0 + $1.duration }
     let end = idx.segments.last.map { $0.offset + $0.length } ?? 0
     let longest = idx.segments.map { $0.length }.max() ?? 0
     say("      index: \(idx.segments.count) segments, \(clock(total)), file ≈ \(mb(end)) (past 4 GB: \(end > Int(UInt32.max))), "
-        + "init \(idx.initLength) B, largest segment \(mb(longest))")
+        + "init \(idx.initLength) B, largest segment \(mb(longest)), peak \(idx.peak / 1000) kb/s, average \(idx.average / 1000) kb/s")
+    return idx
 }
 
 final class Watcher {
@@ -214,7 +257,8 @@ for link in links {
     for plan in res.plans {
         guard case .split(let videos, let audio) = plan else { continue }
         for s in videos + [audio] where !s.isHLS && seen.insert(s.url).inserted {
-            say("    \(s.height.map { "\($0)p" } ?? "audio"):"); probeIndex(s)
+            say("    \(s.height.map { "\($0)p" } ?? "audio") (\((s.bitrate ?? 0) / 1000) kb/s declared):")
+            if let idx = probeIndex(s) { rangeCheck(s, idx) } else { say("      raw read of the first 64 KB: \(rawHead(s))") }
         }
     }
     runPlans(res.plans)

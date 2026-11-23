@@ -49,4 +49,17 @@ func checkStreams() {
     let lines = String(decoding: trimmed, as: UTF8.self).split(separator: "\n")
     expect(trimmed.count <= PlaybackLog.limit + 200 && lines.allSatisfy { $0.hasPrefix("2027-01-15T08:00:00Z ") }, "kept under the limit, whole lines only")
 }
+
+// 3.27: the bridge declares each rendition's real peak and average bit rate (from its sidx), not yt-dlp's average.
+func checkSegmentIndex() {
+    // Three 5 s segments of 1, 3 and 2 MB, then a 0.2 s tail of 0.5 MB (20 Mb/s over that sliver).
+    let idx = SegmentIndex(initLength: 800, segments: [(800, 1_000_000, 5), (1_000_800, 3_000_000, 5), (4_000_800, 2_000_000, 5),
+                                                       (6_000_800, 500_000, 0.2)])
+    expect(idx.peak == 4_800_000, "peak = the busiest whole segment, 3 MB in 5 s (\(idx.peak))")
+    expect(abs(idx.average - 3_421_053) <= 1, "average = all bytes over all time (\(idx.average))")
+    let short = SegmentIndex(initLength: 0, segments: [(0, 100_000, 0.5), (100_000, 50_000, 0.25)])
+    expect(short.peak == 1_600_000, "only short segments: they count (\(short.peak))")
+    let empty = SegmentIndex(initLength: 0, segments: [(0, 100, 0)])
+    expect(empty.peak == 0 && empty.average == 0, "no time at all: nothing to declare, the bridge falls back to yt-dlp's figure")
+}
 enum YtDlpFixture { static let timedOut = "yt-dlp timed out" }

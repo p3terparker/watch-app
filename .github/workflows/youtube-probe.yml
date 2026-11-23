@@ -39,7 +39,7 @@ jobs:
 
       - name: Probe
         env:
-          LINKS: ${{ github.event.inputs.links || 'https://www.youtube.com/watch?v=3VB24LYsE60 https://www.youtube.com/watch?v=dQw4w9WgXcQ' }}
+          LINKS: ${{ github.event.inputs.links || 'https://www.youtube.com/watch?v=3VB24LYsE60 https://www.youtube.com/watch?v=rfscVS0vtbw https://www.youtube.com/watch?v=HXV3zeQKqGY https://www.youtube.com/watch?v=dQw4w9WgXcQ' }}
         run: |
           # shellcheck disable=SC2086 # one argument per link
           /usr/bin/python3 Tests/youtube_probe.py "${{ steps.helpers.outputs.dir }}" $LINKS

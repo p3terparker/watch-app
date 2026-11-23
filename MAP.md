@@ -1,6 +1,6 @@
 # Watch — where everything lives
 
-A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift`, `ArtworkWindow.swift`, `ArtworkStyle.swift`, `StreamSupport.swift`, `Queue.swift`, `Handoff.swift`, `UpNext.swift`, `QueueDrawer.swift`, `Podcasts.swift`, `MusicLibrary.swift`, `SystemNowPlaying.swift`, `Marquee.swift` and `MenuBarTicker.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.26** — native AVKit playback for YouTube (HD + live), in-app
+A menu-bar **"plays almost any video" player** for macOS. Swift (`Sources/main.swift` plus `Downloads.swift`, `PlaybackPositions.swift`, `Library.swift`, `Links.swift`, `SearchSupport.swift`, `Tiling.swift`, `PlayerZones.swift`, `MediaTools.swift`, `Welcome.swift`, `NowPlaying.swift`, `ArtworkWindow.swift`, `ArtworkStyle.swift`, `StreamSupport.swift`, `Queue.swift`, `Handoff.swift`, `UpNext.swift`, `QueueDrawer.swift`, `Podcasts.swift`, `MusicLibrary.swift`, `SystemNowPlaying.swift`, `Marquee.swift`, `MenuBarTicker.swift` and `WindowEdges.swift`), compiled with `swiftc`, locally signed (ad-hoc by default). Current version **3.27** — native AVKit playback for YouTube (HD + live), in-app
 downloads, YouTube search / History / Playlists in the panel (absorbed from the retired Tube app), an
 **Up Next** list per player window (Next/Previous · Autoplay · Repeat All/One · Shuffle), and a small library:
 watched marks, Favourites and playlist progress — plus a **Now Playing** row showing what other apps play, whose artwork
@@ -502,7 +502,7 @@ Z-order: video/web view → loading → `surface` → `controls` → "…".
 - `PlayerVideoView` — its backing layer is an `AVPlayerLayer` (`.resizeAspect`). It has no internal
   constraints.
 - `PlayerSurfaceView` — transparent overlay. `mouseDown`: clickCount ≥ 2 → `onMultiClick(point, count)`. A click that moves
-  more than 3pt drags the window manually (`setFrameOrigin`); otherwise `onClick(down, up)`. A
+  more than 3pt drags the window manually (`setFrameOrigin`, through `EdgeDrag` so it stops at screen and window edges, 3.27); otherwise `onClick(down, up)`. A
   tracking area drives `onHover` and `onPointer` (the point, nil on exit); `rightMouseDown` → `onRightClick`. Shared with the
   music window. `mouseDownCanMoveWindow = false` keeps
   title-bar-area clicks here.
@@ -687,3 +687,7 @@ Sources and tests are at the repository root. `scripts/watch_build.py` handles t
 - `Sources/Marquee.swift` (pure, tested) / `Sources/MenuBarTicker.swift` — the ticker; `AppDelegate.refreshTicker/tickerSettingChanged`, `Prefs.showTicker`, `SettingsController.tickerChanged`.
 - `scripts/watch-update.sh` — the Mac-side updater (Current build or `--stable`; `--dry-run`, `--force`; run on demand, no schedule).
 - `Sources/main.swift` `PlayerSurfaceView.dragIsResize/onResizeDrag` — a drag resizes the picture in full screen instead of moving the window.
+
+## 3.27 — windows stop at edges
+- `Sources/WindowEdges.swift` (pure, tested by `Tests/WindowEdgesChecks.swift`) — `WindowEdges.stops` (screen edges from inside, other windows' edges from outside, only while they overlap on the other axis), `EdgeAxis.step` (hold, break after `breakDistance`, pass when faster than `passSpeed`, re-arm on the approach side), `EdgeDrag.move` (x then y).
+- `Sources/main.swift` `EdgeTargets.screens/windows(besides:)` — the screens' frames and visible frames; other on-screen layer-0 windows from `CGWindowListCopyWindowInfo` (Cocoa coordinates), skipping the window itself, its child windows and its parent. `PlayerSurfaceView.mouseDown` makes one `EdgeDrag` per drag.

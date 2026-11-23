@@ -1,6 +1,6 @@
 # Watch App
 
-A "plays almost any video" menu-bar player. **Current: v3.26.**
+A "plays almost any video" menu-bar player. **Current: v3.27.**
 Binary `Watch` · bundle `com.jacob.watch` · hotkey **⌥⌘Y** ·
 frameworks: Cocoa, WebKit, Carbon, ServiceManagement, **AVKit, AVFoundation, MediaPlayer**.
 
@@ -91,7 +91,7 @@ that phase keeps the number; bump it only when a new phase starts or the user sa
 holds the stable `vX.Y` release(s) and at most one pre-release, **Current build** (tag `current-build`), which each passing
 push replaces; there are no per-version previews. A stable release is made by running the **Promote to stable** workflow
 (`promote.yml`, see docs/RELEASE.md) once `docs/releases/vX.Y.md` is on `main`. The installer is named with the release
-number: `package.sh` makes `dist/Watch-<version>.dmg` (e.g. `Watch-3.26.dmg`).
+number: `package.sh` makes `dist/Watch-<version>.dmg` (e.g. `Watch-3.27.dmg`).
 **3.21 — Up Next under the music window:** `PlayQueue`/`QueueItem` (+ `MediaSource`, `SpotifyLink`) moved to
 `Sources/Queue.swift` with Play Next/Later insertion, edits, sections and `handBack` (tested); `Sources/Handoff.swift` has the
 pure song-boundary reducer and `QueueRoute` (tested). `UniversalQueue` (`Sources/UpNext.swift`) plays the current item in
@@ -158,6 +158,12 @@ right-click / "…" menu (⌥⌘U) and the Play Next / Play Later row menus. (4)
 `fullScreenScale`, `Prefs.artworkFullScreenScale`; a quarter of the usual size up to filling the screen); past the point where it and
 the caption stack fit together it stays on the top edge and grows downward, caption and controls slide down with it and fade
 (`ArtworkLayout.fullScreen(...).chrome`) — gone when it fills the height.
+
+**3.27 — windows stop at edges:** players and the music window move themselves (`PlayerSurfaceView.mouseDown`), so they never had
+macOS's edge resistance. `EdgeDrag`/`EdgeAxis`/`WindowEdges` (`Sources/WindowEdges.swift`, pure, tested) stop a dragged window where an edge
+meets a screen's edge (frame and visible frame) from inside or another window's edge from outside; pushing `breakDistance` (24 pt) on, or a
+throw faster than `passSpeed` (1600 pt/s), goes through; pulling back lets go; a passed stop holds again once back on its side. Other
+windows: `EdgeTargets.windows` (CGWindowList bounds, layer 0, no Screen Recording needed; own child/parent skipped).
 
 **Working routine (the owner's standing rules, 2026-10-30):** for each batch of changes asked for: make them, push to the session's
 `claude/` branch (that publishes the **Current build** pre-release once the tests pass), and when the build is finalized and

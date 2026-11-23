@@ -76,13 +76,14 @@ def beyond_4gb(source, target):
     match), like a 2-3 hour 1080p60 YouTube file."""
     data = source.read_bytes()
     _, offset, size = next(b for b in boxes(data[:1 << 20]) if b[0] == 'sidx')
-    assert data[offset + 8] == 0, 'version 0 sidx expected'
-    field = offset + 8 + 4 + 4 + 4 + 4                                   # version/flags, reference_ID, timescale, earliest_pt
-    gap = 0xFFFF0000
-    first = int.from_bytes(data[field:field + 4], 'big') + gap
-    assert first < 1 << 32
+    version = data[offset + 8]
+    field = offset + 8 + 4 + 4 + 4 + (4 if version == 0 else 8)          # version/flags, reference_ID, timescale, earliest_pt
+    width = 4 if version == 0 else 8
+    gap = 0xFFFF0000 if version == 0 else 0x1_0000_0000                    # the media starts just under / past 4 GB
+    first = int.from_bytes(data[field:field + width], 'big') + gap
+    assert first < 1 << (8 * width)
     with open(target, 'wb') as f:
-        f.write(data[:field] + first.to_bytes(4, 'big') + data[field + 4:offset + size])
+        f.write(data[:field] + first.to_bytes(width, 'big') + data[field + width:offset + size])
         f.seek(offset + size + gap)
         f.write(data[offset + size:])
 

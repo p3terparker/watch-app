@@ -517,7 +517,7 @@ final class DashHLSBridge: NSObject, AVAssetResourceLoaderDelegate {
     private let queue = DispatchQueue(label: "watch.hlsbridge")
     private var playlists: [String: Data] = [:]
 
-    struct Index { let initLength: Int; let segments: [(offset: Int, length: Int, duration: Double)] }
+    typealias Index = SegmentIndex
 
     // Completes on main with a ready-to-play asset (the bridge must be retained as long as the asset), or nil.
     // Every video rendition (best first) becomes a variant of one master playlist sharing the audio, so AVPlayer can
@@ -525,13 +525,18 @@ final class DashHLSBridge: NSObject, AVAssetResourceLoaderDelegate {
     // read is left out.
     static func make(videos: [StreamRef], audio: StreamRef, completion: @escaping (DashHLSBridge?, AVURLAsset?) -> Void) {
         let base = "\(scheme)://p"
-        func finish(_ variants: [(StreamRef, String)], _ audioURI: String, _ extra: [String: Data]) {
+        func finish(_ variants: [(StreamRef, String, Index?)], _ audioURI: String, _ audioIndex: Index?, _ extra: [String: Data]) {
             let b = DashHLSBridge()
             var master = "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n"
                 + "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"Audio\",DEFAULT=YES,AUTOSELECT=YES,URI=\"\(audioURI)\"\n"
-            for (video, uri) in variants {
+            for (video, uri, index) in variants {
                 let codecs = [video.vcodec, audio.acodec].compactMap { $0 }.filter { $0 != "none" }.joined(separator: ",")
-                var inf = "#EXT-X-STREAM-INF:BANDWIDTH=\((video.bitrate ?? 4_000_000) + (audio.bitrate ?? 128_000)),AUDIO=\"a\""
+                var inf: String
+                if let v = index, let a = audioIndex, v.peak > 0, a.peak > 0 {
+                    inf = "#EXT-X-STREAM-INF:BANDWIDTH=\(v.peak + a.peak),AVERAGE-BANDWIDTH=\(v.average + a.average),AUDIO=\"a\""
+                } else {
+                    inf = "#EXT-X-STREAM-INF:BANDWIDTH=\((video.bitrate ?? 4_000_000) + (audio.bitrate ?? 128_000)),AUDIO=\"a\""
+                }
                 if !codecs.isEmpty { inf += ",CODECS=\"\(codecs)\"" }
                 if let w = video.width, let h = video.height { inf += ",RESOLUTION=\(w)x\(h)" }
                 master += "\(inf)\n\(uri)\n"
@@ -543,7 +548,7 @@ final class DashHLSBridge: NSObject, AVAssetResourceLoaderDelegate {
         }
         guard let first = videos.first else { DispatchQueue.main.async { completion(nil, nil) }; return }
         if first.isHLS && audio.isHLS {
-            DispatchQueue.main.async { finish([(first, first.url.absoluteString)], audio.url.absoluteString, [:]) }
+            DispatchQueue.main.async { finish([(first, first.url.absoluteString, nil)], audio.url.absoluteString, nil, [:]) }
             return
         }
         let files = videos.filter { !$0.isHLS }
@@ -555,19 +560,33 @@ final class DashHLSBridge: NSObject, AVAssetResourceLoaderDelegate {
         }
         g.enter(); fetchIndex(audio) { ai = $0; g.leave() }
         g.notify(queue: .main) {
-            guard let ai = ai else { completion(nil, nil); return }
-            var variants: [(StreamRef, String)] = [], extra = ["/audio.m3u8": mediaPlaylist(audio, ai)]
+            guard let ai = ai else {
+                PlaybackLog.shared.append("bridge: the audio file's index couldn't be read (\(audio.url.host ?? "?"))")
+                completion(nil, nil); return
+            }
+            var variants: [(StreamRef, String, Index?)] = [], extra = ["/audio.m3u8": mediaPlaylist(audio, ai)]
             for (i, video) in files.enumerated() {
-                guard let idx = indexes[i] else { continue }
+                guard let idx = indexes[i] else {
+                    PlaybackLog.shared.append("bridge: left out the \(video.height.map { "\($0)p" } ?? "?") rendition — its index couldn't be read")
+                    continue
+                }
                 extra["/video\(i).m3u8"] = mediaPlaylist(video, idx)
-                variants.append((video, "\(base)/video\(i).m3u8"))
+                variants.append((video, "\(base)/video\(i).m3u8", idx))
             }
             guard !variants.isEmpty else { completion(nil, nil); return }
-            finish(variants, "\(base)/audio.m3u8", extra)
+            finish(variants, "\(base)/audio.m3u8", ai, extra)
         }
     }
 
+    // One retry a second later: a single failed read (seen on GitHub's Mac against YouTube's CDN) used to drop that rendition
+    // — or, for the audio, the whole HD plan — without a word.
     private static func fetchIndex(_ s: StreamRef, completion: @escaping (Index?) -> Void) {
+        fetchIndexOnce(s) { idx in
+            if let idx = idx { completion(idx); return }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 1) { fetchIndexOnce(s, completion: completion) }
+        }
+    }
+    private static func fetchIndexOnce(_ s: StreamRef, completion: @escaping (Index?) -> Void) {
         func get(_ length: Int, _ done: @escaping (Data?) -> Void) {
             var r = URLRequest(url: s.url, timeoutInterval: 15)
             r.setValue("bytes=0-\(length - 1)", forHTTPHeaderField: "Range")
@@ -1532,12 +1551,28 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
                 case .failed where !becameReady:
                     self.lastPlaybackError = item.error?.localizedDescription
                     self.tryNextPlan(token)          // e.g. bridge/segment trouble → next plan (one rendition, muxed)
+                case .failed:
+                    self.recoverMidPlay(token, error: item.error?.localizedDescription)
                 default: break
                 }
             }
         }
         p.play()
         manager?.beginPlaybackActivity()
+    }
+
+    // Playback that dies after it had started — a link that expired hours into a long video, a dropped connection, a
+    // segment the server refused — used to leave a frozen window. It reloads the same video instead (a fresh yt-dlp read,
+    // fresh links), resuming where it was; at most once a minute, after that the failure card says why.
+    private var lastMidPlayReload = Date.distantPast
+    private func recoverMidPlay(_ token: Int, error: String?) {
+        guard token == loadToken, !isLocalFile else { return }
+        savePosition()
+        let reason = error ?? "Playback stopped"
+        guard Date().timeIntervalSince(lastMidPlayReload) > 60 else { couldNotPlay(token, error: reason, signedIn: false); return }
+        lastMidPlayReload = Date()
+        PlaybackLog.shared.append("\(sourceURL) — stopped while playing (\(reason)); reloading")
+        startLoad(sourceURL, title: mediaTitle)
     }
 
     // Most pixels worth decoding for the video area right now (StreamLadder.cap) — resizing moves it, so AVPlayer

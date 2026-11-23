@@ -85,3 +85,21 @@ final class PlaybackLog {
         try? data.write(to: file, options: .atomic)
     }
 }
+
+// One rendition's segments as its sidx lists them (DashHLSBridge builds its HLS playlists from these).
+struct SegmentIndex {
+    let initLength: Int; let segments: [(offset: Int, length: Int, duration: Double)]
+    // Bits per second, measured from the file itself. HLS's BANDWIDTH is the *peak* segment rate: declaring yt-dlp's
+    // average (`tbr`) made AVPlayer reject segments of busy scenes ("Segment exceeds specified bandwidth for
+    // variant", -12318) and, once every rendition had been rejected, stall or fail — more likely the longer the
+    // video. Segments under a second (the last one) don't count toward the peak unless that's all there is.
+    var peak: Int {
+        let rates = segments.filter { $0.duration >= 1 }.map { Double($0.length * 8) / $0.duration }
+        let all = rates.isEmpty ? segments.filter { $0.duration > 0 }.map { Double($0.length * 8) / $0.duration } : rates
+        return Int((all.max() ?? 0).rounded(.up))
+    }
+    var average: Int {
+        let time = segments.reduce(0) { $0 + $1.duration }
+        return time > 0 ? Int((Double(segments.reduce(0) { $0 + $1.length } * 8) / time).rounded(.up)) : 0
+    }
+}

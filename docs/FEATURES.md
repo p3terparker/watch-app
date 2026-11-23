@@ -1,4 +1,4 @@
-# Watch 3.26
+# Watch 3.27
 
 Plays almost any video and downloads it. Hotkey **⌥⌘Y**.
 
@@ -57,7 +57,7 @@ A player window opens right away with a spinner while yt-dlp finds the stream. E
 ## Player windows
 
 - Windows are minimal: a "…" button at the top that only shows while the pointer is over the window, and a thin 20 pt control bar at the bottom on hover (⟲10 · play/pause · ⟳10 · scrubber · time · volume), set in from the corners so it doesn't fight the resize handles. Hover the speaker for a volume slider.
-- **Drag anywhere** to move. The window can shrink to 68×38 without letterboxing.
+- **Drag anywhere** to move. Like other Mac windows, a dragged player (and the music window) stops briefly where it meets the edge of the screen or of another window; push on a little further, or move quickly, and it goes past. The window can shrink to 68×38 without letterboxing.
 - **Click zones.** Click the middle to play/pause. Double-click the left or right side (below the top third) to skip back or forward 10 seconds; keep clicking to skip further. Double-click the top third or the bottom middle to return to the window's size before its last resize (every manual resize updates it, so a second double-click toggles back).
 - **Keys:** Space play/pause · ←/→ ±5 s · ↑/↓ volume · ⌘←/⌘→ previous/next in Up Next.
 - The "…" menu (also on right-click) starts with **Close** and **Pin**, then Tile Windows (with 2+ players), Add to Favourites, Up Next, playback modes, downloads, and copy/open link.
@@ -143,6 +143,7 @@ yt-dlp (with Python and EJS), FFmpeg, ffprobe and Deno are bundled, so there's n
 
 ## Changelog
 
+- **3.27.** Dragged windows stop at the edges of the screen and of other windows, like the Mac's own; a deliberate push or a quick throw goes past.
 - **3.26.** A ★ on the music window for Apple Music (favourites the song in the background), an optional one-line scrolling song name in the menu bar, a volume slider that stays hidden until you rest on the speaker (click to mute, drag from the speaker to change it), and a full-screen picture you can resize by dragging, with the caption sliding away when it fills the screen.
 - **3.25.** Now Playing artwork window with its own controls, podcasts, Music library search, one Up Next queue under the music window (and a list in each video window), media keys and Control Center, Finder's Open With, YouTube always plays natively with a proper error card, quality that follows the window size, a volume slider in video windows, and windows that open beside each other. Builds 3.19 to 3.24 were development steps toward this and were never released on their own. See [the release notes](releases/v3.25.md).
 - **3.18.** First release from this repository, under MIT, with its own build, test and package scripts.
