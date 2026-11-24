@@ -100,6 +100,29 @@ enum SearchFailure {
     }
 }
 
+// A playlist read without cookies failed, then signed in too (3.27). The plain read's reason leads — it's the one that
+// matters for a public list or a Mix — and the signed-in one follows when it says something else; a browser whose cookies
+// can't be read is said in plain words rather than yt-dlp's "could not find chrome cookies database in …".
+enum PlaylistFailure {
+    static func cookiesUnreadable(_ error: String) -> Bool {
+        let e = error.lowercased()
+        return e.contains("cookies database") || e.contains("could not find") && e.contains("cookies")
+            || e.contains("failed to decrypt") || e.contains("cookie") && e.contains("keyring")
+    }
+    static func plainCookieText(_ error: String) -> String {
+        let e = error.lowercased()
+        let browser = e.contains("chrome") ? "Chrome" : e.contains("safari") ? "Safari" : "the browser"
+        return "Watch couldn't read \(browser)'s cookies for your YouTube Account — check the browser and profile in Preferences ▸ YouTube Account."
+    }
+    static func reason(plain: String, signedIn: String) -> String {
+        let signed = cookiesUnreadable(signedIn) ? plainCookieText(signedIn) : signedIn.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lead = plain.trimmingCharacters(in: .whitespacesAndNewlines)
+        if lead.isEmpty { return signed }
+        if signed.isEmpty || signed == lead { return lead }
+        return "\(lead)\n\nSigned in: \(signed)"
+    }
+}
+
 // Recent results, so Back and repeating a search are instant. Entries expire after `lifetime` seconds.
 struct SearchCache<Value> {
     let lifetime: TimeInterval

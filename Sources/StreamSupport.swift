@@ -103,3 +103,35 @@ struct SegmentIndex {
         return time > 0 ? Int((Double(segments.reduce(0) { $0 + $1.length } * 8) / time).rounded(.up)) : 0
     }
 }
+
+// A video that never gets going — a black picture with the controls up, the clock at 0:00 or at the resume spot — or that
+// stops moving after the player reported errors. The player window ticks this every `interval` seconds with what AVPlayer
+// says; a verdict other than `.fine` ends the watch (the window acts once). Pure.
+struct StallWatch {
+    static let interval: TimeInterval = 2
+    static let startLimit: TimeInterval = 25     // no playback this long after the plan was handed to AVPlayer → next plan
+    static let midLimit: TimeInterval = 20       // stopped this long, with new errors in AVPlayer's log → fresh links
+    enum Verdict: Equatable { case fine, nextPlan, reload }
+
+    private(set) var everPlayed = false
+    private var lastTime: Double?
+    private var lastMoved: Date
+    private var errorsAtMove = 0
+    init(start: Date) { lastMoved = start }
+
+    // `time`: the player's clock; `paused`: the user (or Watch) paused it; `errors`: how many events AVPlayer's error log has.
+    // Played = the clock moved forward by a little (under 3 intervals) since the last tick; a seek's jump isn't playback.
+    mutating func tick(now: Date, time: Double, paused: Bool, errors: Int) -> Verdict {
+        defer { lastTime = time }
+        let delta = lastTime.map { time - $0 } ?? 0
+        let played = delta > 0.05 && delta < Self.interval * 3
+        if played { everPlayed = true }
+        if paused || played || (everPlayed && abs(delta) > 0.05) {
+            lastMoved = now; errorsAtMove = errors
+            return .fine
+        }
+        let still = now.timeIntervalSince(lastMoved)
+        if !everPlayed { return still >= Self.startLimit ? .nextPlan : .fine }
+        return still >= Self.midLimit && errors > errorsAtMove ? .reload : .fine
+    }
+}

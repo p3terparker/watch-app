@@ -168,6 +168,11 @@ windows: `EdgeTargets.windows` (CGWindowList bounds, layer 0, no Screen Recordin
 tested) — yt-dlp's `tbr` is an average and AVPlayer flagged busy segments (-12318); `fetchIndex` retries once and logs a dropped rendition;
 a failure after playback started reloads and resumes (`recoverMidPlay`, once a minute). Diagnostic: `Tests/youtube_probe.py` +
 `youtube-probe.yml` (real links on GitHub's Mac — most get bot-checked there — plus 3 h and past-4 GB fixtures).
+A black picture that never starts (controls up, clock still) is caught by `StallWatch` (`StreamSupport.swift`, tested): 25 s with no
+playback → the next plan from the same spot (then the failure card); stopped 20 s after new AVPlayer errors → `recoverMidPlay`; AVPlayer's
+error log goes to `playback.log` (`stallReason`). **Playlists** (`YouTube.loadPublicFirst`) are read without cookies first, signed in only
+if that fails and an account is connected (`PlaylistFailure`, `SearchSupport.swift`, tested) — an unreadable Chrome profile no longer
+breaks public lists and Mixes.
 
 **Working routine (the owner's standing rules, 2026-10-30):** for each batch of changes asked for: make them, push to the session's
 `claude/` branch (that publishes the **Current build** pre-release once the tests pass), and when the build is finalized and

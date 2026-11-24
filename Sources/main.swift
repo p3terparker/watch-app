@@ -268,17 +268,26 @@ enum YouTube {
         }
     }
     static func playlistVideos(_ url: String, completion: @escaping ([YTVideo]?, String) -> Void) {
-        guard Prefs.youtubeConnected else { loadJSON(["--playlist-end", "80", url]) { j, e in completion(j.map(videos), e) }; return }
-        loadSignedIn(["--playlist-end", "80", url]) { j, e in completion(j.map(videos), e) }
+        loadPublicFirst(["--playlist-end", "80", url]) { j, e in completion(j.map(videos), e) }
+    }
+    // A playlist link is read without cookies first — public lists and Mixes need none, and a browser whose cookies can't be
+    // read (no Chrome profile there) must not break them. Only when that fails and a YouTube Account is connected is it
+    // read again signed in (a private or unlisted list of the user's own). Both failing reports the plain read's reason,
+    // plus the signed-in one when it differs.
+    static func loadPublicFirst(_ args: [String], completion: @escaping ([String: Any]?, String) -> Void) {
+        loadJSON(args, timeout: 45) { j, plainErr in
+            guard j == nil, Prefs.youtubeConnected else { completion(j, plainErr); return }
+            loadSignedIn(args) { j2, signedErr in
+                completion(j2, j2 != nil ? "" : PlaylistFailure.reason(plain: plainErr, signedIn: signedErr))
+            }
+        }
     }
     // Same list, plus the playlist's own title — what a player window's Up Next is built from.
     static func playlist(_ url: String, completion: @escaping (String?, [YTVideo]) -> Void) {
         playlistJSON(url) { j in completion(j?["title"] as? String, j.map(videos) ?? []) }
     }
     private static func playlistJSON(_ url: String, completion: @escaping ([String: Any]?) -> Void) {
-        let args = ["--playlist-end", "100", url]
-        guard Prefs.youtubeConnected else { loadJSON(args) { j, _ in completion(j) }; return }
-        loadSignedIn(args) { j, _ in completion(j) }
+        loadPublicFirst(["--playlist-end", "100", url]) { j, _ in completion(j) }
     }
     // Quick sign-in probe for Preferences: can we read the history feed with the configured cookies?
     static func checkSignIn(completion: @escaping (Bool, String) -> Void) {
@@ -1181,6 +1190,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     private var timeObserver: Any?
     private var bridge: DashHLSBridge?               // must outlive the asset it serves playlists for
     private var statusObservation: NSKeyValueObservation?
+    private var stallTimer: Timer?                    // StallWatch's ticks for the current item (3.27)
     var sourceURL: String = ""
     var mediaTitle: String?
     var isLocalFile = false
@@ -1559,6 +1569,51 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         }
         p.play()
         manager?.beginPlaybackActivity()
+        if !isLocalFile { watchForStall(p, item: item, token: token) }
+    }
+
+    // A black picture with the controls up and the clock not moving (3.27): AVPlayer can sit like that without ever saying
+    // .failed — its segments refused, or a rendition it won't decode. After StallWatch.startLimit without playback the
+    // next plan gets a go (one rendition, then YouTube's own muxed file) from the same spot; if none is left the failure card
+    // says why. Playback that stops after AVPlayer logged errors reloads with fresh links (recoverMidPlay). Either way
+    // AVPlayer's own error log goes into playback.log, so a report says what it was.
+    private func watchForStall(_ p: AVPlayer, item: AVPlayerItem, token: Int) {
+        stallTimer?.invalidate()
+        var watch = StallWatch(start: Date())
+        stallTimer = Timer.scheduledTimer(withTimeInterval: StallWatch.interval, repeats: true) { [weak self] timer in
+            guard let self = self, token == self.loadToken, p === self.player, item === p.currentItem else { timer.invalidate(); return }
+            let t = p.currentTime().seconds
+            let verdict = watch.tick(now: Date(), time: t.isFinite ? t : 0, paused: p.timeControlStatus == .paused && p.rate == 0,
+                                     errors: item.errorLog()?.events.count ?? 0)
+            guard verdict != .fine else { return }
+            timer.invalidate(); self.stallTimer = nil
+            let reason = Self.stallReason(p, item: item, played: watch.everPlayed)
+            PlaybackLog.shared.append("\(self.sourceURL) — \(reason)")
+            switch verdict {
+            case .fine: break
+            case .nextPlan:
+                if t.isFinite, t > 1 { self.resumeAt = t; self.youtubeStart = 0 }   // the next plan starts where this one was
+                self.lastPlaybackError = reason
+                if self.pendingPlans.isEmpty { self.couldNotPlay(token, error: reason, signedIn: false) }
+                else { self.showLoading(self.mediaTitle ?? "Loading…"); self.tryNextPlan(token) }
+            case .reload:
+                self.recoverMidPlay(token, error: reason)
+            }
+        }
+    }
+    // What AVPlayer said: its waiting reason, the picture size it got (0×0 = no video decoded) and its last errors.
+    private static func stallReason(_ p: AVPlayer, item: AVPlayerItem, played: Bool) -> String {
+        var parts = [played ? "stopped while playing" : "never started playing"]
+        if let w = p.reasonForWaitingToPlay { parts.append("waiting: \(w.rawValue)") }
+        parts.append("status \(item.status.rawValue)")
+        parts.append("picture \(Int(item.presentationSize.width))×\(Int(item.presentationSize.height))")
+        if let a = item.accessLog()?.events.last, a.indicatedBitrate > 0 { parts.append("variant \(Int(a.indicatedBitrate / 1000)) kb/s") }
+        let errors = (item.errorLog()?.events ?? []).suffix(3).map { e in
+            "\(e.errorDomain) \(e.errorStatusCode)\(e.errorComment.map { " \($0)" } ?? "")\(e.uri.flatMap { URL(string: $0)?.host }.map { " (\($0))" } ?? "")"
+        }
+        if !errors.isEmpty { parts.append("errors: " + errors.joined(separator: "; ")) }
+        else if let e = item.error { parts.append("error: \(e.localizedDescription)") }
+        return parts.joined(separator: " · ")
     }
 
     // Playback that dies after it had started — a link that expired hours into a long video, a dropped connection, a
@@ -1604,6 +1659,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         webView?.removeFromSuperview(); webView = nil
     }
     private func teardownAVPlayer() {
+        stallTimer?.invalidate(); stallTimer = nil
         savePosition(); positionKey = nil; positionReady = false; skipTarget = nil
         statusObservation = nil
         if let o = endObserver { NotificationCenter.default.removeObserver(o); endObserver = nil }
