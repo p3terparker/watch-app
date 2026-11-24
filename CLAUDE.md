@@ -177,8 +177,13 @@ breaks public lists and Mixes.
 **Working routine (the owner's standing rules, 2026-10-30):** for each batch of changes asked for: make them, push to the session's
 `claude/` branch (that publishes the **Current build** pre-release once the tests pass), and when the build is finalized and
 ready to test, **update the owner's Mac with it**: run `curl -fsSL https://raw.githubusercontent.com/p3terparker/watch-app/<branch>/scripts/watch-update.sh | bash`
-there (`scripts/watch-update.sh`; needs a Remote Control session — `list_computer_folders`, then `request_computer_folder`; if the
-Mac isn't reachable, say so and give the owner the same command). Only after a finished wave of changes, or when asked — **never
+there (`scripts/watch-update.sh`). **How (the owner's setup, 2026-11-24):** the Mac ("jcmbp") doesn't let a cloud session attach to its
+folders (`list_computer_folders` reports `not_available`), but the Claude app registers each one as a `bridge` environment. So:
+`list_environments` → the bridge env `jcmbp:watch-app:…` → `create_session(environment_id, prompt)` asking it to update Watch → read
+the result with `list_events` (kinds assistant/result). On the Mac, `~/watch-app` is a clone of this repo. The owner recorded a standing
+permission there, in the local, uncommitted `CLAUDE.local.md` and `.claude/settings.local.json`, for exactly
+`git pull && ./scripts/watch-update.sh`; that session asks the owner first if a pull changed the script. This needs the Claude app open with
+Remote Control on and the Mac awake. If the session can't start, say so and give the owner the same command. Only after a finished wave of changes, or when asked — **never
 on a schedule or per small push**; the owner decided against background polling. A finished build session ends with that.
 **Never publish the official release until the owner says so:** no Promote to stable workflow, no `vX.Y` release or tag, no
 merge to `main`, no `docs/releases/vX.Y.md` push meant for promotion. Use `[no preview]` in a commit message for pushes that
