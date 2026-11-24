@@ -1,6 +1,6 @@
 # Watch App
 
-A "plays almost any video" menu-bar player. **Current: v3.26.**
+A "plays almost any video" menu-bar player. **Current: v3.27.**
 Binary `Watch` · bundle `com.jacob.watch` · hotkey **⌥⌘Y** ·
 frameworks: Cocoa, WebKit, Carbon, ServiceManagement, **AVKit, AVFoundation, MediaPlayer**.
 
@@ -91,7 +91,7 @@ that phase keeps the number; bump it only when a new phase starts or the user sa
 holds the stable `vX.Y` release(s) and at most one pre-release, **Current build** (tag `current-build`), which each passing
 push replaces; there are no per-version previews. A stable release is made by running the **Promote to stable** workflow
 (`promote.yml`, see docs/RELEASE.md) once `docs/releases/vX.Y.md` is on `main`. The installer is named with the release
-number: `package.sh` makes `dist/Watch-<version>.dmg` (e.g. `Watch-3.26.dmg`).
+number: `package.sh` makes `dist/Watch-<version>.dmg` (e.g. `Watch-3.27.dmg`).
 **3.21 — Up Next under the music window:** `PlayQueue`/`QueueItem` (+ `MediaSource`, `SpotifyLink`) moved to
 `Sources/Queue.swift` with Play Next/Later insertion, edits, sections and `handBack` (tested); `Sources/Handoff.swift` has the
 pure song-boundary reducer and `QueueRoute` (tested). `UniversalQueue` (`Sources/UpNext.swift`) plays the current item in
@@ -159,11 +159,31 @@ right-click / "…" menu (⌥⌘U) and the Play Next / Play Later row menus. (4)
 the caption stack fit together it stays on the top edge and grows downward, caption and controls slide down with it and fade
 (`ArtworkLayout.fullScreen(...).chrome`) — gone when it fills the height.
 
+**3.27 — windows stop at edges:** players and the music window move themselves (`PlayerSurfaceView.mouseDown`), so they never had
+macOS's edge resistance. `EdgeDrag`/`EdgeAxis`/`WindowEdges` (`Sources/WindowEdges.swift`, pure, tested) stop a dragged window where an edge
+meets a screen's edge (frame and visible frame) from inside or another window's edge from outside; pushing `breakDistance` (24 pt) on, or a
+throw faster than `passSpeed` (1600 pt/s), goes through; pulling back lets go; a passed stop holds again once back on its side. Other
+windows: `EdgeTargets.windows` (CGWindowList bounds, layer 0, no Screen Recording needed; own child/parent skipped).
+**3.27 — long YouTube videos:** `DashHLSBridge` declares each variant's measured peak/average (`SegmentIndex`, `Sources/StreamSupport.swift`,
+tested) — yt-dlp's `tbr` is an average and AVPlayer flagged busy segments (-12318); `fetchIndex` retries once and logs a dropped rendition;
+a failure after playback started reloads and resumes (`recoverMidPlay`, once a minute). Diagnostic: `Tests/youtube_probe.py` +
+`youtube-probe.yml` (real links on GitHub's Mac — most get bot-checked there — plus 3 h and past-4 GB fixtures).
+A black picture that never starts (controls up, clock still) is caught by `StallWatch` (`StreamSupport.swift`, tested): 25 s with no
+playback → the next plan from the same spot (then the failure card); stopped 20 s after new AVPlayer errors → `recoverMidPlay`; AVPlayer's
+error log goes to `playback.log` (`stallReason`). **Playlists** (`YouTube.loadPublicFirst`) are read without cookies first, signed in only
+if that fails and an account is connected (`PlaylistFailure`, `SearchSupport.swift`, tested) — an unreadable Chrome profile no longer
+breaks public lists and Mixes.
+
 **Working routine (the owner's standing rules, 2026-10-30):** for each batch of changes asked for: make them, push to the session's
 `claude/` branch (that publishes the **Current build** pre-release once the tests pass), and when the build is finalized and
 ready to test, **update the owner's Mac with it**: run `curl -fsSL https://raw.githubusercontent.com/p3terparker/watch-app/<branch>/scripts/watch-update.sh | bash`
-there (`scripts/watch-update.sh`; needs a Remote Control session — `list_computer_folders`, then `request_computer_folder`; if the
-Mac isn't reachable, say so and give the owner the same command). Only after a finished wave of changes, or when asked — **never
+there (`scripts/watch-update.sh`). **How (the owner's setup, 2026-11-24):** the Mac ("jcmbp") doesn't let a cloud session attach to its
+folders (`list_computer_folders` reports `not_available`), but the Claude app registers each one as a `bridge` environment. So:
+`list_environments` → the bridge env `jcmbp:watch-app:…` → `create_session(environment_id, prompt)` asking it to update Watch → read
+the result with `list_events` (kinds assistant/result). On the Mac, `~/watch-app` is a clone of this repo. The owner recorded a standing
+permission there, in the local, uncommitted `CLAUDE.local.md` and `.claude/settings.local.json`, for exactly
+`git pull && ./scripts/watch-update.sh`; that session asks the owner first if a pull changed the script. This needs the Claude app open with
+Remote Control on and the Mac awake. If the session can't start, say so and give the owner the same command. Only after a finished wave of changes, or when asked — **never
 on a schedule or per small push**; the owner decided against background polling. A finished build session ends with that.
 **Never publish the official release until the owner says so:** no Promote to stable workflow, no `vX.Y` release or tag, no
 merge to `main`, no `docs/releases/vX.Y.md` push meant for promotion. Use `[no preview]` in a commit message for pushes that

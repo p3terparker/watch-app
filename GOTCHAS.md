@@ -268,3 +268,14 @@ Watch's should hold them: nothing of Watch's open, or only paused Watch players 
 (`AppDelegate.ownBundleIDs`), so the music window keeps following Music through its broadcasts. Pausing Music for Watch's
 playback is not a click unless `play()` started it: it uses `performIfAllowed` (never prompts).
 
+## Watch 3.27 — YouTube files: declare the peak, expect a stray 403
+
+HLS's BANDWIDTH is the peak segment rate. yt-dlp's `tbr` is an average (YouTube's 1080p of a music video: 3038 kb/s declared,
+4334 kb/s peak), so the bridge measures both from the sidx (`SegmentIndex`). YouTube's CDN occasionally answers a ranged read with
+403 for one rendition while the others work; a second read usually succeeds (`fetchIndex` retries once). Long renditions themselves
+are fine: 3 h and 10 h files (8.8 MB playlists, sidx past 64 KB) and media past byte 4 GB play at start, middle and end in
+`Tests/youtube_probe.py`. Playback that fails after it started reloads the video (`recoverMidPlay`) rather than freezing.
+AVPlayer can also sit on a black picture forever without reporting `.failed` (seen on a long video after 3.27's first build):
+`StallWatch` moves to the next plan after 25 s and logs AVPlayer's own error log — read `playback.log` for the cause.
+Playlists must not need cookies: a public list or Mix read with an unreadable browser profile failed with yt-dlp's "could not find chrome
+cookies database"; `loadPublicFirst` reads plainly first.

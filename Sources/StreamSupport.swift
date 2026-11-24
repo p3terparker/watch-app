@@ -85,3 +85,53 @@ final class PlaybackLog {
         try? data.write(to: file, options: .atomic)
     }
 }
+
+// One rendition's segments as its sidx lists them (DashHLSBridge builds its HLS playlists from these).
+struct SegmentIndex {
+    let initLength: Int; let segments: [(offset: Int, length: Int, duration: Double)]
+    // Bits per second, measured from the file itself. HLS's BANDWIDTH is the *peak* segment rate: declaring yt-dlp's
+    // average (`tbr`) made AVPlayer reject segments of busy scenes ("Segment exceeds specified bandwidth for
+    // variant", -12318) and, once every rendition had been rejected, stall or fail — more likely the longer the
+    // video. Segments under a second (the last one) don't count toward the peak unless that's all there is.
+    var peak: Int {
+        let rates = segments.filter { $0.duration >= 1 }.map { Double($0.length * 8) / $0.duration }
+        let all = rates.isEmpty ? segments.filter { $0.duration > 0 }.map { Double($0.length * 8) / $0.duration } : rates
+        return Int((all.max() ?? 0).rounded(.up))
+    }
+    var average: Int {
+        let time = segments.reduce(0) { $0 + $1.duration }
+        return time > 0 ? Int((Double(segments.reduce(0) { $0 + $1.length } * 8) / time).rounded(.up)) : 0
+    }
+}
+
+// A video that never gets going — a black picture with the controls up, the clock at 0:00 or at the resume spot — or that
+// stops moving after the player reported errors. The player window ticks this every `interval` seconds with what AVPlayer
+// says; a verdict other than `.fine` ends the watch (the window acts once). Pure.
+struct StallWatch {
+    static let interval: TimeInterval = 2
+    static let startLimit: TimeInterval = 25     // no playback this long after the plan was handed to AVPlayer → next plan
+    static let midLimit: TimeInterval = 20       // stopped this long, with new errors in AVPlayer's log → fresh links
+    enum Verdict: Equatable { case fine, nextPlan, reload }
+
+    private(set) var everPlayed = false
+    private var lastTime: Double?
+    private var lastMoved: Date
+    private var errorsAtMove = 0
+    init(start: Date) { lastMoved = start }
+
+    // `time`: the player's clock; `paused`: the user (or Watch) paused it; `errors`: how many events AVPlayer's error log has.
+    // Played = the clock moved forward by a little (under 3 intervals) since the last tick; a seek's jump isn't playback.
+    mutating func tick(now: Date, time: Double, paused: Bool, errors: Int) -> Verdict {
+        defer { lastTime = time }
+        let delta = lastTime.map { time - $0 } ?? 0
+        let played = delta > 0.05 && delta < Self.interval * 3
+        if played { everPlayed = true }
+        if paused || played || (everPlayed && abs(delta) > 0.05) {
+            lastMoved = now; errorsAtMove = errors
+            return .fine
+        }
+        let still = now.timeIntervalSince(lastMoved)
+        if !everPlayed { return still >= Self.startLimit ? .nextPlan : .fine }
+        return still >= Self.midLimit && errors > errorsAtMove ? .reload : .fine
+    }
+}

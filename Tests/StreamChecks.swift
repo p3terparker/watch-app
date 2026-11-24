@@ -49,4 +49,54 @@ func checkStreams() {
     let lines = String(decoding: trimmed, as: UTF8.self).split(separator: "\n")
     expect(trimmed.count <= PlaybackLog.limit + 200 && lines.allSatisfy { $0.hasPrefix("2027-01-15T08:00:00Z ") }, "kept under the limit, whole lines only")
 }
+
+// 3.27: the bridge declares each rendition's real peak and average bit rate (from its sidx), not yt-dlp's average.
+func checkSegmentIndex() {
+    // Three 5 s segments of 1, 3 and 2 MB, then a 0.2 s tail of 0.5 MB (20 Mb/s over that sliver).
+    let idx = SegmentIndex(initLength: 800, segments: [(800, 1_000_000, 5), (1_000_800, 3_000_000, 5), (4_000_800, 2_000_000, 5),
+                                                       (6_000_800, 500_000, 0.2)])
+    expect(idx.peak == 4_800_000, "peak = the busiest whole segment, 3 MB in 5 s (\(idx.peak))")
+    expect(abs(idx.average - 3_421_053) <= 1, "average = all bytes over all time (\(idx.average))")
+    let short = SegmentIndex(initLength: 0, segments: [(0, 100_000, 0.5), (100_000, 50_000, 0.25)])
+    expect(short.peak == 1_600_000, "only short segments: they count (\(short.peak))")
+    let empty = SegmentIndex(initLength: 0, segments: [(0, 100, 0)])
+    expect(empty.peak == 0 && empty.average == 0, "no time at all: nothing to declare, the bridge falls back to yt-dlp's figure")
+}
+// 3.27: a video that never starts (black picture, controls up) moves on to the next plan; one that stops after errors reloads.
+func checkStallWatch() {
+    let t0 = Date(timeIntervalSince1970: 1_000)
+    func at(_ s: Double) -> Date { t0.addingTimeInterval(s) }
+    var w = StallWatch(start: t0)
+    var v: StallWatch.Verdict = .fine
+    for s in stride(from: 2.0, through: 24, by: 2) { v = w.tick(now: at(s), time: 0, paused: false, errors: 0) }
+    expect(v == .fine, "still within the start limit")
+    expect(w.tick(now: at(26), time: 0, paused: false, errors: 0) == .nextPlan, "nothing for 25 s: the next plan")
+    // Resumed at 1:30:00: the seek's jump isn't playback, so the start limit still applies.
+    w = StallWatch(start: t0)
+    _ = w.tick(now: at(2), time: 0, paused: false, errors: 0)
+    for s in stride(from: 4.0, through: 24, by: 2) { v = w.tick(now: at(s), time: 5400, paused: false, errors: 0) }
+    expect(v == .fine && !w.everPlayed, "a resume seek is not playback")
+    expect(w.tick(now: at(26), time: 5400, paused: false, errors: 0) == .nextPlan, "stuck at the resume spot: the next plan")
+    // Paused by the user before it ever played: no verdict.
+    w = StallWatch(start: t0)
+    for s in stride(from: 2.0, through: 60, by: 2) { v = w.tick(now: at(s), time: 0, paused: true, errors: 0) }
+    expect(v == .fine, "paused isn't stalled")
+    // Playing, then stuck: only with new errors in AVPlayer's log (a slow network just buffers).
+    w = StallWatch(start: t0)
+    for s in stride(from: 2.0, through: 10, by: 2) { _ = w.tick(now: at(s), time: s - 2, paused: false, errors: 1) }
+    expect(w.everPlayed, "the clock moving is playback")
+    for s in stride(from: 12.0, through: 60, by: 2) { v = w.tick(now: at(s), time: 8, paused: false, errors: 1) }
+    expect(v == .fine, "stopped without new errors: keep waiting")
+    w = StallWatch(start: t0)
+    for s in stride(from: 2.0, through: 10, by: 2) { _ = w.tick(now: at(s), time: s - 2, paused: false, errors: 0) }
+    for s in stride(from: 12.0, through: 28, by: 2) { v = w.tick(now: at(s), time: 8, paused: false, errors: 2) }
+    expect(v == .fine, "under 20 s")
+    expect(w.tick(now: at(30), time: 8, paused: false, errors: 2) == .reload, "stopped 20 s after errors: reload with fresh links")
+    // A seek while playing restarts the clock.
+    w = StallWatch(start: t0)
+    for s in stride(from: 2.0, through: 10, by: 2) { _ = w.tick(now: at(s), time: s - 2, paused: false, errors: 0) }
+    for s in stride(from: 12.0, through: 28, by: 2) { _ = w.tick(now: at(s), time: 8, paused: false, errors: 3) }
+    _ = w.tick(now: at(29), time: 600, paused: false, errors: 3)
+    expect(w.tick(now: at(31), time: 600, paused: false, errors: 3) == .fine, "a seek counts as moving")
+}
 enum YtDlpFixture { static let timedOut = "yt-dlp timed out" }

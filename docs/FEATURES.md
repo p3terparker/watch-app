@@ -1,4 +1,4 @@
-# Watch 3.26
+# Watch 3.27
 
 Plays almost any video and downloads it. Hotkey **⌥⌘Y**.
 
@@ -51,13 +51,13 @@ A player window opens right away with a spinner while yt-dlp finds the stream. E
 - **Quality follows the window.** YouTube's lower H.264 renditions (360/480/720p) go into the same playlist, and the player caps the picture at the window's size, so a small window plays 480p and a big one switches up to 1080p as you resize. The "…" menu shows what you're getting ("Playing at 720p").
 - **Live streams** (YouTube Live, Twitch and so on) play from their HLS manifest and adapt their own quality.
 - **Other sites** use their best HLS or MP4 stream. **Local files** (a path, or drag and drop) play directly.
-- **When a stream fails**, Watch tries the next plan (another rendition, then 360p muxed). A YouTube video that still won't play shows why in the window, never YouTube's own page, with **Sign In… / Try Again / Open in Browser / Copy Details**. If YouTube asks Watch to prove it isn't a bot and an account is connected, Watch retries once with that sign-in. Slow answers show "Still loading…" for up to 60 seconds. Failures are logged to `~/Library/Logs/Watch/playback.log`. Other sites fall back to loading their page.
+- **When a stream fails**, Watch tries the next plan (another rendition, then 360p muxed). A YouTube video that still won't play shows why in the window, never YouTube's own page, with **Sign In… / Try Again / Open in Browser / Copy Details**. If YouTube asks Watch to prove it isn't a bot and an account is connected, Watch retries once with that sign-in. Slow answers show "Still loading…" for up to 60 seconds. Failures are logged to `~/Library/Logs/Watch/playback.log`. If a video stops partway through (an expired link hours into a long video, a dropped connection), Watch reloads it and carries on from the same spot. Other sites fall back to loading their page.
 - **Resume.** Videos reopen where you left them (YouTube by video id, other sites, local files), within half a second. A "Resumed at 12:34 · Start Over" chip shows for a few seconds. A link with `t=` starts there instead, and a video you finished or barely started starts over.
 
 ## Player windows
 
 - Windows are minimal: a "…" button at the top that only shows while the pointer is over the window, and a thin 20 pt control bar at the bottom on hover (⟲10 · play/pause · ⟳10 · scrubber · time · volume), set in from the corners so it doesn't fight the resize handles. Hover the speaker for a volume slider.
-- **Drag anywhere** to move. The window can shrink to 68×38 without letterboxing.
+- **Drag anywhere** to move. Like other Mac windows, a dragged player (and the music window) stops briefly where it meets the edge of the screen or of another window; push on a little further, or move quickly, and it goes past. The window can shrink to 68×38 without letterboxing.
 - **Click zones.** Click the middle to play/pause. Double-click the left or right side (below the top third) to skip back or forward 10 seconds; keep clicking to skip further. Double-click the top third or the bottom middle to return to the window's size before its last resize (every manual resize updates it, so a second double-click toggles back).
 - **Keys:** Space play/pause · ←/→ ±5 s · ↑/↓ volume · ⌘←/⌘→ previous/next in Up Next.
 - The "…" menu (also on right-click) starts with **Close** and **Pin**, then Tile Windows (with 2+ players), Add to Favourites, Up Next, playback modes, downloads, and copy/open link.
@@ -143,6 +143,7 @@ yt-dlp (with Python and EJS), FFmpeg, ffprobe and Deno are bundled, so there's n
 
 ## Changelog
 
+- **3.27.** Dragged windows stop at the edges of the screen and of other windows, like the Mac's own; a deliberate push or a quick throw goes past. Sturdier YouTube playback: a video that stops partway reloads and resumes, a file YouTube briefly refuses is asked for again, and each quality's real peak bit rate is declared to the player. A video stuck on a black picture moves on to another stream from the same spot after 25 s (or says why), and the player's own errors go to playback.log. Playlists and Mixes load without your browser's cookies — a missing Chrome profile no longer breaks them.
 - **3.26.** A ★ on the music window for Apple Music (favourites the song in the background), an optional one-line scrolling song name in the menu bar, a volume slider that stays hidden until you rest on the speaker (click to mute, drag from the speaker to change it), and a full-screen picture you can resize by dragging, with the caption sliding away when it fills the screen.
 - **3.25.** Now Playing artwork window with its own controls, podcasts, Music library search, one Up Next queue under the music window (and a list in each video window), media keys and Control Center, Finder's Open With, YouTube always plays natively with a proper error card, quality that follows the window size, a volume slider in video windows, and windows that open beside each other. Builds 3.19 to 3.24 were development steps toward this and were never released on their own. See [the release notes](releases/v3.25.md).
 - **3.18.** First release from this repository, under MIT, with its own build, test and package scripts.

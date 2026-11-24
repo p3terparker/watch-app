@@ -268,17 +268,26 @@ enum YouTube {
         }
     }
     static func playlistVideos(_ url: String, completion: @escaping ([YTVideo]?, String) -> Void) {
-        guard Prefs.youtubeConnected else { loadJSON(["--playlist-end", "80", url]) { j, e in completion(j.map(videos), e) }; return }
-        loadSignedIn(["--playlist-end", "80", url]) { j, e in completion(j.map(videos), e) }
+        loadPublicFirst(["--playlist-end", "80", url]) { j, e in completion(j.map(videos), e) }
+    }
+    // A playlist link is read without cookies first — public lists and Mixes need none, and a browser whose cookies can't be
+    // read (no Chrome profile there) must not break them. Only when that fails and a YouTube Account is connected is it
+    // read again signed in (a private or unlisted list of the user's own). Both failing reports the plain read's reason,
+    // plus the signed-in one when it differs.
+    static func loadPublicFirst(_ args: [String], completion: @escaping ([String: Any]?, String) -> Void) {
+        loadJSON(args, timeout: 45) { j, plainErr in
+            guard j == nil, Prefs.youtubeConnected else { completion(j, plainErr); return }
+            loadSignedIn(args) { j2, signedErr in
+                completion(j2, j2 != nil ? "" : PlaylistFailure.reason(plain: plainErr, signedIn: signedErr))
+            }
+        }
     }
     // Same list, plus the playlist's own title — what a player window's Up Next is built from.
     static func playlist(_ url: String, completion: @escaping (String?, [YTVideo]) -> Void) {
         playlistJSON(url) { j in completion(j?["title"] as? String, j.map(videos) ?? []) }
     }
     private static func playlistJSON(_ url: String, completion: @escaping ([String: Any]?) -> Void) {
-        let args = ["--playlist-end", "100", url]
-        guard Prefs.youtubeConnected else { loadJSON(args) { j, _ in completion(j) }; return }
-        loadSignedIn(args) { j, _ in completion(j) }
+        loadPublicFirst(["--playlist-end", "100", url]) { j, _ in completion(j) }
     }
     // Quick sign-in probe for Preferences: can we read the history feed with the configured cookies?
     static func checkSignIn(completion: @escaping (Bool, String) -> Void) {
@@ -517,7 +526,7 @@ final class DashHLSBridge: NSObject, AVAssetResourceLoaderDelegate {
     private let queue = DispatchQueue(label: "watch.hlsbridge")
     private var playlists: [String: Data] = [:]
 
-    struct Index { let initLength: Int; let segments: [(offset: Int, length: Int, duration: Double)] }
+    typealias Index = SegmentIndex
 
     // Completes on main with a ready-to-play asset (the bridge must be retained as long as the asset), or nil.
     // Every video rendition (best first) becomes a variant of one master playlist sharing the audio, so AVPlayer can
@@ -525,13 +534,18 @@ final class DashHLSBridge: NSObject, AVAssetResourceLoaderDelegate {
     // read is left out.
     static func make(videos: [StreamRef], audio: StreamRef, completion: @escaping (DashHLSBridge?, AVURLAsset?) -> Void) {
         let base = "\(scheme)://p"
-        func finish(_ variants: [(StreamRef, String)], _ audioURI: String, _ extra: [String: Data]) {
+        func finish(_ variants: [(StreamRef, String, Index?)], _ audioURI: String, _ audioIndex: Index?, _ extra: [String: Data]) {
             let b = DashHLSBridge()
             var master = "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n"
                 + "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"Audio\",DEFAULT=YES,AUTOSELECT=YES,URI=\"\(audioURI)\"\n"
-            for (video, uri) in variants {
+            for (video, uri, index) in variants {
                 let codecs = [video.vcodec, audio.acodec].compactMap { $0 }.filter { $0 != "none" }.joined(separator: ",")
-                var inf = "#EXT-X-STREAM-INF:BANDWIDTH=\((video.bitrate ?? 4_000_000) + (audio.bitrate ?? 128_000)),AUDIO=\"a\""
+                var inf: String
+                if let v = index, let a = audioIndex, v.peak > 0, a.peak > 0 {
+                    inf = "#EXT-X-STREAM-INF:BANDWIDTH=\(v.peak + a.peak),AVERAGE-BANDWIDTH=\(v.average + a.average),AUDIO=\"a\""
+                } else {
+                    inf = "#EXT-X-STREAM-INF:BANDWIDTH=\((video.bitrate ?? 4_000_000) + (audio.bitrate ?? 128_000)),AUDIO=\"a\""
+                }
                 if !codecs.isEmpty { inf += ",CODECS=\"\(codecs)\"" }
                 if let w = video.width, let h = video.height { inf += ",RESOLUTION=\(w)x\(h)" }
                 master += "\(inf)\n\(uri)\n"
@@ -543,7 +557,7 @@ final class DashHLSBridge: NSObject, AVAssetResourceLoaderDelegate {
         }
         guard let first = videos.first else { DispatchQueue.main.async { completion(nil, nil) }; return }
         if first.isHLS && audio.isHLS {
-            DispatchQueue.main.async { finish([(first, first.url.absoluteString)], audio.url.absoluteString, [:]) }
+            DispatchQueue.main.async { finish([(first, first.url.absoluteString, nil)], audio.url.absoluteString, nil, [:]) }
             return
         }
         let files = videos.filter { !$0.isHLS }
@@ -555,19 +569,33 @@ final class DashHLSBridge: NSObject, AVAssetResourceLoaderDelegate {
         }
         g.enter(); fetchIndex(audio) { ai = $0; g.leave() }
         g.notify(queue: .main) {
-            guard let ai = ai else { completion(nil, nil); return }
-            var variants: [(StreamRef, String)] = [], extra = ["/audio.m3u8": mediaPlaylist(audio, ai)]
+            guard let ai = ai else {
+                PlaybackLog.shared.append("bridge: the audio file's index couldn't be read (\(audio.url.host ?? "?"))")
+                completion(nil, nil); return
+            }
+            var variants: [(StreamRef, String, Index?)] = [], extra = ["/audio.m3u8": mediaPlaylist(audio, ai)]
             for (i, video) in files.enumerated() {
-                guard let idx = indexes[i] else { continue }
+                guard let idx = indexes[i] else {
+                    PlaybackLog.shared.append("bridge: left out the \(video.height.map { "\($0)p" } ?? "?") rendition — its index couldn't be read")
+                    continue
+                }
                 extra["/video\(i).m3u8"] = mediaPlaylist(video, idx)
-                variants.append((video, "\(base)/video\(i).m3u8"))
+                variants.append((video, "\(base)/video\(i).m3u8", idx))
             }
             guard !variants.isEmpty else { completion(nil, nil); return }
-            finish(variants, "\(base)/audio.m3u8", extra)
+            finish(variants, "\(base)/audio.m3u8", ai, extra)
         }
     }
 
+    // One retry a second later: a single failed read (seen on GitHub's Mac against YouTube's CDN) used to drop that rendition
+    // — or, for the audio, the whole HD plan — without a word.
     private static func fetchIndex(_ s: StreamRef, completion: @escaping (Index?) -> Void) {
+        fetchIndexOnce(s) { idx in
+            if let idx = idx { completion(idx); return }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 1) { fetchIndexOnce(s, completion: completion) }
+        }
+    }
+    private static func fetchIndexOnce(_ s: StreamRef, completion: @escaping (Index?) -> Void) {
         func get(_ length: Int, _ done: @escaping (Data?) -> Void) {
             var r = URLRequest(url: s.url, timeoutInterval: 15)
             r.setValue("bytes=0-\(length - 1)", forHTTPHeaderField: "Range")
@@ -1162,6 +1190,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
     private var timeObserver: Any?
     private var bridge: DashHLSBridge?               // must outlive the asset it serves playlists for
     private var statusObservation: NSKeyValueObservation?
+    private var stallTimer: Timer?                    // StallWatch's ticks for the current item (3.27)
     var sourceURL: String = ""
     var mediaTitle: String?
     var isLocalFile = false
@@ -1532,12 +1561,73 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
                 case .failed where !becameReady:
                     self.lastPlaybackError = item.error?.localizedDescription
                     self.tryNextPlan(token)          // e.g. bridge/segment trouble → next plan (one rendition, muxed)
+                case .failed:
+                    self.recoverMidPlay(token, error: item.error?.localizedDescription)
                 default: break
                 }
             }
         }
         p.play()
         manager?.beginPlaybackActivity()
+        if !isLocalFile { watchForStall(p, item: item, token: token) }
+    }
+
+    // A black picture with the controls up and the clock not moving (3.27): AVPlayer can sit like that without ever saying
+    // .failed — its segments refused, or a rendition it won't decode. After StallWatch.startLimit without playback the
+    // next plan gets a go (one rendition, then YouTube's own muxed file) from the same spot; if none is left the failure card
+    // says why. Playback that stops after AVPlayer logged errors reloads with fresh links (recoverMidPlay). Either way
+    // AVPlayer's own error log goes into playback.log, so a report says what it was.
+    private func watchForStall(_ p: AVPlayer, item: AVPlayerItem, token: Int) {
+        stallTimer?.invalidate()
+        var watch = StallWatch(start: Date())
+        stallTimer = Timer.scheduledTimer(withTimeInterval: StallWatch.interval, repeats: true) { [weak self] timer in
+            guard let self = self, token == self.loadToken, p === self.player, item === p.currentItem else { timer.invalidate(); return }
+            let t = p.currentTime().seconds
+            let verdict = watch.tick(now: Date(), time: t.isFinite ? t : 0, paused: p.timeControlStatus == .paused && p.rate == 0,
+                                     errors: item.errorLog()?.events.count ?? 0)
+            guard verdict != .fine else { return }
+            timer.invalidate(); self.stallTimer = nil
+            let reason = Self.stallReason(p, item: item, played: watch.everPlayed)
+            PlaybackLog.shared.append("\(self.sourceURL) — \(reason)")
+            switch verdict {
+            case .fine: break
+            case .nextPlan:
+                if t.isFinite, t > 1 { self.resumeAt = t; self.youtubeStart = 0 }   // the next plan starts where this one was
+                self.lastPlaybackError = reason
+                if self.pendingPlans.isEmpty { self.couldNotPlay(token, error: reason, signedIn: false) }
+                else { self.showLoading(self.mediaTitle ?? "Loading…"); self.tryNextPlan(token) }
+            case .reload:
+                self.recoverMidPlay(token, error: reason)
+            }
+        }
+    }
+    // What AVPlayer said: its waiting reason, the picture size it got (0×0 = no video decoded) and its last errors.
+    private static func stallReason(_ p: AVPlayer, item: AVPlayerItem, played: Bool) -> String {
+        var parts = [played ? "stopped while playing" : "never started playing"]
+        if let w = p.reasonForWaitingToPlay { parts.append("waiting: \(w.rawValue)") }
+        parts.append("status \(item.status.rawValue)")
+        parts.append("picture \(Int(item.presentationSize.width))×\(Int(item.presentationSize.height))")
+        if let a = item.accessLog()?.events.last, a.indicatedBitrate > 0 { parts.append("variant \(Int(a.indicatedBitrate / 1000)) kb/s") }
+        let errors = (item.errorLog()?.events ?? []).suffix(3).map { e in
+            "\(e.errorDomain) \(e.errorStatusCode)\(e.errorComment.map { " \($0)" } ?? "")\(e.uri.flatMap { URL(string: $0)?.host }.map { " (\($0))" } ?? "")"
+        }
+        if !errors.isEmpty { parts.append("errors: " + errors.joined(separator: "; ")) }
+        else if let e = item.error { parts.append("error: \(e.localizedDescription)") }
+        return parts.joined(separator: " · ")
+    }
+
+    // Playback that dies after it had started — a link that expired hours into a long video, a dropped connection, a
+    // segment the server refused — used to leave a frozen window. It reloads the same video instead (a fresh yt-dlp read,
+    // fresh links), resuming where it was; at most once a minute, after that the failure card says why.
+    private var lastMidPlayReload = Date.distantPast
+    private func recoverMidPlay(_ token: Int, error: String?) {
+        guard token == loadToken, !isLocalFile else { return }
+        savePosition()
+        let reason = error ?? "Playback stopped"
+        guard Date().timeIntervalSince(lastMidPlayReload) > 60 else { couldNotPlay(token, error: reason, signedIn: false); return }
+        lastMidPlayReload = Date()
+        PlaybackLog.shared.append("\(sourceURL) — stopped while playing (\(reason)); reloading")
+        startLoad(sourceURL, title: mediaTitle)
     }
 
     // Most pixels worth decoding for the video area right now (StreamLadder.cap) — resizing moves it, so AVPlayer
@@ -1569,6 +1659,7 @@ final class PlayerWindowController: NSObject, NSWindowDelegate, WKNavigationDele
         webView?.removeFromSuperview(); webView = nil
     }
     private func teardownAVPlayer() {
+        stallTimer?.invalidate(); stallTimer = nil
         savePosition(); positionKey = nil; positionReady = false; skipTarget = nil
         statusObservation = nil
         if let o = endObserver { NotificationCenter.default.removeObserver(o); endObserver = nil }
@@ -2329,6 +2420,7 @@ final class PlayerSurfaceView: NSView {
         let startMouse = NSEvent.mouseLocation, startOrigin = win.frame.origin
         let resizing = dragIsResize?() == true, pressed = convert(e.locationInWindow, from: nil)
         var dragging = false
+        var edges: EdgeDrag?                                // 3.27: stops at screen and window edges (WindowEdges)
         while let next = win.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
             if next.type == .leftMouseUp {
                 if !dragging { onClick?(e, next) } else if resizing { onResizeDrag?(pressed, convert(next.locationInWindow, from: nil), true) }
@@ -2339,7 +2431,36 @@ final class PlayerSurfaceView: NSView {
             if !dragging && hypot(dx, dy) < 3 { continue }
             dragging = true
             if resizing { onResizeDrag?(pressed, convert(next.locationInWindow, from: nil), false) }
-            else { win.setFrameOrigin(NSPoint(x: startOrigin.x + dx, y: startOrigin.y + dy)) }
+            else {
+                if edges == nil {
+                    edges = EdgeDrag(size: win.frame.size, origin: startOrigin, time: e.timestamp,
+                                     screens: EdgeTargets.screens(), windows: EdgeTargets.windows(besides: win))
+                }
+                win.setFrameOrigin(edges!.move(to: NSPoint(x: startOrigin.x + dx, y: startOrigin.y + dy), time: next.timestamp))
+            }
+        }
+    }
+}
+
+// What a dragged window's edges stop at (WindowEdges), read once when the drag begins: every screen, whole and clear of the
+// menu bar and Dock, and every ordinary window on screen, any app's, except this one and what moves with it (its Up Next
+// list). Window bounds need no Screen Recording permission (only names and pictures do), so this never asks for anything.
+enum EdgeTargets {
+    static func screens() -> [CGRect] { NSScreen.screens.flatMap { [$0.frame, $0.visibleFrame] } }
+    static func windows(besides win: NSWindow) -> [CGRect] {
+        var skip: Set<Int> = [win.windowNumber]
+        (win.childWindows ?? []).forEach { skip.insert($0.windowNumber) }
+        if let parent = win.parent { skip.insert(parent.windowNumber) }
+        guard let top = NSScreen.screens.first?.frame.maxY,      // CG window bounds are top-down from the main screen
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        else { return [] }
+        return list.compactMap { info in
+            guard (info[kCGWindowLayer as String] as? Int) == 0,
+                  let number = info[kCGWindowNumber as String] as? Int, !skip.contains(number),
+                  (info[kCGWindowAlpha as String] as? Double ?? 1) > 0.05,
+                  let bounds = info[kCGWindowBounds as String] as? NSDictionary,
+                  let r = CGRect(dictionaryRepresentation: bounds as CFDictionary), r.width >= 40, r.height >= 40 else { return nil }
+            return CGRect(x: r.minX, y: top - r.maxY, width: r.width, height: r.height)
         }
     }
 }
@@ -2852,7 +2973,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     private(set) var systemSource = OwnPlayback.Source.none
     private weak var systemPlayer: PlayerWindowController?
     private var lastPlayed: [ObjectIdentifier: Date] = [:]
-    private var watchWasPlaying = false
+    private var watchWasPlaying: Set<ObjectIdentifier> = []      // what of Watch's played at the last tick (a window, or the queue)
     private(set) var pausedForWatch: String?          // the music app Watch paused, to play again when Watch is done
     private var musicPlaying: [String: Bool] = [:]    // Music/Spotify's own broadcasts, whatever the Now Playing preference
     private var playerArtwork: (url: String, data: Data?)?
@@ -3458,8 +3579,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         case .player(let i): systemPlayer = players[i]; systemNowPlaying.publish(playerInfo(players[i]))
         }
         // Watch began playing: pause the music app (only if already allowed — this isn't a click). Watch is done: play it again.
-        let watchPlaying = own?.isPlaying == true || players.contains { $0.isPlaying }
-        if watchPlaying && !watchWasPlaying { pauseMusicForWatch(asking: false) }
+        // A window closed since the last tick doesn't count as still playing: closing one video and opening another within
+        // the second is a fresh start, so the music app (playing again by then) pauses for it too.
+        var watchPlaying = Set(players.filter { $0.isPlaying }.map { ObjectIdentifier($0) })
+        if own?.isPlaying == true { watchPlaying.insert(ObjectIdentifier(upNext)) }
+        let open = Set(windowManager.players.map { ObjectIdentifier($0) })
+        let stillPlaying = watchWasPlaying.filter { open.contains($0) || $0 == ObjectIdentifier(upNext) }
+        if !watchPlaying.isEmpty && stillPlaying.isEmpty { pauseMusicForWatch(asking: false) }
         watchWasPlaying = watchPlaying
         let active = !windowManager.players.isEmpty || upNext.showsOwnItem
         if let app = pausedForWatch,
@@ -3467,11 +3593,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             pausedForWatch = nil
             musicControl.performIfAllowed(.command(.play), bundleID: app) { _ in }
         }
-        let open = Set(windowManager.players.map { ObjectIdentifier($0) })
         lastPlayed = lastPlayed.filter { open.contains($0.key) }
         if windowManager.players.isEmpty && !upNext.showsOwnItem && pausedForWatch == nil {
             systemTimer?.invalidate(); systemTimer = nil
-            watchWasPlaying = false
+            watchWasPlaying = []
             systemNowPlaying.publish(nil)
         }
     }

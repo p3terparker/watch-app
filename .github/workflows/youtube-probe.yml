@@ -1,0 +1,45 @@
+# Diagnostic: runs the player's YouTube pipeline on real links on GitHub's Mac and reports where playback breaks
+# (Tests/youtube_probe.py). Runs when the probe changes on a claude/* branch, or by hand with links of your choice.
+name: YouTube playback probe
+
+on:
+  push:
+    branches: ['claude/**']
+    paths: ['Tests/youtube_probe.py', 'Tests/YouTubeProbeMain.swift', '.github/workflows/youtube-probe.yml']
+  workflow_dispatch:
+    inputs:
+      links:
+        description: Space-separated YouTube links
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: youtube-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Restore helper cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/watch-vendor
+          key: watch-vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Dependencies.json', 'SupplementalSources.json', 'scripts/watch_helpers.py') }}
+          restore-keys: watch-vendor-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Prepare bundled helpers
+        id: helpers
+        run: echo "dir=$(/usr/bin/python3 scripts/watch_helpers.py | head -1)/Helpers" >> "$GITHUB_OUTPUT"
+
+      - name: Probe
+        env:
+          LINKS: ${{ github.event.inputs.links || 'https://www.youtube.com/watch?v=3VB24LYsE60 https://www.youtube.com/watch?v=rfscVS0vtbw https://www.youtube.com/watch?v=HXV3zeQKqGY https://www.youtube.com/watch?v=dQw4w9WgXcQ' }}
+        run: |
+          # shellcheck disable=SC2086 # one argument per link
+          /usr/bin/python3 Tests/youtube_probe.py "${{ steps.helpers.outputs.dir }}" $LINKS
